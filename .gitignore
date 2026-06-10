@@ -1,3 +1,9 @@
+# Credentials
+*.env
+
+# Folders
+SATOS_SDK/
+
 # Compiled class file
 *.class
 
