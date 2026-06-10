@@ -1,3 +1,16 @@
+# Node dependencies
+frontend/node_modules/
+frontend/dist/
+
+# Python dependencies & environments
+backend/.venv/
+backend/__pycache__/
+*.pyc
+
+# IDE configurations
+.vscode/
+.idea/
+
 # Credentials
 *.env
 

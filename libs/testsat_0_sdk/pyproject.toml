@@ -1,0 +1,119 @@
+[project]
+name = "testsat_0_mission"
+version = "2.1.2"
+description = "The software development kit for testsat_0 mission"
+requires-python = ">=3.10"
+authors = [{ name = "Sebastian Wenzel", email = "sebastian.wenzel@satio.space" }]
+readme = "README.md"
+dependencies = [
+    "python-dotenv~=1.2.1",
+    "pandas",
+    "pydantic>=2.7",
+    "python-keycloak~=7.0",
+    "requests",
+    "python-socketio[client]~=5.16.0",
+    "httpx<0.28.0",
+    "uuid-backport;python_version<'3.14'"
+]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-cov", "ruff>=0.8.0"]
+format = ["ruff"]
+documentation = ["sphinx", "myst-parser", "sphinxcontrib-confluencebuilder", "sphinx-autodoc2", "furo"]
+
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+    "docs"
+]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    # See https://docs.astral.sh/ruff/rules/
+    "F", # pyflakes
+    "E", # pycodestyle
+    "W", # pycodestyle
+    "I", # isort
+    "N", # pep8-naming
+    "D", # pydocstyle (documentation!)
+    "ANN", # flake8-annotations
+    "UP", # pyupgrade
+    "ASYNC", # flake8-async
+    "S", # flake8-bandit
+    "B", # flake8-bugbear
+    "A", # flake8-builtins
+    "C4", # flake8-comprehensions
+    "DTZ", # flake8-datetimez
+    "ICN", # flake8-import-conventions
+    "INP", # flake8-no-pep420
+    "PIE", # flake8-pie
+    "PYI", # flake8-pyi
+    "RSE", # flake8-raise
+    "RET", # flake8-return
+    "SIM", # flake8-simplify
+    "PL", # Pylint
+    "RUF" # ruff specific
+]
+ignore = [
+    "ANN204", # Missing annotation of __init__ return type
+    "S311", # Usage of random, we don't use it for cryptographic stuff here, only random numbers to simulate stuff
+    "SIM105", # Simplification with contextlib which is slower than try/except
+    "D203", # Disabled by default
+    "D213", # Disabled by default
+    "D401", # Imperative mood
+    "D404", # Docstring should not start with this
+    "N815", # mixedCase is ok since we depend on external API data
+    "N801", # Invalid Class Name is ok, based on user choice
+    "N802"  # Invalid function based on user choice
+]
+
+[tool.ruff.lint.pylint]
+max-args = 8
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "INP001", # Tests are implicit namespace packets
+    "S101", # Tests use assert
+    "S105", # Tests use hardcoded test credentials
+    "ANN", # Type hints in test are not required
+    "PLR0912", # Too many branches
+    "PLR0915", # Too many statements
+    "PLR2004", # Magic values in comparison are common in tests
+    "D" # No documentation rules in tests
+] # Ignore missing init in tests
+
+
+[tool.coverage.run]
+source = ['testsat_0_mission']
+branch = true

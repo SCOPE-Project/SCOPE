@@ -1,0 +1,1 @@
+# FastAPI main application file. This is the entry point for the backend server, where the FastAPI app is created and all routes are defined.
