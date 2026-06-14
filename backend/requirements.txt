@@ -6,4 +6,4 @@ python-dotenv
 
 # Local SatOS SDK Integration
 # Points to the folder relative to the location of requirements.txt
-../libs/testsat_0_sdk
+../libs/GS1_Group1_sdk

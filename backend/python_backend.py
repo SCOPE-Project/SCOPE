@@ -54,6 +54,5 @@ with SatIOSession() as session:
     print(f"Satellites in the system: {[sat.name for sat in sat_list]}")
     print(f"Schedules in the system: {[schedule.name for schedule in schedules_list]}")
     print(f"Activities in the system: {[activity.name for activity in activities_list]}")
-    print(f"Details of the first activity: {activities[0]}")
     print("Finished running testsat_0_example.")
     

@@ -15,7 +15,6 @@ backend/__pycache__/
 *.env
 
 # Folders
-SATOS_SDK/
 
 # Compiled class file
 *.class

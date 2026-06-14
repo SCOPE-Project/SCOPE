@@ -3,7 +3,7 @@ venv setup for python backend development.
 Follow these steps in the terminal (Windows)
 ```bash
 cd backend
-py3.13 -m venv .venv
+py -3.13 -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
