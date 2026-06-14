@@ -1,0 +1,9 @@
+# Web Framework and Server Core (Fetches newest available)
+fastapi
+uvicorn
+pydantic
+python-dotenv
+
+# Local SatOS SDK Integration
+# Points to the folder relative to the location of requirements.txt
+../libs/GS1_Group1_sdk
