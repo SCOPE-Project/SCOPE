@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 from pydantic import UUID4, UUID7, AwareDatetime, BaseModel, Field, conlist
 
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions import VersionModel
-from libs.GS1_Group1_sdk.src.pydantic_models.value_field import ValueFieldModel
+from pydantic_models.definitions import VersionModel
+from pydantic_models.value_field import ValueFieldModel
 
 
 class ParameterBlueprint(BaseModel):

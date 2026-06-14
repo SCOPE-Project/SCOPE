@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import parameter_reference_def_descriptions as desc
+from pydantic_models.descriptions import parameter_reference_def_descriptions as desc
 
 
 class ParameterReferenceModel(BaseModel):

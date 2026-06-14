@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from pydantic import UUID4, UUID7, BaseModel, Field
 
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import schedule_event_relation_description as desc
+from pydantic_models.descriptions import schedule_event_relation_description as desc
 
 
 class ScheduleEventRelationModel(BaseModel):

@@ -7,8 +7,8 @@ from enum import IntEnum
 from pydantic import UUID4, UUID7, AwareDatetime, BaseModel, Field, conlist, constr, model_validator
 from typing_extensions import Self
 
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import command_descriptions as desc
-from libs.GS1_Group1_sdk.src.pydantic_models.parameter import CommandParameterModel
+from pydantic_models.descriptions import command_descriptions as desc
+from pydantic_models.parameter import CommandParameterModel
 
 from .definitions import VersionModel
 

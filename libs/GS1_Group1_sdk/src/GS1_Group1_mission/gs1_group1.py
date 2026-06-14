@@ -1,20 +1,20 @@
 """Module of GS1_Group1."""
 
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions import (SatelliteModel)
+from pydantic_models.definitions import (SatelliteModel)
 from .satellite import Satellite
 
 from pydantic_core import TzInfo
 from pydantic import AwareDatetime
 from typing import Callable
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions.command_definition import CommandDefModel
+from pydantic_models.definitions.command_definition import CommandDefModel
 from .factory import _command_factory
-from libs.GS1_Group1_sdk.src.api_connect.satio_session import SatIOSession  # Managing the connection to sat:io
+from api_connect.satio_session import SatIOSession  # Managing the connection to sat:io
 from .command import SdkCommand
 from .variable import SdkVariable
-from libs.GS1_Group1_sdk.src.pydantic_models.command import RelativeInfoModel
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions import VersionModel
-from libs.GS1_Group1_sdk.src.pydantic_models.value_field import OctetStringModel, MatrixModel
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions import ParameterDefModel
+from pydantic_models.command import RelativeInfoModel
+from pydantic_models.definitions import VersionModel
+from pydantic_models.value_field import OctetStringModel, MatrixModel
+from pydantic_models.definitions import ParameterDefModel
 from enum import Enum
 from datetime import datetime
 import base64

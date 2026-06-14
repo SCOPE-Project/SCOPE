@@ -9,7 +9,7 @@ import requests
 import socketio
 from keycloak import KeycloakOpenID
 from pydantic import UUID4, UUID7
-from libs.GS1_Group1_sdk.src.pydantic_models.command import CommandModel
+from pydantic_models.command import CommandModel
 from socketio import Client
 
 current_session = contextvars.ContextVar("current_session")

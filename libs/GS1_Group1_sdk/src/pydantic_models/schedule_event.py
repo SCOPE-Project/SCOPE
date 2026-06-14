@@ -2,7 +2,7 @@
 
 from pydantic import UUID4, UUID7, AwareDatetime, BaseModel, ConfigDict, Field
 
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import schedule_event_descriptions as desc
+from pydantic_models.descriptions import schedule_event_descriptions as desc
 
 
 class ScheduleEventModel(BaseModel):

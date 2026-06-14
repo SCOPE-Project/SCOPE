@@ -1,7 +1,7 @@
 from pydantic import UUID4, UUID7
-from libs.GS1_Group1_sdk.src.pydantic_models.command_state_history import CommandStateHistoryModel
+from pydantic_models.command_state_history import CommandStateHistoryModel
 
-from libs.GS1_Group1_sdk.src.api_connect.satio_session import SatIOSession
+from api_connect.satio_session import SatIOSession
 
 prefix = "command_states"
 

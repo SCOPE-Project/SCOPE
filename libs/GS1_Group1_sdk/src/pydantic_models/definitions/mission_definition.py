@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field, conlist
 
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import mission_def_descriptions as desc
+from pydantic_models.descriptions import mission_def_descriptions as desc
 
 
 class MissionModel(BaseModel):

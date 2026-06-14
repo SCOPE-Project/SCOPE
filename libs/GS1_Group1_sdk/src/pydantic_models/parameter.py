@@ -2,9 +2,9 @@
 
 from pydantic import UUID4, UUID7, BaseModel, Field, conlist
 
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions.parameter_definition import ParameterDefModel
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import parameter_descriptions as desc
-from libs.GS1_Group1_sdk.src.pydantic_models.value_field import ValueFieldModel
+from pydantic_models.definitions.parameter_definition import ParameterDefModel
+from pydantic_models.descriptions import parameter_descriptions as desc
+from pydantic_models.value_field import ValueFieldModel
 
 
 class CommandParameterModel(BaseModel):

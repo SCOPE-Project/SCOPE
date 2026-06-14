@@ -2,8 +2,8 @@
 
 from pydantic import UUID4, UUID7, AwareDatetime, BaseModel, Field
 
-from libs.GS1_Group1_sdk.src.pydantic_models.command import CommandState
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import command_state_history_descriptions as desc
+from pydantic_models.command import CommandState
+from pydantic_models.descriptions import command_state_history_descriptions as desc
 
 
 class CommandStateHistoryModel(BaseModel):

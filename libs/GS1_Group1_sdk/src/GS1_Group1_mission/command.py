@@ -6,10 +6,10 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal, Optional
 from uuid import UUID
 
-from libs.GS1_Group1_sdk.src.api_connect.commands import get_commands, put_commands
-from libs.GS1_Group1_sdk.src.api_connect.satio_session import SatIOSession  # Managing the connection to sat:io
+from api_connect.commands import get_commands, put_commands
+from api_connect.satio_session import SatIOSession  # Managing the connection to sat:io
 from pydantic import AwareDatetime
-from libs.GS1_Group1_sdk.src.pydantic_models.command import CommandModel, CommandState, RelativeInfoModel
+from pydantic_models.command import CommandModel, CommandState, RelativeInfoModel
 
 if TYPE_CHECKING:
     from .activity import SdkActivity

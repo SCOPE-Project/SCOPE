@@ -1,4 +1,5 @@
 README.md
+gs1_group1_example.ipynb
 pyproject.toml
 src/GS1_Group1_mission/__init__.py
 src/GS1_Group1_mission/activity.py

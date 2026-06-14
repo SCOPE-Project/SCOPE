@@ -4,7 +4,7 @@ from enum import IntEnum
 
 from pydantic import AwareDatetime, BaseModel, Field
 
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import link_status_descriptions as desc
+from pydantic_models.descriptions import link_status_descriptions as desc
 
 
 class LinkStatusModel(BaseModel):

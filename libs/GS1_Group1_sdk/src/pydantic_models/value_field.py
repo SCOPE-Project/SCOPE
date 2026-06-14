@@ -6,8 +6,8 @@ from datetime import datetime
 from pydantic import AwareDatetime, Base64Bytes, BaseModel, Field, conlist, model_validator
 from typing_extensions import Self
 
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions.parameter_definition import MatrixParameterDefinitionModel
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import value_field_descriptions as desc
+from pydantic_models.definitions.parameter_definition import MatrixParameterDefinitionModel
+from pydantic_models.descriptions import value_field_descriptions as desc
 
 
 class MatrixModel(BaseModel):

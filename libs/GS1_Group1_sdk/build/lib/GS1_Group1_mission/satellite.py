@@ -10,11 +10,11 @@ if sys.version_info < (3, 14):
 else:
     from uuid import uuid7
 
-from libs.GS1_Group1_sdk.src.api_connect.activities import delete_activity, get_activities, get_activity_list
-from libs.GS1_Group1_sdk.src.api_connect.satio_session import SatIOSession  # Managing the connection to sat:io
-from libs.GS1_Group1_sdk.src.pydantic_models.activity import ActivityInfoModel, ActivityModel, ActivityStages, ActivityStatus
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions import SatelliteModel
-from libs.GS1_Group1_sdk.src.pydantic_models.schedule import ScheduleModel
+from api_connect.activities import delete_activity, get_activities, get_activity_list
+from api_connect.satio_session import SatIOSession  # Managing the connection to sat:io
+from pydantic_models.activity import ActivityInfoModel, ActivityModel, ActivityStages, ActivityStatus
+from pydantic_models.definitions import SatelliteModel
+from pydantic_models.schedule import ScheduleModel
 
 from .activity import SdkActivity
 from .component import Component

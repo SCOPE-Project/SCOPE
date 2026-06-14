@@ -4,7 +4,7 @@ from enum import IntEnum
 
 from pydantic import BaseModel, Field, conlist
 
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import event_def_descriptions as desc
+from pydantic_models.descriptions import event_def_descriptions as desc
 
 from .parameter_reference_definition import ParameterReferenceModel
 

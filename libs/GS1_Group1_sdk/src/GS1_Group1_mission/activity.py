@@ -3,11 +3,11 @@
 from datetime import datetime
 from typing import Literal
 
-from libs.GS1_Group1_sdk.src.api_connect.activities import delete_activity, put_activities
-from libs.GS1_Group1_sdk.src.api_connect.commands import delete_commands, get_commands, post_commands, put_commands
-from libs.GS1_Group1_sdk.src.api_connect.satio_session import SatIOSession
+from api_connect.activities import delete_activity, put_activities
+from api_connect.commands import delete_commands, get_commands, post_commands, put_commands
+from api_connect.satio_session import SatIOSession
 from pydantic import UUID4, UUID7
-from libs.GS1_Group1_sdk.src.pydantic_models.activity import ActivityModel
+from pydantic_models.activity import ActivityModel
 
 from .command import SdkCommand
 

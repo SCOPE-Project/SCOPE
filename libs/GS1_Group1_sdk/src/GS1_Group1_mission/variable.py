@@ -4,11 +4,11 @@ import base64
 from datetime import datetime
 
 import pandas as pd
-from libs.GS1_Group1_sdk.src.api_connect.satio_session import SatIOSession
-from libs.GS1_Group1_sdk.src.api_connect.telemetry import get_telemetry_data
+from api_connect.satio_session import SatIOSession
+from api_connect.telemetry import get_telemetry_data
 from pydantic import AwareDatetime
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions import ParameterDefModel, ParameterType
-from libs.GS1_Group1_sdk.src.pydantic_models.telemetry_variables import TelemetryResponseModel
+from pydantic_models.definitions import ParameterDefModel, ParameterType
+from pydantic_models.telemetry_variables import TelemetryResponseModel
 
 
 class SdkVariable:

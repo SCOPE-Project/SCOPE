@@ -11,10 +11,10 @@ else:
 
 
 from pydantic import AwareDatetime
-from libs.GS1_Group1_sdk.src.pydantic_models.command import CommandModel, CommandState, RelativeInfoModel
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions import CommandDefModel, VersionModel
-from libs.GS1_Group1_sdk.src.pydantic_models.parameter import CommandParameterModel
-from libs.GS1_Group1_sdk.src.pydantic_models.value_field import MatrixModel, OctetStringModel, ValueFieldModel, plain_types
+from pydantic_models.command import CommandModel, CommandState, RelativeInfoModel
+from pydantic_models.definitions import CommandDefModel, VersionModel
+from pydantic_models.parameter import CommandParameterModel
+from pydantic_models.value_field import MatrixModel, OctetStringModel, ValueFieldModel, plain_types
 
 # create a wrong activity uuid to make it possible to detect commands not attached to activities
 _wrong_activity_uuid = UUID("deadbeef-cafe-4bad-babe-deadbeefcafe")

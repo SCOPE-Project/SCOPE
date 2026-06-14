@@ -4,7 +4,7 @@ import re
 
 from pydantic import BaseModel, Field
 
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import version_descriptions as desc
+from pydantic_models.descriptions import version_descriptions as desc
 
 
 class VersionModel(BaseModel):

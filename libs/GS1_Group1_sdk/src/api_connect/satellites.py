@@ -1,7 +1,7 @@
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions import SatelliteInfoModel, SatelliteModel, VersionModel
+from pydantic_models.definitions import SatelliteInfoModel, SatelliteModel, VersionModel
 from requests import Response
 
-from libs.GS1_Group1_sdk.src.api_connect.satio_session import SatIOSession
+from api_connect.satio_session import SatIOSession
 
 prefix = "satellite"
 

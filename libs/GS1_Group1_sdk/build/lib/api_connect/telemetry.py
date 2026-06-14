@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from libs.GS1_Group1_sdk.src.pydantic_models.telemetry_variables import TelemetryResponseModel, TelemetryVariableModel
+from pydantic_models.telemetry_variables import TelemetryResponseModel, TelemetryVariableModel
 from requests import Response
 
-from libs.GS1_Group1_sdk.src.api_connect.satio_session import SatIOSession
+from api_connect.satio_session import SatIOSession
 
 prefix = "telemetry"
 

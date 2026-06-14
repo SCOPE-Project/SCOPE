@@ -4,13 +4,13 @@ import uuid
 from datetime import timedelta
 from enum import IntEnum
 
-import libs.GS1_Group1_sdk.src.lexorank as lexorank
+import lexorank
 from pydantic import UUID4, UUID7, BaseModel, ConfigDict, Field, conlist, field_validator
 
-from libs.GS1_Group1_sdk.src.pydantic_models.command import CommandModel, CommandState
-from libs.GS1_Group1_sdk.src.pydantic_models.demand import AbsoluteDemandModel, RelativeDemandModel
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import activity_descriptions as desc
-from libs.GS1_Group1_sdk.src.pydantic_models.schedule_event_relation import ScheduleEventRelationModel
+from pydantic_models.command import CommandModel, CommandState
+from pydantic_models.demand import AbsoluteDemandModel, RelativeDemandModel
+from pydantic_models.descriptions import activity_descriptions as desc
+from pydantic_models.schedule_event_relation import ScheduleEventRelationModel
 
 
 class ActivityStatus(IntEnum):

@@ -4,9 +4,9 @@ from datetime import datetime
 
 from pydantic import UUID4, UUID7, AwareDatetime, Base64Bytes, BaseModel, Field, field_validator
 
-from libs.GS1_Group1_sdk.src.pydantic_models.definitions import ParameterType, VersionModel
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import telemetry_variables_descriptions as desc
-from libs.GS1_Group1_sdk.src.pydantic_models.value_field import ValueFieldModel
+from pydantic_models.definitions import ParameterType, VersionModel
+from pydantic_models.descriptions import telemetry_variables_descriptions as desc
+from pydantic_models.value_field import ValueFieldModel
 
 
 class TelemetryVariableModel(BaseModel):

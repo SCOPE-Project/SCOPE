@@ -2,8 +2,8 @@
 
 from pydantic import BaseModel, Field, conlist
 
-from libs.GS1_Group1_sdk.src.pydantic_models.activity import ActivityModel
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import schedule_descriptions as desc
+from pydantic_models.activity import ActivityModel
+from pydantic_models.descriptions import schedule_descriptions as desc
 
 
 class ScheduleModel(BaseModel):

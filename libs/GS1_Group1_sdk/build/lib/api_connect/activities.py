@@ -1,10 +1,10 @@
 from http import HTTPStatus
 
 from pydantic import UUID4, UUID7
-from libs.GS1_Group1_sdk.src.pydantic_models.activity import ActivityInfoModel, ActivityModel
+from pydantic_models.activity import ActivityInfoModel, ActivityModel
 from requests import Response
 
-from libs.GS1_Group1_sdk.src.api_connect.satio_session import SatIOSession
+from api_connect.satio_session import SatIOSession
 
 prefix = "activities"
 

@@ -6,7 +6,7 @@ from typing import ClassVar
 from pydantic import AwareDatetime, Base64Bytes, BaseModel, Field, model_validator
 from typing_extensions import Self
 
-from libs.GS1_Group1_sdk.src.pydantic_models.descriptions import parameter_def_descriptions as desc
+from pydantic_models.descriptions import parameter_def_descriptions as desc
 
 
 class SintParameterDefinitionModel(BaseModel):
