@@ -34,7 +34,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 
-credentials_path = Path("SatOS_credentials/Chris_credentials.env")
+credentials_path = Path(__file__).resolve().parent.parent / "SatOS_credentials" / "credentials.env"
 
 # Make sure the .env file exists and is filled correctly
 if not load_dotenv(credentials_path):
