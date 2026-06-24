@@ -1,0 +1,44 @@
+name: Frontend Continuous Integration
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'frontend/**'
+      - 'libs/**'
+      - '.github/workflows/frontend-ci.yml'
+
+jobs:
+  frontend-verification:
+    name: Build & Test React UI
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Source Code
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js Environment from Config
+      uses: actions/setup-node@v4
+      with:
+        # Dynamically extracts version matching your local engine definitions
+        node-version-file: 'frontend/.node-version'
+        cache: 'npm'
+        cache-dependency-path: 'frontend/package-lock.json'
+
+    - name: Deterministic Dependency Installation
+      # npm ci acts as an immutable blueprint, failing if deviations occur from your lock graph
+      run: |
+        cd frontend
+        npm ci
+
+    - name: Build and Compile Production Assets
+      # Validates full TypeScript type safety and bundler compilation constraints
+      run: |
+        cd frontend
+        npm run build
+
+    - name: Execute Automated Unit Testing
+      # Connects UI element testing, dashboard timeline states, or data handlers
+      run: |
+        cd frontend
+        npm run test:run # maps to vitest run or jest --watchAll=false

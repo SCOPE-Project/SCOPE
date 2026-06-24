@@ -3,6 +3,7 @@ fastapi
 uvicorn
 pydantic
 python-dotenv
+pytest
 
 # Local SatOS SDK Integration
 # Points to the folder relative to the location of requirements.txt
