@@ -1,5 +1,6 @@
 # API Connect imports: All API endpoints for interacting with SAT.IO exposed in the Python SDK, corresponding to the Swagger documentation
 
+from pydantic import UUID4
 from api_connect.satio_session import SatIOSession  # Managing the connection to sat:io
 
 # Working with API endpoints defined in api_connect/... should be sufficient. No necessity for direct asset import of testsat_0_mission.testsat_0 or so.
@@ -22,17 +23,18 @@ from api_connect.blueprints import post_blueprint, get_blueprint_list, get_bluep
 # /telemetry/...
 from api_connect.telemetry import get_telemetry_data, post_telemetry_data
 
+# /schedule_events/...
+from api_connect.schedule_events import get_schedule_events
+
 # no Swagger definition
 from api_connect.command_history import get_command_states
 
 ###
-
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from dotenv import load_dotenv
 from pathlib import Path
-
 
 credentials_path = Path(__file__).resolve().parent.parent / "SatOS_credentials" / "credentials.env"
 
@@ -46,13 +48,5 @@ if not load_dotenv(credentials_path):
 session = SatIOSession()
 
 with SatIOSession() as session:
-    print("Running testsat_0_example with SAT.IO session...")
-    sat_list = get_satellite_list(session)
-    schedules_list = get_schedules_list(session)
-    activities_list = get_activity_list(session, schedules_list[0].name)  # Get activities for the first schedule
-    activities = get_activities(session, activities_list[0].uuid)  # Get activities for the first schedule
-    print(f"Satellites in the system: {[sat.name for sat in sat_list]}")
-    print(f"Schedules in the system: {[schedule.name for schedule in schedules_list]}")
-    print(f"Activities in the system: {[activity.name for activity in activities_list]}")
-    print("Finished running testsat_0_example.")
-    
+    event = get_schedule_events(session, schedule_name=None, schedule_event_uuid="019ed548-633d-7bbe-baca-d02488543169")
+    print(event[0].model_dump_json(indent=2))
