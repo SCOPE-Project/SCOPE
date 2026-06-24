@@ -4,6 +4,7 @@ uvicorn
 pydantic
 python-dotenv
 pytest
+orekit-jpype==13.1.5.0
 
 # Local SatOS SDK Integration
 # Points to the folder relative to the location of requirements.txt
