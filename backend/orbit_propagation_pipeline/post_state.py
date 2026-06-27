@@ -73,11 +73,18 @@ def post_current_state(
         )
         return
 
+    # Post the telemetry data to the SatIO API
     response = post_telemetry_data(
-        session=SatIOSession.get_session(),
-        telemetry_data=telemetry,
-    )
-    response.raise_for_status()
+    session=SatIOSession.get_session(),
+    telemetry_data=telemetry,
+)
+    # Check for errors in the response and raise an exception if the POST failed
+    try:
+        response.raise_for_status()
+    except Exception as exc:
+        print(f"SatOS telemetry POST failed: {response.status_code}")
+        print(response.text)
+        raise
     print(f"Posted simulated state at {timestamp.isoformat()}")
 
 
@@ -87,32 +94,50 @@ def run_state_poster(
     interval_s: float,
     samples: int | None,
     dry_run: bool,
+    session_refresh_interval_s: float = 120.0,
 ) -> None:
-    if interval_s <= 0.0:
-        raise ValueError("interval_s must be positive.")
-
-    if samples is not None and samples <= 0:
-        raise ValueError("samples must be positive when provided.")
-
     simulation_start = monotonic()
     posted_samples = 0
 
-    while samples is None or posted_samples < samples:
-        loop_start = monotonic()
-        elapsed_s = loop_start - simulation_start
-        timestamp = datetime.now(tz=timezone.utc)
+    session = None
+    session_started = 0.0
 
-        post_current_state(
-            elapsed_s=elapsed_s,
-            timestamp=timestamp,
-            dry_run=dry_run,
-        )
+    try:
+        while samples is None or posted_samples < samples:
+            loop_start = monotonic()
 
-        posted_samples += 1
-        if samples is not None and posted_samples >= samples:
-            break
+            if not dry_run:
+                session_expired = (
+                    session is None
+                    or loop_start - session_started >= session_refresh_interval_s
+                )
 
-        sleep(max(0.0, interval_s - (monotonic() - loop_start)))
+                if session_expired:
+                    if session is not None:
+                        session.close()
+
+                    session = SatIOSession()
+                    session_started = loop_start
+                    print("Refreshed SatOS session/token")
+
+            elapsed_s = loop_start - simulation_start
+            timestamp = datetime.now(tz=timezone.utc)
+
+            post_current_state(
+                elapsed_s=elapsed_s,
+                timestamp=timestamp,
+                dry_run=dry_run,
+            )
+
+            posted_samples += 1
+            if samples is not None and posted_samples >= samples:
+                break
+
+            sleep(max(0.0, interval_s - (monotonic() - loop_start)))
+
+    finally:
+        if session is not None:
+            session.close()
 
 
 # Main function to run the state poster

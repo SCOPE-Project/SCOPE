@@ -5,17 +5,10 @@ from typing import Any
 
 from api_connect.satio_session import SatIOSession
 from api_connect.telemetry import get_telemetry_data
-from dotenv import load_dotenv
-
+from utils.api_utilities import load_credentials
 
 POSITION_ID = "Sat1_Group1.navigation.position_vector"
 VELOCITY_ID = "Sat1_Group1.navigation.velocity_vector"
-
-
-def load_credentials() -> None:
-    credentials_path = Path(__file__).resolve().parents[2] / "SatOS_credentials" / "credentials.env"
-    if not load_dotenv(credentials_path):
-        raise Exception(f"No .env file found or empty at {credentials_path}")
 
 
 def matrix_to_vector(value: Any) -> list[float]:
