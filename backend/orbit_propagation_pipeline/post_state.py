@@ -1,6 +1,17 @@
+
+# --------------------------------------------------------------------------
+# Suppress annoying InsecureRequestWarning from urllib3 when making HTTPS 
+# requests to SatOS API
+import urllib3
+from urllib3.exceptions import InsecureRequestWarning
+urllib3.disable_warnings(InsecureRequestWarning)
+# --------------------------------------------------------------------------
+
 from argparse import ArgumentParser
 from datetime import datetime, timezone
 from time import monotonic, sleep
+
+from requests.exceptions import RequestException
 
 from api_connect.satio_session import SatIOSession
 from api_connect.telemetry import post_telemetry_data
@@ -75,9 +86,9 @@ def post_current_state(
 
     # Post the telemetry data to the SatIO API
     response = post_telemetry_data(
-    session=SatIOSession.get_session(),
-    telemetry_data=telemetry,
-)
+        session=SatIOSession.get_session(),
+        telemetry_data=telemetry,
+    )
     # Check for errors in the response and raise an exception if the POST failed
     try:
         response.raise_for_status()
@@ -123,11 +134,16 @@ def run_state_poster(
             elapsed_s = loop_start - simulation_start
             timestamp = datetime.now(tz=timezone.utc)
 
-            post_current_state(
-                elapsed_s=elapsed_s,
-                timestamp=timestamp,
-                dry_run=dry_run,
-            )
+            try:
+                post_current_state(
+                    elapsed_s=elapsed_s,
+                    timestamp=timestamp,
+                    dry_run=dry_run,
+                )
+            except RequestException as exc:
+                print(f"SatOS request failed: {exc}")
+                if samples is not None:
+                    raise
 
             posted_samples += 1
             if samples is not None and posted_samples >= samples:
@@ -148,6 +164,7 @@ def main() -> None:
     # Add command-line arguments for simulation parameters
     parser.add_argument("--interval", type=float, default=10.0, help="Interval between state postings (seconds).")
     parser.add_argument("--samples", type=int, default=None, help="Number of samples to post (default: infinite).")
+    parser.add_argument("--session-refresh-interval", type=float, default=120.0, help="Interval between SatOS session refreshes (seconds).")
     parser.add_argument("--dry-run", action="store_true", help="Perform a dry run without posting data.")
 
     args = parser.parse_args()
@@ -162,16 +179,17 @@ def main() -> None:
             interval_s=args.interval,
             samples=args.samples,
             dry_run=True,
+            session_refresh_interval_s=args.session_refresh_interval,
         )
         return
 
     load_credentials()
-    with SatIOSession():
-        run_state_poster(
-            interval_s=args.interval,
-            samples=args.samples,
-            dry_run=False,
-        )
+    run_state_poster(
+        interval_s=args.interval,
+        samples=args.samples,
+        dry_run=False,
+        session_refresh_interval_s=args.session_refresh_interval,
+    )
 
 
 if __name__ == "__main__":
