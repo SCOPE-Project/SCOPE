@@ -1,8 +1,8 @@
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from constants import Constants
-from M2Theta import m2theta
+from utils.propagation_utils.constants import Constants
+from utils.propagation_utils.M2Theta import m2theta
 
 
 def kep2rv(kep: ArrayLike) -> NDArray[np.float64]:
