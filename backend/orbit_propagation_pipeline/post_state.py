@@ -23,8 +23,8 @@ from pydantic_models.telemetry_variables import TelemetryVariableModel
 from pydantic_models.value_field import MatrixModel, ValueFieldModel
 
 # Define telemetry variable IDs for position and velocity
-POSITION_ID = "Sat1_Group1.navigation.position_vector"
-VELOCITY_ID = "Sat1_Group1.navigation.velocity_vector"
+POSITION_ID = "Sat1_Group1.position_vector"
+VELOCITY_ID = "Sat1_Group1.velocity_vector"
 
 # Model version as in SatOS: Keep this in sync with the SatOS model version
 MODEL_VERSION = VersionModel(

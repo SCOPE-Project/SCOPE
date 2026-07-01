@@ -2,19 +2,24 @@ from argparse import ArgumentParser
 from pathlib import Path
 import os
 
-from fetch_latest_state import CartesianState, fetch_states
+from fetch_latest_state import CartesianState, fetch_latest_state
 from utils.propagation_utils.constants import Constants
 
 DEFAULT_STEP_SECONDS = 60.0
-DEFAULT_SEARCH_HOURS = 24.0
 DEFAULT_POSITION_TOLERANCE_M = 10.0
-OREKIT_DATA_FILE = Path(__file__).with_name("orekit-data.zip")
+OREKIT_DATA_ZIP = Path(__file__).resolve().parents[2] / "orekit-data.zip"
+OREKIT_DATA_DIR = Path(__file__).resolve().parents[2] / "orekit-data"
 
 
-def require_orekit_data_file() -> Path:
-    if not OREKIT_DATA_FILE.exists():
-        raise FileNotFoundError(f"Orekit data not found at {OREKIT_DATA_FILE}")
-    return OREKIT_DATA_FILE
+def require_orekit_data_path() -> Path:
+    if OREKIT_DATA_ZIP.exists():
+        return OREKIT_DATA_ZIP
+    if OREKIT_DATA_DIR.exists():
+        return OREKIT_DATA_DIR
+
+    raise FileNotFoundError(
+        f"Orekit data not found at {OREKIT_DATA_ZIP} or {OREKIT_DATA_DIR}"
+    )
 
 
 def _jdk_jvm_path() -> Path:
@@ -34,7 +39,7 @@ def _jdk_jvm_path() -> Path:
 
 
 def setup_orekit() -> Path:
-    data_path = require_orekit_data_file()
+    data_path = require_orekit_data_path()
 
     import jdk4py
     import orekit_jpype
@@ -161,15 +166,11 @@ def propagate_from_latest_state(
     *,
     hours: float,
     step_seconds: float = DEFAULT_STEP_SECONDS,
-    search_hours: float = DEFAULT_SEARCH_HOURS,
 ) -> list[CartesianState]:
-    if search_hours <= 0:
-        raise ValueError("search_hours must be greater than 0")
-
     sample_offsets(hours * 3600.0, step_seconds)
-    require_orekit_data_file()
+    require_orekit_data_path()
 
-    initial_state = fetch_states(count=1, search_hours=search_hours)[0]
+    initial_state = fetch_latest_state()
     return _propagate_state(
         initial_state,
         hours=hours,
@@ -189,13 +190,11 @@ def main() -> None:
     )
     parser.add_argument("--hours", type=float, required=True, help="Propagation horizon in hours.")
     parser.add_argument("--step-seconds", type=float, default=DEFAULT_STEP_SECONDS, help="Sampling step in seconds. Default: 60")
-    parser.add_argument("--search-hours", type=float, default=DEFAULT_SEARCH_HOURS, help="Lookback window for fetching the latest SatOS state. Default: 24")
     args = parser.parse_args()
 
     states = propagate_from_latest_state(
         hours=args.hours,
         step_seconds=args.step_seconds,
-        search_hours=args.search_hours,
     )
 
     print(f"Propagated {len(states)} state sample(s)")
