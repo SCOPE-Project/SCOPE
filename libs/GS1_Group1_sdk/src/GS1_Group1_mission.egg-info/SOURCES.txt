@@ -21,6 +21,7 @@ src/api_connect/command_history.py
 src/api_connect/commands.py
 src/api_connect/satellites.py
 src/api_connect/satio_session.py
+src/api_connect/schedule_events.py
 src/api_connect/schedules.py
 src/api_connect/telemetry.py
 src/api_connect/uuid_import_fix.py
