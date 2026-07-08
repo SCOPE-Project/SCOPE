@@ -137,77 +137,78 @@ export default function App() {
     setCalculatingTradeOffs(false)
   }
 
+  const headerStatusClass =
+    backendAlive === null ? 'checking' : backendAlive ? 'online' : 'offline'
+
+  const headerStatusLabel =
+    backendAlive === null ? 'Connection Check' : backendAlive ? 'SatOS Connected' : 'Backend Offline'
+
+  const appHeader = (
+    <header className="app-header">
+      <div className="app-header-brand">
+        <div className="app-header-title">SCOPE</div>
+        <div className="app-header-subtitle">Satellite Communication Optimizer and Planning Engine</div>
+      </div>
+      <div className="app-header-status">
+        <div className={`app-status app-status--${headerStatusClass}`}>
+          <span className="app-status-dot" aria-hidden="true"></span>
+          <span className="app-status-label">{headerStatusLabel}</span>
+        </div>
+      </div>
+    </header>
+  )
+
   if (view === 'landing') {
     return (
-      <div className="container">
-        <div className="header">
-          <h1>VLEO Scheduling</h1>
-          <p>SatOS Constellation-to-Ground Control</p>
-          <div>
-            {backendAlive === null && (
-              <span className="status-badge checking" style={{ color: 'var(--text-secondary)' }}>Checking connection...</span>
-            )}
-            {backendAlive === true && (
-              <span className="status-badge connected">Backend Online</span>
-            )}
-            {backendAlive === false && (
-              <span className="status-badge disconnected">Backend Offline</span>
-            )}
-          </div>
-        </div>
-
-        <div className="control-panel">
-          <button
-            className="btn-fetch"
-            onClick={fetchSatellites}
-            disabled={loading || backendAlive === false}
-          >
-            {loading ? (
-              <>
-                <span className="loading-spinner"></span>
-                Fetching...
-              </>
-            ) : (
-              'Get Satellite List'
-            )}
-          </button>
-
-          <div className="results-area">
-            {error && (
-              <div className="error-message">
-                <strong>Error:</strong> {error}
+      <div className="app-shell">
+        {appHeader}
+        <div className="app-content app-content--landing">
+          <div className="landing-shell">
+            <div className="landing-content">
+              <div className="landing-info" role="status" aria-live="polite">
+                <span className="landing-info-icon" aria-hidden="true">i</span>
+                <p className="landing-info-text">
+                  No assets loaded yet. Click the button to request from SatOS.
+                </p>
               </div>
-            )}
 
-            {!loading && !error && satellites.length > 0 && (
-              <ul className="satellite-list">
-                {satellites.map((name, index) => (
-                  <li key={`${name}-${index}`} className="satellite-item" style={{ animationDelay: `${index * 50}ms` }}>
-                    <span className="satellite-name">{name}</span>
-                    <span className="satellite-tag">Active</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+              <div className="landing-actions">
+                <button
+                  className="btn-fetch"
+                  onClick={fetchSatellites}
+                  disabled={loading || backendAlive === false}
+                >
+                  {loading ? (
+                    <>
+                      <span className="loading-spinner"></span>
+                      Fetching...
+                    </>
+                  ) : (
+                    'Load Mission Assets'
+                  )}
+                </button>
 
-            {!loading && !error && satellites.length === 0 && backendAlive === true && (
-              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>
-                No satellites loaded yet. Click the button to request from SatOS.
-              </p>
-            )}
+                {error && (
+                  <div className="error-message">
+                    <strong>Error:</strong> {error}
+                  </div>
+                )}
 
-            {backendAlive === false && (
-              <p style={{ color: 'var(--error-text)', textAlign: 'center', fontSize: '0.9rem', marginTop: '1rem' }}>
-                Please start your FastAPI server (<code>python run.py</code> in <code>backend/</code>) to test integration.
-              </p>
-            )}
+                {backendAlive === false && (
+                  <p className="results-warning">
+                    Please start your FastAPI server (<code>python run.py</code> in <code>backend/</code>) to test integration.
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
     )
   }
-    return (
-      <div className={`workspace-shell ${sidebarCollapsed ? 'workspace-shell--collapsed' : ''}`}>
+
+  const pageContent = (
+    <div className={`workspace-shell ${sidebarCollapsed ? 'workspace-shell--collapsed' : ''}`}>
         <aside className={`workspace-sidebar ${sidebarCollapsed ? 'workspace-sidebar--collapsed' : ''}`}>
           <div className="workspace-sidebar-header">
             {!sidebarCollapsed && <h2>Configuration</h2>}
@@ -297,24 +298,26 @@ export default function App() {
 
         <main className="workspace-main">
           <section className="panel overview-panel">
-            <h2>Overview</h2>
-            <p className="panel-intro">
-              This area will summarize the extracted communication opportunities and
-              the current scheduler state.
-            </p>
-
-            <div className="overview-summary">
-              <div className="overview-card">
-                <span className="overview-label">Selected Satellites</span>
-                <strong className="overview-value">{selectedSatellites.length}</strong>
+            <div className="panel-heading">
+              <div>
+                <h2>Overview</h2>
+                <p className="panel-intro">
+                  This area will summarize the extracted communication opportunities and
+                  the current scheduler state.
+                </p>
               </div>
-              <div className="overview-card">
-                <span className="overview-label">Ground Stations</span>
-                <strong className="overview-value">TBD</strong>
-              </div>
-              <div className="overview-card">
-                <span className="overview-label">Extraction Status</span>
-                <strong className="overview-value">{extractionStatus}</strong>
+              <div
+                className={`app-status overview-inline-status ${
+                  extractionStatus === 'Completed'
+                    ? 'app-status--online'
+                    : extractionStatus === 'Running'
+                      ? 'app-status--checking'
+                      : 'app-status--offline'
+                }`}
+              >
+                <span className="overview-status-label">Extraction Status</span>
+                <span className="app-status-dot" aria-hidden="true"></span>
+                <span className="app-status-label">{extractionStatus}</span>
               </div>
             </div>
 
@@ -420,6 +423,15 @@ export default function App() {
           </section>
         </main>
       </div>
-    )
+  )
 
+  return (
+    <div className="app-shell">
+      {appHeader}
+
+      <div className="app-content">
+        {pageContent}
+      </div>
+    </div>
+  )
 }
