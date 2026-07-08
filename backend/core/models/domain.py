@@ -6,19 +6,16 @@ from datetime import datetime
 @dataclass
 class SatelliteInformation:
     name: str
-    id: str
     position_r: List[float]
     velocity_v: List[float]
-    state_timestamp: float
+    state_timestamp: datetime
 
 @dataclass
 class GroundStationInformation:
     name: str
-    id: str
     latitude: float
     longitude: float
-    elevation_m: float
-    min_elevation_angle_deg: float
+    min_link_elevation: float
 
 @dataclass
 class TimeInterval:

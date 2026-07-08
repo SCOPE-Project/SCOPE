@@ -2,7 +2,9 @@ from datetime import datetime
 from app.services import state_manager
 from core.orbit_engine import orekit_engine
 from core.scheduling import scheduling
-from models.domain import SatelliteInformation, GroundStationInformation, TimeInterval
+from core.models.domain import SatelliteInformation, GroundStationInformation, TimeInterval
+from app.services.asset_repository import AssetRepository
+
 
 def run_orbit_engine_task(
         task_id: str, 
@@ -34,15 +36,15 @@ def run_orbit_engine_task(
 
     try:
         # Map input to Domain Models
-        satellite_infos = [state_manager.get_asset(sat_id) for sat_id in selected_satellites]
-        ground_station_infos = [state_manager.get_ground_station(gs_id) for gs_id in selected_groundstations]
+        satellite_infos = [AssetRepository.get_satellite_information(sat_name) for sat_name in selected_satellites]
+        groundstation_infos = [AssetRepository.get_groundstation_information(gs_name) for gs_name in selected_groundstations]
         time_interval = TimeInterval(start_time=start_time, end_time=end_time)
         
         # Run the pure library, injecting the localized state update loop
         raw_results = orekit_engine.run_orekit_engine(
             task_id=task_id, 
             satellite_infos=satellite_infos, 
-            ground_station_infos=ground_station_infos, 
+            groundstation_infos=groundstation_infos, 
             time_interval=time_interval, 
             on_progress_update=web_callback
         )
