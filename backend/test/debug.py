@@ -4,6 +4,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+
+import json
+
 # Add backend directory and backend/app directory to sys.path
 backend_path = Path(r"c:\Users\Chris\Documents\Studium\Module_Master\SoftwaresystemeRaumfahrtanwendungen\SCOPE\backend")
 sys.path.append(str(backend_path))
