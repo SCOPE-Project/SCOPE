@@ -17,7 +17,7 @@ export default function App() {
   const [calculatingTradeOffs, setCalculatingTradeOffs] = useState(false)
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
   const [tradeOffCards, setTradeOffCards] = useState([])
-  const [selectedTradeOffCard, setSelectedTradeOffCard] = useState(null)
+  const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
   const [expandedSections, setExpandedSections] = useState({
     satellites: true,
     groundStations: true,
@@ -73,24 +73,78 @@ export default function App() {
     }))
   }
 
-  const buildMockOverpasses = (selectedSatelliteNames, selectedGroundStationNames) =>
-    selectedSatelliteNames.map((satellite, index) => ({
-      overpassId: `OP-${String(index + 1).padStart(3, '0')}`,
-      satId: satellite,
-      gsId: selectedGroundStationNames[index % selectedGroundStationNames.length] ?? `GS-TBD-${(index % 3) + 1}`,
-      duration: `${8 + index * 2} min`,
+  const buildMockOverpasses = (selectedSatelliteNames, selectedGroundStationNames) => {
+    const candidateGroundStations =
+      selectedGroundStationNames.length > 0
+        ? selectedGroundStationNames.slice(0, Math.min(2, selectedGroundStationNames.length))
+        : ['GS-TBD-1']
+
+    let overpassIndex = 1
+
+    return selectedSatelliteNames.flatMap((satellite, satelliteIndex) =>
+      candidateGroundStations.map((groundStation, groundStationIndex) => ({
+        overpassId: `OP-${String(overpassIndex++).padStart(3, '0')}`,
+        satId: satellite,
+        gsId: groundStation,
+        duration: `${8 + satelliteIndex * 2 + groundStationIndex} min`,
+      }))
+    )
+  }
+
+  const buildMockTradeOffState = (rows) => {
+    const rowsBySatellite = rows.reduce((groups, row) => {
+      if (!groups[row.satId]) {
+        groups[row.satId] = []
+      }
+      groups[row.satId].push(row)
+      return groups
+    }, {})
+
+    let conflictIndex = 1
+    const rowTradeOffMap = new Map()
+
+    const groups = Object.entries(rowsBySatellite)
+      .filter(([, groupRows]) => groupRows.length > 1)
+      .map(([satelliteId, groupRows]) => {
+        const groupLabel = `TO-${String(conflictIndex).padStart(2, '0')}`
+        const options = groupRows.map((row, optionIndex) => {
+          const score = `${92 - (conflictIndex - 1) * 8 - optionIndex * 9}/100`
+          rowTradeOffMap.set(row.overpassId, groupLabel)
+          return {
+            optionId: `${satelliteId}-${row.overpassId}`,
+            overpassId: row.overpassId,
+            satId: row.satId,
+            gsId: row.gsId,
+            duration: row.duration,
+            tradeOffId: groupLabel,
+            score,
+            recommended: optionIndex === 0,
+          }
+        })
+
+        const group = {
+          id: `tradeoff-${conflictIndex}`,
+          title: groupLabel,
+          resourceLabel: satelliteId,
+          reason: `Multiple downlink options for the same satellite overlap in the current planning window.`,
+          options,
+        }
+
+        conflictIndex += 1
+        return group
+      })
+
+    const enrichedRows = rows.map((row) => ({
+      ...row,
+      tradeOffId: rowTradeOffMap.get(row.overpassId) ?? '—',
+      tradeOffScore:
+        groups
+          .flatMap((group) => group.options)
+          .find((option) => option.overpassId === row.overpassId)?.score ?? '—',
     }))
 
-  const buildMockTradeOffCards = (rows) =>
-    rows
-      .filter((row) => row.tradeOff !== '—')
-      .slice(0, 3)
-      .map((row, index) => ({
-      title: `Conflict Group ${index + 1}`,
-      selectedLink: `${row.satId} ↔ ${row.gsId}`,
-      score: `${92 - index * 11}/100`,
-      recommended: index === 0,
-    }))
+    return { enrichedRows, groups }
+  }
 
   const fetchAssets = async () => {
     setLoading(true)
@@ -128,7 +182,7 @@ export default function App() {
     setSchedulerLaunched(false)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
-    setSelectedTradeOffCard(null)
+    setSelectedTradeOffOption(null)
 
     const simulatedRows = buildMockOverpasses(selectedSatellites, selectedGroundStations)
 
@@ -136,6 +190,7 @@ export default function App() {
 
     setOverviewRows(simulatedRows)
     setSchedulerLaunched(true)
+    setSidebarCollapsed(true)
     setExtractionStatus('Completed')
     setLaunchingScheduler(false)
   }
@@ -147,13 +202,11 @@ export default function App() {
 
     await new Promise((resolve) => setTimeout(resolve, 1000))
 
-    const enrichedRows = overviewRows.map((row, index) => ({
-      ...row,
-      tradeOff: index % 3 === 2 ? '—' : `${92 - index * 11}/100`,
-    }))
+    const { enrichedRows, groups } = buildMockTradeOffState(overviewRows)
 
     setOverviewRows(enrichedRows)
-    setTradeOffCards(buildMockTradeOffCards(enrichedRows))
+    setTradeOffCards(groups)
+    setSelectedTradeOffOption(groups[0]?.options.find((option) => option.recommended)?.optionId ?? null)
     setTradeOffsCalculated(true)
     setCalculatingTradeOffs(false)
   }
@@ -433,6 +486,9 @@ export default function App() {
                   </span>
                 )}
               </div>
+              <p className="sidebar-action-note">
+                For the current dummy trade-off view, select at least two ground stations.
+              </p>
             </>
           )}
         </aside>
@@ -467,21 +523,26 @@ export default function App() {
                   <span>Sat ID</span>
                   <span>GS ID</span>
                   <span>Overpass Duration</span>
-                  {tradeOffsCalculated && <span>Trade-Offs</span>}
+                  {tradeOffsCalculated && <span>Trade Off ID</span>}
+                  {tradeOffsCalculated && <span>Score</span>}
                 </div>
                 {overviewRows.length === 0 ? (
                   <>
-                    <div className="overview-list-row overview-list-row--placeholder overview-list-grid">
+                    <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
                       <span>OP-001</span>
                       <span>Pending</span>
                       <span>Pending</span>
                       <span>Pending</span>
+                      {tradeOffsCalculated && <span>—</span>}
+                      {tradeOffsCalculated && <span>—</span>}
                     </div>
-                    <div className="overview-list-row overview-list-row--placeholder overview-list-grid">
+                    <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
                       <span>OP-002</span>
                       <span>Pending</span>
                       <span>Pending</span>
                       <span>Pending</span>
+                      {tradeOffsCalculated && <span>—</span>}
+                      {tradeOffsCalculated && <span>—</span>}
                     </div>
                   </>
                 ) : (
@@ -495,7 +556,8 @@ export default function App() {
                         <span>{row.satId}</span>
                         <span>{row.gsId}</span>
                         <span>{row.duration}</span>
-                        {tradeOffsCalculated && <span>{row.tradeOff}</span>}
+                        {tradeOffsCalculated && <span>{row.tradeOffId}</span>}
+                        {tradeOffsCalculated && <span>{row.tradeOffScore}</span>}
                       </div>
                     ))}
                   </>
@@ -503,8 +565,8 @@ export default function App() {
               </div>
               {overviewRows.length > 0 && (
                 <p className="overview-note">
-                  Ground-station identifiers and overpass durations are currently simulated until the backend
-                  exposes the full extraction payload.
+                  Overpass duration and trade-off values shown here are currently placeholder values and do not
+                  represent final calculation results.
                 </p>
               )}
             </div>
@@ -527,31 +589,61 @@ export default function App() {
 
           <section className="panel tradeoff-panel">
             <h2>Trade-Off</h2>
-            {!tradeOffsCalculated && (
-              <p>Conflict analysis and decision cards will appear here after the trade-off calculation.</p>
-            )}
             {tradeOffsCalculated && (
+              <p className="tradeoff-summary">
+                {tradeOffCards.length} trade-off group{tradeOffCards.length === 1 ? '' : 's'} identified.
+              </p>
+            )}
+            {!tradeOffsCalculated && (
+              <p>Trade-off decision cards will appear here after the trade-off calculation.</p>
+            )}
+            {tradeOffsCalculated && tradeOffCards.length === 0 && (
+              <p>No trade-off groups were identified for the current selection.</p>
+            )}
+            {tradeOffsCalculated && tradeOffCards.length > 0 && (
               <div className="tradeoff-card-list">
                 {tradeOffCards.map((card) => (
                   <article
-                    key={card.title}
-                    className={`tradeoff-card ${selectedTradeOffCard === card.title ? 'tradeoff-card--selected' : ''}`}
+                    key={card.id}
+                    className="tradeoff-card"
                   >
                     <div className="tradeoff-card-header">
-                      <h3>{card.title}</h3>
+                      <div className="tradeoff-card-titleblock">
+                        <h3>{card.title}</h3>
+                        <p className="tradeoff-card-resource">{card.resourceLabel}</p>
+                      </div>
                       <div className="tradeoff-meta">
-                        {card.recommended && <span className="tradeoff-recommended">Recommended</span>}
-                        <span className="tradeoff-score">{card.score}</span>
+                        <span className="tradeoff-score">{card.options.length} options</span>
                       </div>
                     </div>
-                    <p className="tradeoff-link">{card.selectedLink}</p>
-                    <button
-                      type="button"
-                      className="tradeoff-select-button"
-                      onClick={() => setSelectedTradeOffCard(card.title)}
-                    >
-                      {selectedTradeOffCard === card.title ? 'Selected' : 'Select'}
-                    </button>
+                    <p className="tradeoff-reason">
+                      <span className="tradeoff-reason-label">Reason:</span> {card.reason}
+                    </p>
+
+                    <div className="tradeoff-option-list">
+                      {card.options.map((option) => (
+                        <div
+                          key={option.optionId}
+                          className={`tradeoff-option ${selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : ''}`}
+                        >
+                          <div className="tradeoff-option-header">
+                            <span className="tradeoff-option-id">{option.overpassId}</span>
+                            <div className="tradeoff-meta tradeoff-meta--option">
+                              {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
+                              <span className="tradeoff-score">{option.score}</span>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="tradeoff-select-button"
+                            onClick={() => setSelectedTradeOffOption(option.optionId)}
+                          >
+                            {selectedTradeOffOption === option.optionId ? 'Selected' : 'Select'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </article>
                 ))}
               </div>

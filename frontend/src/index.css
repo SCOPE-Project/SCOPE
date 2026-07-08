@@ -264,6 +264,13 @@ body {
   visibility: visible;
 }
 
+.sidebar-action-note {
+  margin-top: 0.55rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
 .btn-fetch:hover {
   background: var(--btn-hover);
   border-color: var(--btn-hover);
@@ -738,14 +745,14 @@ body {
 
 .overview-list-grid {
   display: grid;
-  grid-template-columns: 1.1fr 1fr 1fr 1.2fr;
-  gap: 1rem;
-  min-width: 720px;
+  grid-template-columns: 1fr 0.95fr 0.95fr 1fr;
+  gap: 0.7rem;
+  min-width: 640px;
 }
 
 .overview-list-grid--with-tradeoffs {
-  grid-template-columns: 1fr 1fr 1fr 1.1fr 1fr;
-  min-width: 860px;
+  grid-template-columns: 0.95fr 0.9fr 0.9fr 1fr 0.95fr 0.8fr;
+  min-width: 820px;
 }
 
 .overview-list-header,
@@ -858,79 +865,157 @@ body {
   min-width: 0;
 }
 
+.tradeoff-summary {
+  margin-bottom: 0.9rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
 .tradeoff-card {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-card);
   padding: 1rem 1.1rem;
   background: var(--bg-panel);
-}
-
-.tradeoff-card--selected {
-  border-color: var(--accent-primary);
-  box-shadow: inset 0 0 0 1px var(--accent-primary);
+  overflow: hidden;
 }
 
 .tradeoff-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.5rem;
 }
 
+.tradeoff-card-titleblock {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .tradeoff-card-header h3 {
   font-size: 0.98rem;
+  margin-bottom: 0.12rem;
+  overflow-wrap: anywhere;
+}
+
+.tradeoff-card-resource {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .tradeoff-meta {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+}
+
+.tradeoff-meta--option {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.32rem;
+  flex: 0 0 auto;
 }
 
 .tradeoff-recommended {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--success-text);
-  background: var(--success-bg);
-  border: 1px solid var(--success-border);
-  padding: 0.2rem 0.45rem;
-  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #1f5f31;
+  background: #edf6ef;
+  border: 1px solid #b8d5bf;
+  padding: 0.16rem 0.42rem;
+  border-radius: 0.18rem;
+  white-space: nowrap;
 }
 
 .tradeoff-score {
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--accent-primary);
-  background: #ddeafb;
-  padding: 0.25rem 0.55rem;
-  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #234b79;
+  background: #eaf1f8;
+  border: 1px solid #c6d6e6;
+  padding: 0.18rem 0.45rem;
+  border-radius: 0.18rem;
+  white-space: nowrap;
 }
 
-.tradeoff-link {
+.tradeoff-reason {
+  margin-bottom: 0.85rem;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.tradeoff-reason-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.tradeoff-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tradeoff-option {
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  background: var(--bg-panel-strong);
+  padding: 0.8rem 0.85rem;
+  min-width: 0;
+}
+
+.tradeoff-option--selected {
+  border-color: var(--accent-primary);
+  box-shadow: inset 0 0 0 1px var(--accent-primary);
+}
+
+.tradeoff-option-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.tradeoff-option-id {
+  font-size: 0.86rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 0.5rem;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .tradeoff-select-button {
-  margin-top: 0.9rem;
+  margin-top: 0.75rem;
   width: 100%;
   font-family: var(--font-family);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   font-weight: 600;
   color: var(--text-primary);
   background: transparent;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-btn);
-  padding: 0.7rem 0.9rem;
+  padding: 0.65rem 0.8rem;
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
 .tradeoff-select-button:hover {
   background: #ebf1f8;
   border-color: #97b4d3;
+}
+
+.tradeoff-option--selected .tradeoff-select-button {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
 }
 
 .workspace-main .panel:last-child {
