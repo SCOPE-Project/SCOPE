@@ -2,16 +2,23 @@ from datetime import datetime
 from pydantic import UUID4
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from app.services import satos_connector
+from app.services.asset_repository import AssetRepository
 from app.models.tasks import OrbitEngineRequest
 
 from app.models.satos import (
     AssetListResponse,
     AssetResponse,
     ScheduleEventsResponse,
-    ActivitiesListResponse
+    ActivitiesListResponse,
+    InitializeRepositoryResponse
 )
 
 router = APIRouter(prefix="/satos", tags=["SatOS REST Data"])
+
+@router.get("/initialize", response_model=InitializeRepositoryResponse)
+def initialize_assets():
+    initialized_assets = AssetRepository.initialize_repository()
+    return {"assets": initialized_assets}
 
 @router.get("/asset/list", response_model=AssetListResponse)
 def satos_get_asset_list():

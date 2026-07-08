@@ -3,13 +3,13 @@
 from typing import Callable
 from datetime import datetime
 
-from app.models.domain import SatelliteInformation, GroundStationInformation, TimeInterval
+from core.models.domain import SatelliteInformation, GroundStationInformation, TimeInterval
 
 
 def run_orekit_engine(
         task_id: str, 
         satellite_infos: list[SatelliteInformation], 
-        ground_station_infos: list[GroundStationInformation], 
+        groundstation_infos: list[GroundStationInformation], 
         time_interval: TimeInterval, 
         on_progress_update : Callable | None = None
     ) -> dict[str, list]:

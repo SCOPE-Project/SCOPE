@@ -1,12 +1,112 @@
 # /services/asset_repository.py
 from core.models.domain import SatelliteInformation, GroundStationInformation
-from services.satos_connector import satos_get_asset
+from pydantic_models.definitions import SatelliteModel
+from services.satos_connector import satos_get_asset, satos_get_asset_list
 from datetime import datetime
 import warnings
 
 class AssetRepository:
     _satellite_cache: dict[str, SatelliteInformation] = {}
     _groundstation_cache: dict[str, GroundStationInformation] = {}
+    _ineligible_cache: dict[str, str] = {}
+
+    @classmethod
+    def initialize_repository(cls) -> list[dict]:
+        """
+        Retrieves the list of assets from SatOS, queries the full configuration
+        for each asset, parses eligible assets as satellites or ground stations,
+        and caches the results (including ineligible ones).
+        """
+        # Clear existing caches
+        cls._satellite_cache.clear()
+        cls._groundstation_cache.clear()
+        cls._ineligible_cache.clear()
+
+        try:
+            asset_list = satos_get_asset_list()
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch asset list from SatOS: {e}")
+
+        results = []
+        for info in asset_list:
+            asset_name = info.name
+            try:
+                # 1. Fetch raw asset and cache it
+                raw_model = satos_get_asset(asset_name=asset_name)
+
+                # 2. Identify the intended classification based on defined variables
+                var_names = {var.name for var in raw_model.variableDefinitions}
+                
+                is_satellite_candidate = any(name in var_names for name in ["position_vector", "velocity_vector", "state_timestamp"])
+                is_groundstation_candidate = any(name in var_names for name in ["latitude", "longitude", "min_link_elevation"])
+
+                if is_satellite_candidate and is_groundstation_candidate:
+                    reason = "Ambiguous asset type: contains both satellite and ground station variables"
+                    cls._ineligible_cache[asset_name] = reason
+                    results.append({
+                        "name": asset_name,
+                        "eligible": False,
+                        "classification": "ineligible",
+                        "error": reason
+                    })
+                elif is_satellite_candidate:
+                    try:
+                        cls.get_satellite_information(asset_name)
+                        results.append({
+                            "name": asset_name,
+                            "eligible": True,
+                            "classification": "satellite",
+                            "details": cls._satellite_cache[asset_name]
+                        })
+                    except Exception as e:
+                        reason = f"Malformed satellite model: {e}"
+                        cls._ineligible_cache[asset_name] = reason
+                        results.append({
+                            "name": asset_name,
+                            "eligible": False,
+                            "classification": "ineligible",
+                            "error": reason
+                        })
+                elif is_groundstation_candidate:
+                    try:
+                        cls.get_groundstation_information(asset_name)
+                        results.append({
+                            "name": asset_name,
+                            "eligible": True,
+                            "classification": "ground_station",
+                            "details": cls._groundstation_cache[asset_name]
+                        })
+                    except Exception as e:
+                        reason = f"Malformed ground station model: {e}"
+                        cls._ineligible_cache[asset_name] = reason
+                        results.append({
+                            "name": asset_name,
+                            "eligible": False,
+                            "classification": "ineligible",
+                            "error": reason
+                        })
+                else:
+                    reason = "Unknown asset type: missing both satellite and ground station variables"
+                    cls._ineligible_cache[asset_name] = reason
+                    results.append({
+                        "name": asset_name,
+                        "eligible": False,
+                        "classification": "ineligible",
+                        "error": reason
+                    })
+
+            except Exception as e:
+                # This catches communication/fetching failures (like 403 Forbidden)
+                reason = f"Fetch error: {e}"
+                cls._ineligible_cache[asset_name] = reason
+                results.append({
+                    "name": asset_name,
+                    "eligible": False,
+                    "classification": "ineligible",
+                    "error": reason
+                })
+
+        return results
 
     @classmethod
     def get_satellite_information(cls, satellite_name: str) -> SatelliteInformation:
@@ -16,8 +116,11 @@ class AssetRepository:
         if satellite_name in cls._satellite_cache:
             return cls._satellite_cache[satellite_name]
         
-        # 1. Fetch the web model from SatOS
+        if satellite_name in cls._ineligible_cache:
+            raise ValueError(f"Asset is marked ineligible: {cls._ineligible_cache[satellite_name]}")
+        
         raw_satellite_model = satos_get_asset(asset_name=satellite_name)
+        
         satellite_name = raw_satellite_model.name
 
         # 2. Initialize sentinels instead of defaults
@@ -74,9 +177,12 @@ class AssetRepository:
         if groundstation_name in cls._groundstation_cache:
             return cls._groundstation_cache[groundstation_name]
         
-        # 1. Fetch the heavy web model from SatOS
+        if groundstation_name in cls._ineligible_cache:
+            raise ValueError(f"Asset is marked ineligible: {cls._ineligible_cache[groundstation_name]}")
+        
         groundstation_model = satos_get_asset(asset_name=groundstation_name)
-        name = groundstation_model.name
+            
+        groundstation_name = groundstation_model.name
 
         # 2. Initialize sentinels instead of defaults
         latitude = None
@@ -115,7 +221,7 @@ class AssetRepository:
             raise ValueError("Missing required variable: 'min_link_elevation'")
         
         groundstation_information = GroundStationInformation(
-            name=name,
+            name=groundstation_name,
             latitude=latitude,
             longitude=longitude,
             min_link_elevation=min_link_elevation,
