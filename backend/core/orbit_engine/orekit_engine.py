@@ -3,23 +3,23 @@
 from typing import Callable
 from datetime import datetime
 
- 
+from app.models.domain import SatelliteInformation, GroundStationInformation, TimeInterval
+
+
 def run_orekit_engine(
         task_id: str, 
-        satellites: list[str], 
-        ground_stations: list[str], 
-        start_time: datetime, 
-        end_time: datetime, 
+        satellite_infos: list[SatelliteInformation], 
+        ground_station_infos: list[GroundStationInformation], 
+        time_interval: TimeInterval, 
         on_progress_update : Callable | None = None
-    ):
+    ) -> dict[str, list]:
     """
     Runs the OREKIT engine for a given task.
 
     :param task_id: The ID of the task.
-    :param satellites: A list of satellite identifiers.
-    :param ground_stations: A list of ground station identifiers.
-    :param start_time: The start time.
-    :param end_time: The end time.
+    :param satellite_infos: A list of satellite identifiers.
+    :param ground_station_infos: A list of ground station identifiers.
+    :param time_interval: The time interval.
     :param on_progress_update: A callback function to update the progress.
 
     :return: A dictionary containing the global tracks and schedule blocks.
@@ -28,13 +28,13 @@ def run_orekit_engine(
     master_global_tracks = {}
     master_schedule_blocks = []
     
-    total_sats = len(satellites)
-    total_duration = (end_time - start_time).total_seconds()
+    total_sats = len(satellite_infos)
+    total_duration = (time_interval.end_time - time_interval.start_time).total_seconds()
     
     # ==========================================
     # THE OUTER LOOP: ONE SATELLITE AT A TIME (N)
     # ==========================================
-    for sat_id in enumerate(satellites):
+    for sat_id in enumerate(satellite_infos):
         
         
         # 1. Initialize Engine for this specific satellite

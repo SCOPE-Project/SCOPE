@@ -34,7 +34,7 @@ def satos_get_asset(asset_name: str) -> SatelliteModel:
     SatOS Connector to GET .../satellite
 
     :param asset_name: Name of the satellite to fetch
-    :return: SatelliteModel
+    :return: SatelliteModel (single latest version)
     """
     with SatIOSession() as session:
         return get_satellite(session, satellite_name=asset_name)
