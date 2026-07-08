@@ -6,10 +6,9 @@ from datetime import datetime
 @dataclass
 class SatelliteInformation:
     name: str
-    id: str
     position_r: List[float]
     velocity_v: List[float]
-    state_timestamp: float
+    state_timestamp: datetime
 
 @dataclass
 class GroundStationInformation:
@@ -17,7 +16,6 @@ class GroundStationInformation:
     id: str
     latitude: float
     longitude: float
-    elevation_m: float
     min_elevation_angle_deg: float
 
 @dataclass
@@ -31,3 +29,10 @@ class OrbitPropagationTask:
     satellite_infos: List[SatelliteInformation]
     ground_station_infos: List[GroundStationInformation]
     time_interval: TimeInterval
+
+@dataclass
+class PropagationRawResult:
+    """Typed orbit engine result from propagation before API-layer serialization."""
+    metadata: dict[str, object]
+    global_tracks: dict[str, list[dict[str, object]]]
+    overpass_blocks: list[dict[str, object]]
