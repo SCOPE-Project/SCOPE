@@ -1,0 +1,4 @@
+Sat1_Group1_mission
+api_connect
+lexorank
+pydantic_models

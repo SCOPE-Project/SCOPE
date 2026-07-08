@@ -54,6 +54,11 @@ app.include_router(satos.router)
 app.include_router(tasks.router)
 
 
+@app.get("/status")
+def get_status():
+    return {"status": "ok"}
+
+
 @app.get("/", include_in_schema=False)
 def redirect_to_docs():
     return RedirectResponse(url="/docs")

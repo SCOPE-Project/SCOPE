@@ -1,0 +1,29 @@
+# app/models/satos.py
+from pydantic import BaseModel
+from pydantic_models.definitions import SatelliteInfoModel, SatelliteModel
+from pydantic_models.activity import ActivityInfoModel
+from pydantic_models.schedule_event import ScheduleEventModel
+from typing import Union
+from core.models.domain import SatelliteInformation, GroundStationInformation
+
+class AssetListResponse(BaseModel):
+    assets: list[SatelliteInfoModel]
+
+class AssetResponse(BaseModel):
+    assets: SatelliteModel
+
+class ScheduleEventsResponse(BaseModel):
+    schedule_events: list[ScheduleEventModel]
+
+class ActivitiesListResponse(BaseModel):
+    activities: list[ActivityInfoModel]
+
+class InitializedAssetInfo(BaseModel):
+    name: str
+    eligible: bool
+    classification: str  # "satellite", "ground_station", or "ineligible"
+    details: Union[SatelliteInformation, GroundStationInformation, None] = None
+    error: str | None = None
+
+class InitializeRepositoryResponse(BaseModel):
+    assets: list[InitializedAssetInfo]
