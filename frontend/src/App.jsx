@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 
 export default function App() {
-  const [satellites, setSatellites] = useState([])
+  const [assets, setAssets] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [backendAlive, setBackendAlive] = useState(null) // null = checking, true = alive, false = dead
+  const [backendAlive, setBackendAlive] = useState(null)
+  const [satosAlive, setSatosAlive] = useState(null)
   const [view, setView] = useState('landing')
   const [selectedSatellites, setSelectedSatellites] = useState([])
+  const [selectedGroundStations, setSelectedGroundStations] = useState([])
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [launchingScheduler, setLaunchingScheduler] = useState(false)
   const [schedulerLaunched, setSchedulerLaunched] = useState(false)
@@ -18,30 +20,46 @@ export default function App() {
   const [selectedTradeOffCard, setSelectedTradeOffCard] = useState(null)
   const [expandedSections, setExpandedSections] = useState({
     satellites: true,
-    groundStations: false,
+    groundStations: true,
+    unavailableAssets: false,
     filters: false,
   })
 
   useEffect(() => {
-    // Check if backend is alive on mount
-    const checkBackend = async () => {
+    const checkConnections = async () => {
       try {
-        // const res = await fetch('http://localhost:8000/status')
-        const res = await fetch('http://localhost:8000/satos/satellite/list')
-        if (res.ok) {
+        const backendResponse = await fetch('http://localhost:8000/status')
+        if (backendResponse.ok) {
           setBackendAlive(true)
+
+          try {
+            const satosResponse = await fetch('http://localhost:8000/satos/asset/list')
+            setSatosAlive(satosResponse.ok)
+          } catch (err) {
+            setSatosAlive(false)
+          }
         } else {
           setBackendAlive(false)
+          setSatosAlive(null)
         }
       } catch (err) {
         setBackendAlive(false)
+        setSatosAlive(null)
       }
     }
-    checkBackend()
+    checkConnections()
   }, [])
 
   const toggleSatellite = (name) => {
     setSelectedSatellites((current) =>
+      current.includes(name)
+        ? current.filter((item) => item !== name)
+        : [...current, name]
+    )
+  }
+
+  const toggleGroundStation = (name) => {
+    setSelectedGroundStations((current) =>
       current.includes(name)
         ? current.filter((item) => item !== name)
         : [...current, name]
@@ -55,11 +73,11 @@ export default function App() {
     }))
   }
 
-  const buildMockOverpasses = (selected) =>
-    selected.map((satellite, index) => ({
+  const buildMockOverpasses = (selectedSatelliteNames, selectedGroundStationNames) =>
+    selectedSatelliteNames.map((satellite, index) => ({
       overpassId: `OP-${String(index + 1).padStart(3, '0')}`,
       satId: satellite,
-      gsId: `GS-TBD-${(index % 3) + 1}`,
+      gsId: selectedGroundStationNames[index % selectedGroundStationNames.length] ?? `GS-TBD-${(index % 3) + 1}`,
       duration: `${8 + index * 2} min`,
     }))
 
@@ -74,25 +92,28 @@ export default function App() {
       recommended: index === 0,
     }))
 
-  const fetchSatellites = async () => {
+  const fetchAssets = async () => {
     setLoading(true)
     setError(null)
-    setSatellites([])
+    setAssets([])
+    setSelectedSatellites([])
+    setSelectedGroundStations([])
     try {
-      // const response = await fetch('http://localhost:8000/satellite/list')
-      const response = await fetch('http://localhost:8000/satos/satellite/list')
+      const response = await fetch('http://localhost:8000/satos/initialize')
       if (!response.ok) {
         throw new Error(`Server returned status ${response.status}`)
       }
       const data = await response.json()
-      if (data && Array.isArray(data.satellites)) {
-        setSatellites(data.satellites)
+      if (data && Array.isArray(data.assets)) {
+        setSatosAlive(true)
+        setAssets(data.assets)
         setView('workspace')
       } else {
         throw new Error("Invalid response format from server")
       }
     } catch (err) {
       console.error(err)
+      setSatosAlive(false)
       setError(err.message || 'Failed to fetch satellites. Verify your backend or SatOS credentials.')
     } finally {
       setLoading(false)
@@ -109,7 +130,7 @@ export default function App() {
     setTradeOffCards([])
     setSelectedTradeOffCard(null)
 
-    const simulatedRows = buildMockOverpasses(selectedSatellites)
+    const simulatedRows = buildMockOverpasses(selectedSatellites, selectedGroundStations)
 
     await new Promise((resolve) => setTimeout(resolve, 900))
 
@@ -137,31 +158,75 @@ export default function App() {
     setCalculatingTradeOffs(false)
   }
 
-  const headerStatusClass =
+  const backendStatusClass =
     backendAlive === null ? 'checking' : backendAlive ? 'online' : 'offline'
 
-  const headerStatusLabel =
-    backendAlive === null ? 'Connection Check' : backendAlive ? 'SatOS Connected' : 'Backend Offline'
+  const backendStatusLabel =
+    backendAlive === null ? 'Backend Check' : backendAlive ? 'Backend Online' : 'Backend Offline'
 
-  const appHeader = (
+  const satosStatusClass =
+    satosAlive === null ? 'idle' : satosAlive ? 'online' : 'offline'
+
+  const satosStatusLabel =
+    satosAlive === null
+      ? backendAlive === false
+        ? 'SatOS Unchecked'
+        : 'SatOS Check'
+      : satosAlive
+        ? 'SatOS Connected'
+        : 'SatOS Access Failed'
+
+  const appHeader = (showStatus = true) => (
     <header className="app-header">
       <div className="app-header-brand">
         <div className="app-header-title">SCOPE</div>
         <div className="app-header-subtitle">Satellite Communication Optimizer and Planning Engine</div>
       </div>
-      <div className="app-header-status">
-        <div className={`app-status app-status--${headerStatusClass}`}>
-          <span className="app-status-dot" aria-hidden="true"></span>
-          <span className="app-status-label">{headerStatusLabel}</span>
+      {showStatus && (
+        <div className="app-header-status">
+          <div className="app-status-stack">
+            <div className={`app-status app-status--${backendStatusClass}`}>
+              <span className="app-status-dot" aria-hidden="true"></span>
+              <span className="app-status-label">{backendStatusLabel}</span>
+            </div>
+            <div className={`app-status app-status--${satosStatusClass}`}>
+              <span className="app-status-dot" aria-hidden="true"></span>
+              <span className="app-status-label">{satosStatusLabel}</span>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </header>
+  )
+
+  const satelliteAssets = assets.filter((asset) => asset.classification === 'satellite')
+  const groundStationAssets = assets.filter((asset) => asset.classification === 'ground_station')
+  const unavailableAssets = assets.filter((asset) => asset.classification === 'ineligible')
+
+  const renderAssetWarning = (message) => (
+    <span className="asset-warning" aria-hidden="true">
+      <svg
+        className="asset-warning-icon"
+        viewBox="0 0 24 24"
+        focusable="false"
+      >
+        <path
+          d="M12 3 1.8 20.5c-.4.7.1 1.5.9 1.5h18.6c.8 0 1.3-.8.9-1.5L12 3Z"
+          fill="currentColor"
+        />
+        <path
+          d="M12 8.2c.5 0 .9.4.9.9v5.7a.9.9 0 1 1-1.8 0V9.1c0-.5.4-.9.9-.9Zm0 10a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Z"
+          fill="#fff"
+        />
+      </svg>
+      <span className="asset-warning-tooltip">{message}</span>
+    </span>
   )
 
   if (view === 'landing') {
     return (
       <div className="app-shell">
-        {appHeader}
+        {appHeader(true)}
         <div className="app-content app-content--landing">
           <div className="landing-shell">
             <div className="landing-content">
@@ -175,8 +240,8 @@ export default function App() {
               <div className="landing-actions">
                 <button
                   className="btn-fetch"
-                  onClick={fetchSatellites}
-                  disabled={loading || backendAlive === false}
+                  onClick={fetchAssets}
+                  disabled={loading || backendAlive !== true || satosAlive !== true}
                 >
                   {loading ? (
                     <>
@@ -197,6 +262,12 @@ export default function App() {
                 {backendAlive === false && (
                   <p className="results-warning">
                     Please start your FastAPI server (<code>python run.py</code> in <code>backend/</code>) to test integration.
+                  </p>
+                )}
+
+                {backendAlive === true && satosAlive === false && (
+                  <p className="results-warning">
+                    Backend is online, but SatOS access failed. Check credentials or current SatOS availability.
                   </p>
                 )}
               </div>
@@ -233,22 +304,28 @@ export default function App() {
                   onClick={() => toggleSection('satellites')}
                 >
                   <span>Satellites</span>
-                  <span className="section-toggle-icon">
+                  <span className="section-toggle-icon" aria-hidden="true">
                     {expandedSections.satellites ? '−' : '+'}
                   </span>
                 </button>
                 {expandedSections.satellites && (
                   <div className="checkbox-list">
-                    {satellites.map((name, index) => (
-                      <label key={`${name}-${index}`} className="checkbox-row">
+                    {satelliteAssets.map((asset) => (
+                      <label
+                        key={asset.name}
+                        className={`checkbox-row ${asset.eligible ? '' : 'checkbox-row--disabled'}`}
+                      >
                         <input
                           type="checkbox"
-                          checked={selectedSatellites.includes(name)}
-                          onChange={() => toggleSatellite(name)}
+                          checked={selectedSatellites.includes(asset.name)}
+                          onChange={() => toggleSatellite(asset.name)}
+                          disabled={!asset.eligible}
                         />
-                        <span>{name}</span>
+                        <span className="asset-name">{asset.name}</span>
+                        {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
                       </label>
                     ))}
+                    {satelliteAssets.length === 0 && <p>No satellite assets available.</p>}
                   </div>
                 )}
               </div>
@@ -260,12 +337,56 @@ export default function App() {
                   onClick={() => toggleSection('groundStations')}
                 >
                   <span>Ground Stations</span>
-                  <span className="section-toggle-icon">
+                  <span className="section-toggle-icon" aria-hidden="true">
                     {expandedSections.groundStations ? '−' : '+'}
                   </span>
                 </button>
                 {expandedSections.groundStations && (
-                  <p>Will be enabled once SatOS assets can be distinguished.</p>
+                  <div className="checkbox-list">
+                    {groundStationAssets.map((asset) => (
+                      <label
+                        key={asset.name}
+                        className={`checkbox-row ${asset.eligible ? '' : 'checkbox-row--disabled'}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedGroundStations.includes(asset.name)}
+                          onChange={() => toggleGroundStation(asset.name)}
+                          disabled={!asset.eligible}
+                        />
+                        <span className="asset-name">{asset.name}</span>
+                        {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
+                      </label>
+                    ))}
+                    {groundStationAssets.length === 0 && <p>No ground-station assets available.</p>}
+                  </div>
+                )}
+              </div>
+
+              <div className="sidebar-block">
+                <button
+                  type="button"
+                  className="section-toggle"
+                  onClick={() => toggleSection('unavailableAssets')}
+                >
+                  <span>Unavailable Assets</span>
+                  <span className="section-toggle-icon" aria-hidden="true">
+                    {expandedSections.unavailableAssets ? '−' : '+'}
+                  </span>
+                </button>
+                {expandedSections.unavailableAssets && (
+                  <div className="checkbox-list">
+                    {unavailableAssets.map((asset) => (
+                      <div
+                        key={asset.name}
+                        className="checkbox-row checkbox-row--disabled checkbox-row--static"
+                      >
+                        <span className="asset-name">{asset.name}</span>
+                        {asset.error && renderAssetWarning(asset.error)}
+                      </div>
+                    ))}
+                    {unavailableAssets.length === 0 && <p>No unclassified assets.</p>}
+                  </div>
                 )}
               </div>
 
@@ -276,7 +397,7 @@ export default function App() {
                   onClick={() => toggleSection('filters')}
                 >
                   <span>Filters</span>
-                  <span className="section-toggle-icon">
+                  <span className="section-toggle-icon" aria-hidden="true">
                     {expandedSections.filters ? '−' : '+'}
                   </span>
                 </button>
@@ -307,17 +428,19 @@ export default function App() {
                 </p>
               </div>
               <div
-                className={`app-status overview-inline-status ${
+                className={`overview-inline-status ${
                   extractionStatus === 'Completed'
-                    ? 'app-status--online'
+                    ? 'overview-inline-status--online'
                     : extractionStatus === 'Running'
-                      ? 'app-status--checking'
-                      : 'app-status--offline'
+                      ? 'overview-inline-status--checking'
+                      : 'overview-inline-status--offline'
                 }`}
               >
                 <span className="overview-status-label">Extraction Status</span>
-                <span className="app-status-dot" aria-hidden="true"></span>
-                <span className="app-status-label">{extractionStatus}</span>
+                <div className="overview-status-value">
+                  <span className="app-status-dot" aria-hidden="true"></span>
+                  <span className="overview-status-text">{extractionStatus}</span>
+                </div>
               </div>
             </div>
 
@@ -427,7 +550,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      {appHeader}
+      {appHeader(false)}
 
       <div className="app-content">
         {pageContent}
