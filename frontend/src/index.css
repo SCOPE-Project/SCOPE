@@ -44,21 +44,6 @@ body {
   overflow-x: hidden;
 }
 
-body::before {
-  content: "";
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-image: 
-    linear-gradient(rgba(0, 57, 117, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 57, 117, 0.035) 1px, transparent 1px);
-  background-size: 44px 44px;
-  pointer-events: none;
-  z-index: 0;
-}
-
 #root {
   width: 100%;
   min-height: 100vh;
@@ -247,6 +232,38 @@ body::before {
   min-width: 0;
 }
 
+.sidebar-action-wrapper {
+  position: relative;
+}
+
+.sidebar-action-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.55rem);
+  transform: translateX(-50%);
+  min-width: 16rem;
+  max-width: min(100%, 22rem);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d7b27a;
+  border-radius: 0.18rem;
+  background: #fff7ea;
+  color: #7a4b00;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 18px rgba(31, 42, 51, 0.12);
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 20;
+}
+
+.sidebar-action-wrapper:hover .sidebar-action-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
 .btn-fetch:hover {
   background: var(--btn-hover);
   border-color: var(--btn-hover);
@@ -400,20 +417,34 @@ body::before {
 }
 
 .sidebar-collapse-toggle {
-  width: 2rem;
-  height: 2rem;
+  width: 1.9rem;
+  height: 1.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: var(--bg-panel-strong);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 1.15rem;
-  line-height: 1;
+  border-radius: 0.18rem;
+  background: transparent;
+  color: var(--text-secondary);
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .sidebar-collapse-toggle:hover {
   background: var(--bg-hover);
+  border-color: #9aa8b5;
+  color: var(--text-primary);
+}
+
+.sidebar-collapse-icon {
+  width: 0.8rem;
+  height: 0.8rem;
+  display: block;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  fill: none;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
 }
 
 .sidebar-collapsed-label {
@@ -626,7 +657,7 @@ body::before {
 }
 
 .overview-status-label {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
@@ -634,22 +665,29 @@ body::before {
 
 .overview-inline-status {
   flex: 0 0 auto;
-  margin-top: 0.15rem;
+  margin-top: 0.05rem;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 0.25rem;
+  gap: 0.18rem;
 }
 
 .overview-status-value {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.38rem;
   color: var(--text-secondary);
+  font-size: 0.84rem;
 }
 
 .overview-status-text {
-  font-weight: 600;
+  font-weight: 400;
+  line-height: 1.1;
+}
+
+.overview-inline-status .app-status-dot {
+  width: 0.45rem;
+  height: 0.45rem;
 }
 
 .overview-inline-status--checking .overview-status-value {
@@ -776,6 +814,38 @@ body::before {
 
 .panel-action:disabled {
   opacity: 0.7;
+}
+
+.panel-action-wrapper {
+  position: relative;
+}
+
+.panel-action-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.55rem);
+  transform: translateX(-50%);
+  min-width: 16rem;
+  max-width: min(100%, 24rem);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d7b27a;
+  border-radius: 0.18rem;
+  background: #fff7ea;
+  color: #7a4b00;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 18px rgba(31, 42, 51, 0.12);
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 20;
+}
+
+.panel-action-wrapper:hover .panel-action-tooltip {
+  opacity: 1;
+  visibility: visible;
 }
 
 .tradeoff-card-list {

@@ -121,7 +121,7 @@ export default function App() {
   }
 
   const handleLaunchScheduler = async () => {
-    if (selectedSatellites.length === 0) return
+    if (selectedSatellites.length === 0 || selectedGroundStations.length === 0) return
 
     setLaunchingScheduler(true)
     setExtractionStatus('Running')
@@ -202,6 +202,8 @@ export default function App() {
   const satelliteAssets = assets.filter((asset) => asset.classification === 'satellite')
   const groundStationAssets = assets.filter((asset) => asset.classification === 'ground_station')
   const unavailableAssets = assets.filter((asset) => asset.classification === 'ineligible')
+  const launchRequirementsMet =
+    selectedSatellites.length >= 1 && selectedGroundStations.length >= 1
 
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-hidden="true">
@@ -289,12 +291,23 @@ export default function App() {
               onClick={() => setSidebarCollapsed((current) => !current)}
               aria-label={sidebarCollapsed ? 'Expand configuration sidebar' : 'Collapse configuration sidebar'}
             >
-              {sidebarCollapsed ? '›' : '‹'}
+              <svg
+                className="sidebar-collapse-icon"
+                viewBox="0 0 12 12"
+                aria-hidden="true"
+                focusable="false"
+              >
+                {sidebarCollapsed ? (
+                  <path d="M4 2.25 7.75 6 4 9.75" />
+                ) : (
+                  <path d="M8 2.25 4.25 6 8 9.75" />
+                )}
+              </svg>
             </button>
           </div>
 
           {sidebarCollapsed ? (
-            <div className="sidebar-collapsed-label">Config</div>
+            <div className="sidebar-collapsed-label">Configuration</div>
           ) : (
             <>
               <div className="sidebar-block">
@@ -406,13 +419,20 @@ export default function App() {
                 )}
               </div>
 
-              <button
-                className="btn-fetch"
-                disabled={selectedSatellites.length === 0 || launchingScheduler}
-                onClick={handleLaunchScheduler}
-              >
-                {launchingScheduler ? 'Launching...' : 'Launch Communication Scheduler'}
-              </button>
+              <div className="sidebar-action-wrapper">
+                <button
+                  className="btn-fetch"
+                  disabled={!launchRequirementsMet || launchingScheduler}
+                  onClick={handleLaunchScheduler}
+                >
+                  {launchingScheduler ? 'Launching...' : 'Launch Communication Scheduler'}
+                </button>
+                {!launchRequirementsMet && !launchingScheduler && (
+                  <span className="sidebar-action-tooltip">
+                    Select at least 1 satellite and 1 ground station first.
+                  </span>
+                )}
+              </div>
             </>
           )}
         </aside>
@@ -422,10 +442,6 @@ export default function App() {
             <div className="panel-heading">
               <div>
                 <h2>Overview</h2>
-                <p className="panel-intro">
-                  This area will summarize the extracted communication opportunities and
-                  the current scheduler state.
-                </p>
               </div>
               <div
                 className={`overview-inline-status ${
@@ -436,7 +452,7 @@ export default function App() {
                       : 'overview-inline-status--offline'
                 }`}
               >
-                <span className="overview-status-label">Extraction Status</span>
+                <span className="overview-status-label">Overpass Extraction Status</span>
                 <div className="overview-status-value">
                   <span className="app-status-dot" aria-hidden="true"></span>
                   <span className="overview-status-text">{extractionStatus}</span>
@@ -485,12 +501,7 @@ export default function App() {
                   </>
                 )}
               </div>
-              {overviewRows.length === 0 ? (
-                <p className="overview-note">
-                  Overpass rows will be created after launch. A <strong>Trade-Offs</strong>
-                  {' '}column will be added once the calculation has been executed.
-                </p>
-              ) : (
+              {overviewRows.length > 0 && (
                 <p className="overview-note">
                   Ground-station identifiers and overpass durations are currently simulated until the backend
                   exposes the full extraction payload.
@@ -498,13 +509,20 @@ export default function App() {
               )}
             </div>
 
-            <button
-              className="panel-action"
-              disabled={!schedulerLaunched || calculatingTradeOffs}
-              onClick={handleCalculateTradeOffs}
-            >
-              {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
-            </button>
+            <div className="panel-action-wrapper">
+              <button
+                className="panel-action"
+                disabled={!schedulerLaunched || calculatingTradeOffs}
+                onClick={handleCalculateTradeOffs}
+              >
+                {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
+              </button>
+              {!schedulerLaunched && !calculatingTradeOffs && (
+                <span className="panel-action-tooltip">
+                  Launch Communication Scheduler first and wait for extraction to complete.
+                </span>
+              )}
+            </div>
           </section>
 
           <section className="panel tradeoff-panel">
