@@ -18,6 +18,7 @@ export default function App() {
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
+  const [activeMapAssetId, setActiveMapAssetId] = useState(null)
   const [expandedSections, setExpandedSections] = useState({
     satellites: true,
     groundStations: true,
@@ -258,6 +259,93 @@ export default function App() {
   const launchRequirementsMet =
     selectedSatellites.length >= 1 && selectedGroundStations.length >= 1
 
+  const getAssetCoordinates = (asset) => {
+    if (
+      typeof asset?.details?.latitude === 'number' &&
+      typeof asset?.details?.longitude === 'number'
+    ) {
+      return {
+        latitude: asset.details.latitude,
+        longitude: asset.details.longitude,
+      }
+    }
+
+    return null
+  }
+
+  const projectToMap = (latitude, longitude) => ({
+    left: ((longitude + 180) / 360) * 100,
+    top: ((90 - latitude) / 180) * 100,
+  })
+
+  const formatCoordinate = (value, positiveLabel, negativeLabel) => {
+    const direction = value >= 0 ? positiveLabel : negativeLabel
+    return `${Math.abs(value).toFixed(2)}° ${direction}`
+  }
+
+  const selectedGroundStationAssets = groundStationAssets.filter((asset) =>
+    selectedGroundStations.includes(asset.name)
+  )
+
+  const selectedSatelliteAssets = satelliteAssets.filter((asset) =>
+    selectedSatellites.includes(asset.name)
+  )
+
+  const selectedMapAssets = [
+    ...selectedGroundStationAssets
+      .map((asset) => {
+        const coordinates = getAssetCoordinates(asset)
+        if (!coordinates) {
+          return null
+        }
+
+        return {
+          id: `ground-station-${asset.name}`,
+          name: asset.name,
+          type: 'Ground Station',
+          markerType: 'ground-station',
+          ...coordinates,
+        }
+      })
+      .filter(Boolean),
+    ...selectedSatelliteAssets
+      .map((asset) => {
+        const coordinates = getAssetCoordinates(asset)
+        if (!coordinates) {
+          return null
+        }
+
+        return {
+          id: `satellite-${asset.name}`,
+          name: asset.name,
+          type: 'Satellite',
+          markerType: 'satellite',
+          ...coordinates,
+        }
+      })
+      .filter(Boolean),
+  ]
+
+  const unmappedSelectedAssets = [
+    ...selectedGroundStationAssets
+      .filter((asset) => !getAssetCoordinates(asset))
+      .map((asset) => ({
+        id: `unmapped-ground-station-${asset.name}`,
+        name: asset.name,
+        type: 'Ground Station',
+      })),
+    ...selectedSatelliteAssets
+      .filter((asset) => !getAssetCoordinates(asset))
+      .map((asset) => ({
+        id: `unmapped-satellite-${asset.name}`,
+        name: asset.name,
+        type: 'Satellite',
+      })),
+  ]
+
+  const activeMapAsset =
+    selectedMapAssets.find((asset) => asset.id === activeMapAssetId) ?? selectedMapAssets[0] ?? null
+
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-hidden="true">
       <svg
@@ -494,6 +582,117 @@ export default function App() {
         </aside>
 
         <main className="workspace-main">
+          <section className="panel panel--fullwidth map-panel">
+            <div className="panel-heading panel-heading--map">
+              <div>
+                <h2>Map View</h2>
+                <p className="map-panel-copy">
+                  Selected assets with map coordinates appear here as markers.
+                </p>
+              </div>
+              <div className="map-summary">
+                <span className="map-summary-pill">
+                  {selectedMapAssets.length} mapped
+                </span>
+                <span className="map-summary-pill map-summary-pill--muted">
+                  {unmappedSelectedAssets.length} awaiting coordinates
+                </span>
+              </div>
+            </div>
+
+            <div className="map-layout">
+              <div className="map-canvas-shell">
+                <div className="map-canvas" aria-label="Selected asset map view">
+                  {selectedMapAssets.length === 0 && (
+                    <div className="map-empty-state">
+                      Select a ground station to place it on the map.
+                    </div>
+                  )}
+
+                  {selectedMapAssets.map((asset) => {
+                    const markerPosition = projectToMap(asset.latitude, asset.longitude)
+
+                    return (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        className={`map-marker map-marker--${asset.markerType} ${
+                          activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
+                        }`}
+                        style={{
+                          left: `${markerPosition.left}%`,
+                          top: `${markerPosition.top}%`,
+                        }}
+                        onClick={() => setActiveMapAssetId(asset.id)}
+                        aria-label={`${asset.name} on map`}
+                      >
+                        <span className="map-marker-label">{asset.name}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="map-note">
+                  Ground stations are plotted directly from latitude/longitude. Selected satellites stay in the
+                  list until the frontend receives map-ready coordinates for them.
+                </p>
+              </div>
+
+              <aside className="map-sidebar">
+                <div className="map-sidebar-section">
+                  <h3>Visible Assets</h3>
+                  {selectedMapAssets.length > 0 ? (
+                    <div className="map-asset-list">
+                      {selectedMapAssets.map((asset) => (
+                        <button
+                          key={asset.id}
+                          type="button"
+                          className={`map-asset-button ${
+                            activeMapAsset?.id === asset.id ? 'map-asset-button--active' : ''
+                          }`}
+                          onClick={() => setActiveMapAssetId(asset.id)}
+                        >
+                          <span className={`map-asset-dot map-asset-dot--${asset.markerType}`}></span>
+                          <span className="map-asset-name">{asset.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>No selected assets with usable map coordinates yet.</p>
+                  )}
+                </div>
+
+                <div className="map-sidebar-section">
+                  <h3>Awaiting Map Position</h3>
+                  {unmappedSelectedAssets.length > 0 ? (
+                    <ul className="map-unmapped-list">
+                      {unmappedSelectedAssets.map((asset) => (
+                        <li key={asset.id}>
+                          <span className="map-unmapped-name">{asset.name}</span>
+                          <span className="map-unmapped-type">{asset.type}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>All selected assets with available location data are already shown on the map.</p>
+                  )}
+                </div>
+
+                {activeMapAsset && (
+                  <div className="map-detail-card">
+                    <h3>{activeMapAsset.name}</h3>
+                    <p>{activeMapAsset.type}</p>
+                    <dl className="map-detail-grid">
+                      <dt>Latitude</dt>
+                      <dd>{formatCoordinate(activeMapAsset.latitude, 'N', 'S')}</dd>
+                      <dt>Longitude</dt>
+                      <dd>{formatCoordinate(activeMapAsset.longitude, 'E', 'W')}</dd>
+                    </dl>
+                  </div>
+                )}
+              </aside>
+            </div>
+          </section>
+
           <section className="panel overview-panel">
             <div className="panel-heading">
               <div>
@@ -650,7 +849,7 @@ export default function App() {
             )}
           </section>
 
-          <section className="panel">
+          <section className="panel panel--fullwidth">
             <h2>Timeline</h2>
             <p>The current and proposed communication schedule will appear here.</p>
           </section>
