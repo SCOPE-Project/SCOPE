@@ -10,7 +10,16 @@ from app.models.tasks import (
     TaskReceiptResponse
 )
 
+from app.models.tasks import InitializeRepositoryResponse
+
+from app.services.asset_repository import AssetRepository
+
 router = APIRouter(prefix="/tasks", tags=["Task Processing Workspace"])
+
+@router.get("/initialize", response_model=InitializeRepositoryResponse)
+def initialize_assets():
+    initialized_assets = AssetRepository.initialize_repository()
+    return {"assets": initialized_assets}
 
 @router.post("/extract-overpasses", response_model=TaskReceiptResponse)
 def trigger_orbit_engine(payload: OrbitEngineRequest, background_tasks: BackgroundTasks):
@@ -61,5 +70,5 @@ def get_task_result(task_id: str):
             status_code=400, 
             detail=f"Task is in state '{task_result.status}' and has no result payload yet."
         )
-        
+    
     return task_result

@@ -1,7 +1,7 @@
 # /services/asset_repository.py
 from core.models.domain import SatelliteInformation, GroundStationInformation
 from pydantic_models.definitions import SatelliteModel
-from services.satos_connector import satos_get_asset, satos_get_asset_list
+from app.services.satos_connector import satos_get_asset, satos_get_asset_list
 from datetime import datetime
 import warnings
 
@@ -18,9 +18,22 @@ class AssetRepository:
         and caches the results (including ineligible ones).
         """
         # Clear existing caches
-        cls._satellite_cache.clear()
-        cls._groundstation_cache.clear()
-        cls._ineligible_cache.clear()
+        #cls._satellite_cache.clear()
+        #cls._groundstation_cache.clear()
+        #cls._ineligible_cache.clear()
+        
+        # For debugging, read the return list from cache instead of querying SatOS
+        if cls._satellite_cache and cls._groundstation_cache and cls._ineligible_cache:
+            return [
+                {"name": name, "eligible": True, "classification": "satellite", "details": cls._satellite_cache[name]} 
+                for name in cls._satellite_cache.keys()
+            ] + [
+                {"name": name, "eligible": True, "classification": "ground_station", "details": cls._groundstation_cache[name]} 
+                for name in cls._groundstation_cache.keys()
+            ] + [
+                {"name": name, "eligible": False, "classification": "ineligible", "error": error} 
+                for name, error in cls._ineligible_cache.items()
+            ]
 
         try:
             asset_list = satos_get_asset_list()

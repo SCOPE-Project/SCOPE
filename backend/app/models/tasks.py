@@ -2,6 +2,10 @@ from pydantic import BaseModel, Field, conlist
 from typing import List, Optional, Any
 from datetime import datetime
 
+from app.models.satos import InitializedAssetInfo
+
+class InitializeRepositoryResponse(BaseModel):
+    assets: list[InitializedAssetInfo]
 
 
 # ========================================

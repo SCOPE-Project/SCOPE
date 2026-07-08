@@ -24,6 +24,3 @@ class InitializedAssetInfo(BaseModel):
     classification: str  # "satellite", "ground_station", or "ineligible"
     details: Union[SatelliteInformation, GroundStationInformation, None] = None
     error: str | None = None
-
-class InitializeRepositoryResponse(BaseModel):
-    assets: list[InitializedAssetInfo]

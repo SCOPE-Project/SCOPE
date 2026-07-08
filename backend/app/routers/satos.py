@@ -10,15 +10,9 @@ from app.models.satos import (
     AssetResponse,
     ScheduleEventsResponse,
     ActivitiesListResponse,
-    InitializeRepositoryResponse
 )
 
 router = APIRouter(prefix="/satos", tags=["SatOS REST Data"])
-
-@router.get("/initialize", response_model=InitializeRepositoryResponse)
-def initialize_assets():
-    initialized_assets = AssetRepository.initialize_repository()
-    return {"assets": initialized_assets}
 
 @router.get("/asset/list", response_model=AssetListResponse)
 def satos_get_asset_list():
@@ -32,12 +26,12 @@ def satos_get_asset(asset_name: str):
 def satos_get_activities_list(schedule_name: str):
     return {"activities": satos_connector.satos_get_activities_list(schedule_name)}
 
-@router.get("/schedule_events", response_model=ScheduleEventsResponse)
-def satos_get_schedule_events(
-    schedule_name: str | None = None, 
-    schedule_event_uuid: str | UUID4 | None = None,
-    start_time: datetime | None = None,
-    end_time: datetime | None = None
-):
-    return {"schedule_events": satos_connector.satos_get_schedule_events(schedule_name, schedule_event_uuid, start_time, end_time)}
+#@router.get("/schedule_events", response_model=ScheduleEventsResponse)
+#def satos_get_schedule_events(
+#    schedule_name: str | None = None, 
+#    schedule_event_uuid: str | UUID4 | None = None,
+#    start_time: datetime | None = None,
+#    end_time: datetime | None = None
+#):
+#    return {"schedule_events": satos_connector.satos_get_schedule_events(schedule_name, schedule_event_uuid, start_time, end_time)}
 
