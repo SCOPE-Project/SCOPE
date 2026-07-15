@@ -2,7 +2,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 import os
 
-from fetch_latest_state import CartesianState, fetch_latest_state
+from backend.orbit_propagation_pipeline.DEPRECATED_fetch_latest_state import CartesianState, fetch_latest_state
 from utils.propagation_utils.constants import Constants
 
 DEFAULT_STEP_SECONDS = 60.0

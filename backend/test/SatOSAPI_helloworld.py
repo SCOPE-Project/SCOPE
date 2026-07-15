@@ -48,5 +48,19 @@ if not load_dotenv(credentials_path):
 session = SatIOSession()
 
 with SatIOSession() as session:
-    event = get_schedule_events(session, schedule_name=None, schedule_event_uuid="019ed548-633d-7bbe-baca-d02488543169")
-    print(event[0].model_dump_json(indent=2))
+    satellite_model = get_satellite(session, satellite_name="Sat1_Group1")
+    # 1. Set fallback/default values
+    position_r = [0.0, 0.0, 0.0]
+    velocity_v = [0.0, 0.0, 0.0]
+    
+    # 2. Extract position and velocity from variable definitions
+    for var in satellite_model.variableDefinitions:
+        if var.name == "position_vector" and var.matrixDefinition:
+            if var.matrixDefinition.defaultValue is not None:
+                position_r = [float(val) for val in var.matrixDefinition.defaultValue]
+        elif var.name == "velocity_vector" and var.matrixDefinition:
+            if var.matrixDefinition.defaultValue is not None:
+                velocity_v = [float(val) for val in var.matrixDefinition.defaultValue]
+    print(satellite_model.model_dump_json(indent=2))
+    print(position_r)
+    print(velocity_v)

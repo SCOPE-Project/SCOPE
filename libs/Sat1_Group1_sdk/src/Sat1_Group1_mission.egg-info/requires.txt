@@ -1,0 +1,25 @@
+python-dotenv~=1.2.1
+pandas
+pydantic>=2.7
+python-keycloak~=7.0
+requests
+python-socketio[client]~=5.16.0
+httpx<0.28.0
+
+[:python_version < "3.14"]
+uuid-backport
+
+[documentation]
+sphinx
+myst-parser
+sphinxcontrib-confluencebuilder
+sphinx-autodoc2
+furo
+
+[format]
+ruff
+
+[test]
+pytest
+pytest-cov
+ruff>=0.8.0
