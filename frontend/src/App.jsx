@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 
 export default function App() {
   const [assets, setAssets] = useState([])
@@ -19,6 +19,12 @@ export default function App() {
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
+  const [timelineNow, setTimelineNow] = useState(() => Date.now())
+  const [timelineLayers, setTimelineLayers] = useState({
+    current: true,
+    potential: true,
+    proposed: true,
+  })
   const [expandedSections, setExpandedSections] = useState({
     satellites: true,
     groundStations: true,
@@ -36,20 +42,32 @@ export default function App() {
           try {
             const satosResponse = await fetch('http://localhost:8000/satos/asset/list')
             setSatosAlive(satosResponse.ok)
-          } catch (err) {
+          } catch {
             setSatosAlive(false)
           }
         } else {
           setBackendAlive(false)
           setSatosAlive(null)
         }
-      } catch (err) {
+      } catch {
         setBackendAlive(false)
         setSatosAlive(null)
       }
     }
     checkConnections()
   }, [])
+
+  useEffect(() => {
+    if (!schedulerLaunched) {
+      return undefined
+    }
+
+    const intervalId = window.setInterval(() => {
+      setTimelineNow(Date.now())
+    }, 60000)
+
+    return () => window.clearInterval(intervalId)
+  }, [schedulerLaunched])
 
   const toggleSatellite = (name) => {
     setSelectedSatellites((current) =>
@@ -71,6 +89,13 @@ export default function App() {
     setExpandedSections((current) => ({
       ...current,
       [section]: !current[section],
+    }))
+  }
+
+  const toggleTimelineLayer = (layer) => {
+    setTimelineLayers((current) => ({
+      ...current,
+      [layer]: !current[layer],
     }))
   }
 
@@ -147,6 +172,172 @@ export default function App() {
     return { enrichedRows, groups }
   }
 
+  const getDayOfYear = (date) => {
+    const start = new Date(date.getFullYear(), 0, 0)
+    const diff = date - start
+    return Math.floor(diff / 86400000)
+  }
+
+  const parseDurationMinutes = (value) => {
+    const parsed = Number.parseInt(value, 10)
+    return Number.isFinite(parsed) ? parsed : 30
+  }
+
+  const formatTimelineHour = (date) =>
+    date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+  const formatTimelineDay = (date) =>
+    `${date.toLocaleDateString([], {
+      year: 'numeric',
+      month: 'long',
+      day: '2-digit',
+    })} (DOY ${getDayOfYear(date)})`
+
+  const getSelectedTradeOffForGroup = (group) =>
+    group.options.find((option) => option.optionId === selectedTradeOffOption)
+    ?? group.options.find((option) => option.recommended)
+    ?? group.options[0]
+
+  const buildDayBands = (baseDate, totalMinutes) => {
+    const bands = []
+    let cursor = new Date(baseDate)
+    cursor.setHours(0, 0, 0, 0)
+
+    while (bands.length === 0 || cursor < new Date(baseDate.getTime() + totalMinutes * 60000)) {
+      const nextDay = new Date(cursor)
+      nextDay.setDate(cursor.getDate() + 1)
+
+      const startMinutes = Math.max(0, (cursor.getTime() - baseDate.getTime()) / 60000)
+      const endMinutes = Math.min(totalMinutes, (nextDay.getTime() - baseDate.getTime()) / 60000)
+
+      if (endMinutes > startMinutes) {
+        bands.push({
+          startMinutes,
+          widthMinutes: endMinutes - startMinutes,
+          label: formatTimelineDay(cursor),
+          alt: bands.length % 2 === 1,
+        })
+      }
+
+      if (endMinutes >= totalMinutes) {
+        break
+      }
+
+      cursor = nextDay
+    }
+
+    return bands
+  }
+
+  const buildTimelineModel = (rows, groups, currentTimestamp) => {
+    if (rows.length === 0) {
+      return null
+    }
+
+    const baseDate = new Date()
+    baseDate.setMinutes(0, 0, 0)
+    baseDate.setHours(baseDate.getHours() - 1)
+
+    const rowIndexMap = new Map(rows.map((row, index) => [row.overpassId, index]))
+
+    const findOptionForOverpass = (overpassId) =>
+      groups.flatMap((group) => group.options).find((option) => option.overpassId === overpassId)
+
+    const buildTiming = (row, index) => ({
+      startMinutes: index * 85 + 35,
+      durationMinutes: Math.max(parseDurationMinutes(row.duration), 35),
+    })
+
+    const currentItems = rows.slice(0, Math.min(2, rows.length)).map((row, index) => ({
+      id: `current-${row.overpassId}`,
+      track: 'current',
+      label: row.satId,
+      detail: 'SatOS baseline window',
+      variant: 'current',
+      ...buildTiming(row, index * 2),
+    }))
+
+    const potentialItems = rows.map((row, index) => ({
+      id: `potential-${row.overpassId}`,
+      track: 'potential',
+      label: row.overpassId,
+      detail: `${row.satId} → ${row.gsId}`,
+      variant: row.tradeOffId && row.tradeOffId !== '—' ? 'candidate' : 'neutral',
+      optionId: findOptionForOverpass(row.overpassId)?.optionId ?? null,
+      ...buildTiming(row, index),
+    }))
+
+    const selectedOptions = groups.map((group) => getSelectedTradeOffForGroup(group))
+    const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
+
+    const proposedItems = rows
+      .filter((row) => row.tradeOffId === '—' || selectedOverpassIds.has(row.overpassId))
+      .map((row) => {
+        const index = rowIndexMap.get(row.overpassId) ?? 0
+        const chosenOption = selectedOptions.find((option) => option.overpassId === row.overpassId)
+
+        return {
+          id: `proposed-${row.overpassId}`,
+          track: 'proposed',
+          label: row.overpassId,
+          detail: chosenOption ? `${row.tradeOffId} active selection` : 'Fixed window',
+          variant: chosenOption
+            ? chosenOption.optionId === selectedTradeOffOption
+              ? 'selected'
+              : 'recommended'
+            : 'fixed',
+          optionId: chosenOption?.optionId ?? null,
+          ...buildTiming(row, index),
+        }
+      })
+
+    const allItems = [...currentItems, ...potentialItems, ...proposedItems]
+    const totalMinutes = Math.max(
+      10 * 60,
+      ...allItems.map((item) => item.startMinutes + item.durationMinutes + 45),
+    )
+
+    const ticks = Array.from({ length: Math.floor(totalMinutes / 60) + 2 }, (_, index) => {
+      const offsetMinutes = index * 60
+      const tickDate = new Date(baseDate.getTime() + offsetMinutes * 60000)
+      return {
+        offsetMinutes,
+        date: tickDate,
+        label: formatTimelineHour(tickDate),
+      }
+    }).filter((tick) => tick.offsetMinutes <= totalMinutes)
+
+    return {
+      baseDate,
+      endDate: new Date(baseDate.getTime() + totalMinutes * 60000),
+      totalMinutes,
+      widthPx: Math.max(980, totalMinutes * 2.2),
+      ticks,
+      dayBands: buildDayBands(baseDate, totalMinutes),
+      nowOffsetMinutes: (currentTimestamp - baseDate.getTime()) / 60000,
+      tracks: [
+        {
+          id: 'current',
+          label: 'Current SatOS Schedule',
+          copy: 'Existing schedule context imported from SatOS.',
+          items: currentItems,
+        },
+        {
+          id: 'potential',
+          label: 'Potential Links',
+          copy: 'All extracted communication windows before trade-off resolution.',
+          items: potentialItems,
+        },
+        {
+          id: 'proposed',
+          label: 'Proposed Schedule',
+          copy: 'Conflict-free windows plus the currently selected trade-off results.',
+          items: proposedItems,
+        },
+      ],
+    }
+  }
+
   const fetchAssets = async () => {
     setLoading(true)
     setError(null)
@@ -190,6 +381,7 @@ export default function App() {
     await new Promise((resolve) => setTimeout(resolve, 900))
 
     setOverviewRows(simulatedRows)
+    setTimelineNow(Date.now())
     setSchedulerLaunched(true)
     setSidebarCollapsed(true)
     setExtractionStatus('Completed')
@@ -345,6 +537,9 @@ export default function App() {
 
   const activeMapAsset =
     selectedMapAssets.find((asset) => asset.id === activeMapAssetId) ?? selectedMapAssets[0] ?? null
+
+  const timelineModel = buildTimelineModel(overviewRows, tradeOffCards, timelineNow)
+  const visibleTimelineTracks = timelineModel?.tracks.filter((track) => timelineLayers[track.id]) ?? []
 
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-hidden="true">
@@ -849,9 +1044,141 @@ export default function App() {
             )}
           </section>
 
-          <section className="panel panel--fullwidth">
-            <h2>Timeline</h2>
-            <p>The current and proposed communication schedule will appear here.</p>
+          <section className="panel panel--fullwidth timeline-panel">
+            <div className="panel-heading panel-heading--timeline">
+              <div>
+                <h2>Timeline</h2>
+                <p className="timeline-panel-copy">
+                  Current schedule context, extracted windows and the proposed communication plan.
+                </p>
+              </div>
+              {timelineModel && (
+                <div className="timeline-header-meta">
+                  <span className="timeline-meta-pill">
+                    Window {formatTimelineHour(timelineModel.baseDate)} - {formatTimelineHour(timelineModel.endDate)}
+                  </span>
+                  <span className="timeline-meta-pill timeline-meta-pill--muted">
+                    {visibleTimelineTracks.length} visible track{visibleTimelineTracks.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {!schedulerLaunched && (
+              <p className="timeline-empty-copy">
+                Launch Communication Scheduler to initialize the planning timeline.
+              </p>
+            )}
+
+            {schedulerLaunched && timelineModel && (
+              <>
+                <div className="timeline-toolbar">
+                  <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
+                    {timelineModel.tracks.map((track) => (
+                      <button
+                        key={track.id}
+                        type="button"
+                        className={`timeline-toggle ${timelineLayers[track.id] ? 'timeline-toggle--active' : ''}`}
+                        onClick={() => toggleTimelineLayer(track.id)}
+                      >
+                        {track.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="timeline-toolbar-copy">
+                    Timeline bars use placeholder timings until schedule windows arrive from the backend.
+                  </div>
+                </div>
+
+                {visibleTimelineTracks.length === 0 ? (
+                  <p className="timeline-empty-copy">Enable at least one timeline layer to display the schedule view.</p>
+                ) : (
+                  <div className="timeline-scroll">
+                    <div
+                      className="timeline-grid"
+                      style={{ gridTemplateColumns: `11rem ${timelineModel.widthPx}px` }}
+                    >
+                      <div className="timeline-label-cell timeline-label-cell--blank"></div>
+                      <div className="timeline-day-row">
+                        {timelineModel.dayBands.map((band, index) => (
+                          <div
+                            key={`${band.label}-${index}`}
+                            className={`timeline-day-band ${band.alt ? 'timeline-day-band--alt' : ''}`}
+                            style={{
+                              left: `${(band.startMinutes / timelineModel.totalMinutes) * 100}%`,
+                              width: `${(band.widthMinutes / timelineModel.totalMinutes) * 100}%`,
+                            }}
+                          >
+                            {band.label}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="timeline-label-cell timeline-label-cell--blank"></div>
+                      <div className="timeline-axis-row">
+                        {timelineModel.ticks.map((tick) => (
+                          <div
+                            key={tick.offsetMinutes}
+                            className="timeline-axis-marker"
+                            style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                          >
+                            <span>{tick.label}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {visibleTimelineTracks.map((track) => (
+                        <Fragment key={track.id}>
+                          <div key={`${track.id}-label`} className="timeline-label-cell">
+                            <span className="timeline-track-name">{track.label}</span>
+                            <span className="timeline-track-copy">{track.copy}</span>
+                          </div>
+                          <div key={`${track.id}-row`} className="timeline-track-row">
+                            {timelineModel.ticks.map((tick) => (
+                              <div
+                                key={`${track.id}-tick-${tick.offsetMinutes}`}
+                                className="timeline-grid-line"
+                                style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                              ></div>
+                            ))}
+
+                            {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
+                              <div
+                                className="timeline-now-line"
+                                style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                              >
+                                <span className="timeline-now-badge">Now</span>
+                              </div>
+                            )}
+
+                            {track.items.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className={`timeline-bar timeline-bar--${item.variant}`}
+                                style={{
+                                  left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
+                                  width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
+                                }}
+                                onClick={() => {
+                                  if (item.optionId) {
+                                    setSelectedTradeOffOption(item.optionId)
+                                  }
+                                }}
+                                title={`${item.label} · ${item.detail}`}
+                              >
+                                <span className="timeline-bar-title">{item.label}</span>
+                                <span className="timeline-bar-copy">{item.detail}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </Fragment>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </section>
         </main>
       </div>
