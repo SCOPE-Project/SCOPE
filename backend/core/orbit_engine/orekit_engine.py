@@ -157,6 +157,7 @@ def run_orekit_engine(
             step_seconds=GLOBAL_TRACK_STEP_SECONDS,
         )
 
+        # overpass_event Type is OverpassEvent
         sorted_overpass_events = sorted(
             satellite_event_log,
             key=lambda overpass_event: (

@@ -65,7 +65,7 @@ def setup_orekit_environment() -> None:
                 f"Could not find the JVM shared library below {java_home_path}."
             )
 
-        if not jpype.isJVMStarted():
+        if not jpype.isJVMStarted(): # type: ignore
             orekit_jpype.initVM(jvmpath=str(jvm_library_path))
 
         # Load Orekit data from the local directory, not the pip package.

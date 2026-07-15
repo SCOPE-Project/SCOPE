@@ -1,7 +1,9 @@
 # core/orbit_engine/propagator_builder.py
 
+from org.orekit.propagation import BoundedPropagator
+from org.orekit.propagation.numerical import NumericalPropagator
+from org.orekit.frames import Frame
 from datetime import datetime
-from typing import Any
 
 from core.models.domain import SatelliteInformation
 from core.orbit_engine.time_utils import normalize_datetime_to_utc
@@ -17,7 +19,7 @@ DEFAULT_POSITION_TOLERANCE_M = 10.0
 def build_satellite_propagator(
     satellite_info: SatelliteInformation,
     position_tolerance_m: float = DEFAULT_POSITION_TOLERANCE_M,
-) -> tuple[Any, Any]:
+) -> tuple[NumericalPropagator, Frame]:
     """Build an Orekit numerical propagator from a Cartesian GCRF satellite state.
 
     setup_orekit_environment must run before this function imports Orekit classes.
@@ -105,10 +107,10 @@ def build_satellite_propagator(
 # ==========================================
 # SATELLITE PROPAGATION
 def propagate_satellite(
-    propagator: Any,
+    propagator: NumericalPropagator,
     start_time: datetime,
     end_time: datetime,
-) -> Any:
+) -> BoundedPropagator:
     """Propagate one satellite and return the generated Orekit ephemeris.
 
     setup_orekit_environment must run before this function imports Orekit helpers.

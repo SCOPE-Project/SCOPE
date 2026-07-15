@@ -1,8 +1,9 @@
 # core/orbit_engine/ground_station_frames.py
 
+from org.orekit.frames import TopocentricFrame
+from org.orekit.bodies import BodyShape
 from dataclasses import dataclass
 from math import radians
-from typing import Any
 
 from core.models.domain import GroundStationInformation
 
@@ -18,14 +19,14 @@ DEFAULT_GROUND_STATION_ALTITUDE_M = 0.0
 class GroundStationRuntimeContext:
     """Runtime link between a ground station and its Orekit topocentric frame."""
     ground_station_info: GroundStationInformation
-    topocentric_frame: Any
+    topocentric_frame: TopocentricFrame
 
 
 # ==========================================
 # GROUND STATION FRAMES
 def build_ground_station_contexts(
     ground_station_infos: list[GroundStationInformation],
-    earth_shape: Any,
+    earth_shape: BodyShape,
 ) -> list[GroundStationRuntimeContext]:
     """Build Orekit topocentric frames for all selected ground stations."""
     from org.orekit.bodies import GeodeticPoint

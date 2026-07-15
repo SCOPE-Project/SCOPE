@@ -1,8 +1,10 @@
 # core/orbit_engine/result_extraction.py
 
+from org.orekit.bodies import OneAxisEllipsoid, GeodeticPoint
+from org.orekit.frames import Frame
+from org.orekit.propagation import BoundedPropagator
 from datetime import datetime, timedelta
 from math import degrees
-from typing import Any
 
 from core.orbit_engine.ground_station_frames import GroundStationRuntimeContext
 from core.orbit_engine.time_utils import normalize_datetime_to_utc, to_utc_iso_string
@@ -18,9 +20,9 @@ OVERPASS_PROFILE_STEP_SECONDS = 10.0
 # ==========================================
 # GLOBAL TRACK EXTRACTION
 def extract_global_track(
-    ephemeris: Any,
-    inertial_frame: Any,
-    earth_shape: Any,
+    ephemeris: BoundedPropagator,
+    inertial_frame: Frame,
+    earth_shape: OneAxisEllipsoid,
     start_time: datetime,
     end_time: datetime,
     step_seconds: float = GLOBAL_TRACK_STEP_SECONDS,
@@ -91,9 +93,9 @@ def extract_global_track(
 # ==========================================
 # OVERPASS PROFILE EXTRACTION
 def extract_overpass_profile(
-    ephemeris: Any,
-    inertial_frame: Any,
-    earth_shape: Any,
+    ephemeris: BoundedPropagator,
+    inertial_frame: Frame,
+    earth_shape: OneAxisEllipsoid,
     ground_station_context: GroundStationRuntimeContext,
     start_time: datetime,
     end_time: datetime,

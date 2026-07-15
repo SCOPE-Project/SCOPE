@@ -1,15 +1,25 @@
 # core/orbit_engine/visibility_events.py
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 from math import radians
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jpype
 
 from core.models.domain import GroundStationInformation, SatelliteInformation
 from core.orbit_engine.ground_station_frames import GroundStationRuntimeContext
 from core.orbit_engine.time_utils import normalize_datetime_to_utc
+
+if TYPE_CHECKING:
+    from org.hipparchus.ode.events import Action
+    from org.orekit.propagation import SpacecraftState
+    from org.orekit.propagation.events import EventDetector
+    from org.orekit.propagation.numerical import NumericalPropagator
+    from org.orekit.time import AbsoluteDate
+
 
 
 # ==========================================
@@ -49,9 +59,9 @@ class VisibilityEventHandler:
 
     def init(
         self,
-        initial_state: Any,
-        target: Any,
-        detector: Any,
+        initial_state: SpacecraftState,
+        target: AbsoluteDate,
+        detector: EventDetector,
     ) -> None:
         """Remember visibility at propagation start when the pass is already active."""
         is_visible_at_start = detector.g(initial_state) >= 0.0
@@ -61,10 +71,10 @@ class VisibilityEventHandler:
 
     def eventOccurred(
         self,
-        spacecraft_state: Any,
-        detector: Any,
+        spacecraft_state: SpacecraftState,
+        detector: EventDetector,
         increasing: bool,
-    ) -> Any:
+    ) -> Action:
         """Handle one elevation threshold crossing and keep propagation running."""
         from orekit_jpype.pyhelpers import absolutedate_to_datetime
         from org.hipparchus.ode.events import Action
@@ -100,8 +110,8 @@ class VisibilityEventHandler:
 
     def finish(
         self,
-        final_state: Any,
-        detector: Any,
+        final_state: SpacecraftState,
+        detector: EventDetector,
     ) -> None:
         """Close a visibility interval that is still active at propagation end."""
         if self.current_overpass_start_time is None:
@@ -123,9 +133,9 @@ class VisibilityEventHandler:
 
     def resetState(
         self,
-        detector: Any,
-        old_state: Any,
-    ) -> Any:
+        detector: EventDetector,
+        old_state: SpacecraftState,
+    ) -> SpacecraftState:
         """Keep the spacecraft state unchanged after visibility events."""
         return old_state
 
@@ -133,7 +143,7 @@ class VisibilityEventHandler:
 # ==========================================
 # VISIBILITY DETECTOR SETUP
 def attach_visibility_detectors(
-    propagator: Any,
+    propagator: NumericalPropagator,
     satellite_info: SatelliteInformation,
     ground_station_contexts: list[GroundStationRuntimeContext],
     satellite_event_log: list[OverpassEvent],
@@ -166,7 +176,7 @@ def attach_visibility_detectors(
             propagation_start_time=visibility_start_time,
             propagation_end_time=visibility_end_time,
         )
-        visibility_event_handler_proxy = jpype.JProxy(
+        visibility_event_handler_proxy = jpype.JProxy( # type: ignore
             EventHandler,
             inst=visibility_event_handler,
         )
