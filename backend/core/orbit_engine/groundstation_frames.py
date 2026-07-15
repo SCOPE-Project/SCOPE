@@ -1,25 +1,18 @@
-# core/orbit_engine/groundstation_frames.py
-
-from org.orekit.frames import TopocentricFrame
-from org.orekit.bodies import BodyShape
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from dataclasses import dataclass
 from math import radians
 
-from core.models.domain import GroundStationInformation
+from core.models.domain import GroundStationInformation, GroundStationRuntimeContext
+
+if TYPE_CHECKING:
+    from org.orekit.frames import TopocentricFrame
+    from org.orekit.bodies import BodyShape
 
 
 # ==========================================
 # CONSTANTS
 DEFAULT_GROUNDSTATION_ALTITUDE_M = 0.0
-
-
-# ==========================================
-# INTERNAL DATACLASSES
-@dataclass
-class GroundStationRuntimeContext:
-    """Runtime link between a ground station and its Orekit topocentric frame."""
-    groundstation_info: GroundStationInformation
-    topocentric_frame: TopocentricFrame
 
 
 # ==========================================

@@ -1,8 +1,10 @@
-# core/orbit_engine/propagator_builder.py
+from __future__ import annotations
+from typing import TYPE_CHECKING
 
-from org.orekit.propagation import BoundedPropagator
-from org.orekit.propagation.numerical import NumericalPropagator
-from org.orekit.frames import Frame
+if TYPE_CHECKING:
+    from org.orekit.propagation import BoundedPropagator
+    from org.orekit.propagation.numerical import NumericalPropagator
+    from org.orekit.frames import Frame
 from datetime import datetime
 
 from core.models.domain import SatelliteInformation

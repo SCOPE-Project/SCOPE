@@ -69,6 +69,6 @@ def get_task_result(task_id: str):
         raise HTTPException(
             status_code=400, 
             detail=f"Task is in state '{task_result.status}' and has no result payload yet."
-        )
-    
+            )
+            
     return task_result

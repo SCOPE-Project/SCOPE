@@ -4,6 +4,7 @@ from core.orbit_engine import orekit_engine
 from core.scheduling import scheduling
 from core.models.domain import SatelliteInformation, GroundStationInformation, TimeInterval
 from app.services.asset_repository import AssetRepository
+from app.models.propagation import PropagationResultDTO
 
 
 def run_orbit_engine_task(
@@ -41,14 +42,16 @@ def run_orbit_engine_task(
         time_interval = TimeInterval(start_time=start_time, end_time=end_time)
         
         # Run the pure library, injecting the localized state update loop
-        raw_results = orekit_engine.run_orekit_engine(
-            task_id=task_id, 
+        propagation_results = orekit_engine.run_orekit_engine(
+            run_id=task_id, 
             satellite_infos=satellite_infos, 
             groundstation_infos=groundstation_infos, 
             time_interval=time_interval, 
             on_progress_update=web_callback
         )
-        state_manager.complete_task(task_id, payload=raw_results)
+        
+        propagation_results_dto = PropagationResultDTO.from_domain(propagation_results)
+        state_manager.complete_task(task_id, payload=propagation_results_dto)
     except Exception as e:
         state_manager.update_task(task_id, status="failed", message=str(e), progress=100)
         
