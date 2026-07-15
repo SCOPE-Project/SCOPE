@@ -13,7 +13,6 @@ class SatelliteInformation:
 @dataclass
 class GroundStationInformation:
     name: str
-    id: str
     latitude: float
     longitude: float
     min_elevation_angle_deg: float

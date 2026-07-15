@@ -33,8 +33,13 @@ from api_connect.command_history import get_command_states
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+import sys
 from dotenv import load_dotenv
 from pathlib import Path
+from datetime import datetime
+
+# Add the backend directory to sys.path to resolve core module imports
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 credentials_path = Path(__file__).resolve().parent.parent / "SatOS_credentials" / "credentials.env"
 
@@ -46,21 +51,53 @@ if not load_dotenv(credentials_path):
 
 # Create a session with SAT.IO using environment variables
 session = SatIOSession()
-
+from core.models.domain import SatelliteInformation, GroundStationInformation
+import warnings
 with SatIOSession() as session:
-    satellite_model = get_satellite(session, satellite_name="Sat1_Group1")
-    # 1. Set fallback/default values
-    position_r = [0.0, 0.0, 0.0]
-    velocity_v = [0.0, 0.0, 0.0]
+    groundstation_model = get_satellite(session, satellite_name="GS1_Group1")
+    name = groundstation_model.name
+
+    # 1. Initialize sentinels instead of defaults
+    latitude = None
+    longitude = None
+    min_link_elevation = None
+    print(groundstation_model)
+    # 2. Extract values and fail hard on malformed definitions
+    for var in groundstation_model.variableDefinitions:
+        if var.name == "latitude":
+            if not var.floatDefinition or var.floatDefinition.defaultValue is None:
+                raise ValueError("Malformed groundstation model: 'latitude' missing definition or value.")
+            latitude = float(var.floatDefinition.defaultValue)
+            if latitude == 0.0:
+                warnings.warn("Latitude is 0.0, is this correct or an API default?", UserWarning)
+                
+        elif var.name == "longitude":
+            if not var.floatDefinition or var.floatDefinition.defaultValue is None:
+                raise ValueError("Malformed groundstation model: 'longitude' missing definition or value.")
+            longitude = float(var.floatDefinition.defaultValue)
+            if longitude == 0.0:
+                warnings.warn("Longitude is 0.0, is this correct or an API default?", UserWarning)
+                
+        elif var.name == "min_link_elevation":
+            if not var.floatDefinition or var.floatDefinition.defaultValue is None:
+                raise ValueError("Malformed groundstation model: 'min_link_elevation' missing definition or value.")
+            min_link_elevation = float(var.floatDefinition.defaultValue)
+            if min_link_elevation == 0.0:
+                warnings.warn("min_link_elevation is 0.0, is this correct or an API default?", UserWarning)
+
+    # 3. Fail hard if variables were entirely missing from the loop
+    if latitude is None:
+        raise ValueError("Missing required variable: 'latitude'")
+    if longitude is None:
+        raise ValueError("Missing required variable: 'longitude'")
+    if min_link_elevation is None:
+        raise ValueError("Missing required variable: 'min_link_elevation'")
     
-    # 2. Extract position and velocity from variable definitions
-    for var in satellite_model.variableDefinitions:
-        if var.name == "position_vector" and var.matrixDefinition:
-            if var.matrixDefinition.defaultValue is not None:
-                position_r = [float(val) for val in var.matrixDefinition.defaultValue]
-        elif var.name == "velocity_vector" and var.matrixDefinition:
-            if var.matrixDefinition.defaultValue is not None:
-                velocity_v = [float(val) for val in var.matrixDefinition.defaultValue]
-    print(satellite_model.model_dump_json(indent=2))
-    print(position_r)
-    print(velocity_v)
+    
+    groundstation_information = GroundStationInformation(
+        name=name,
+        latitude=latitude,
+        longitude=longitude,
+        min_link_elevation=min_link_elevation,
+    )
+    print(groundstation_information)
