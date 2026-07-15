@@ -1,5 +1,6 @@
 README.md
 pyproject.toml
+sat1_group1_example.ipynb
 src/Sat1_Group1_mission/__init__.py
 src/Sat1_Group1_mission/activity.py
 src/Sat1_Group1_mission/command.py
