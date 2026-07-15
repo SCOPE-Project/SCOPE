@@ -21,9 +21,6 @@ class ActivitiesListResponse(BaseModel):
 class InitializedAssetInfo(BaseModel):
     name: str
     eligible: bool
-    classification: str  # "satellite", "ground_station", or "ineligible"
+    classification: str  # "satellite", "groundstation", or "ineligible"
     details: Union[SatelliteInformation, GroundStationInformation, None] = None
     error: str | None = None
-
-class InitializeRepositoryResponse(BaseModel):
-    assets: list[InitializedAssetInfo]

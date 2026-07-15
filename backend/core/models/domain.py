@@ -15,7 +15,7 @@ class GroundStationInformation:
     name: str
     latitude: float
     longitude: float
-    min_link_elevation: float
+    min_elevation_angle_deg: float
 
 @dataclass
 class TimeInterval:
@@ -26,5 +26,12 @@ class TimeInterval:
 class OrbitPropagationTask:
     task_id: str
     satellite_infos: List[SatelliteInformation]
-    ground_station_infos: List[GroundStationInformation]
+    groundstation_infos: List[GroundStationInformation]
     time_interval: TimeInterval
+
+@dataclass
+class PropagationRawResult:
+    """Typed orbit engine result from propagation before API-layer serialization."""
+    metadata: dict[str, object]
+    global_tracks: dict[str, list[dict[str, object]]]
+    overpass_blocks: list[dict[str, object]]

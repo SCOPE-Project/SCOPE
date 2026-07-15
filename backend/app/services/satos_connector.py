@@ -2,11 +2,9 @@ from datetime import datetime
 from api_connect.satio_session import SatIOSession
 from api_connect.satellites import get_satellite_list, get_satellite
 from api_connect.activities import get_activity_list
-# from api_connect.schedule_events import get_schedule_events
 
 from pydantic_models.definitions import SatelliteInfoModel, SatelliteModel
 from pydantic_models.activity import ActivityInfoModel
-from pydantic_models.schedule_event import ScheduleEventModel
 from pydantic import UUID4
 
 
@@ -39,31 +37,32 @@ def satos_get_asset(asset_name: str) -> SatelliteModel:
     with SatIOSession() as session:
         return get_satellite(session, satellite_name=asset_name)
 
-# /satos/schedule_events
-# def satos_get_schedule_events(
-#     schedule_name: str | None = None, 
-#     schedule_event_uuid: str | UUID4 | None = None,
-#     start_time: datetime | None = None,
-#     end_time: datetime | None = None
-# ) -> list[ScheduleEventModel]:
-#     """
-#     Get schedule events from the SatOS API.
-#     SatOS Connector to GET .../schedule_events
-
-#     :param schedule_name: Name of the schedule
-#     :param schedule_event_uuid: str or UUID4 of the schedule event
-#     :param start_time: Fetch events after this time
-#     :param end_time: Fetch events before this time
-#     :return: list of ScheduleEventModel
-#     """
-#     with SatIOSession() as session:
-#         return get_schedule_events(
-#             session, 
-#             schedule_name=schedule_name, 
-#             schedule_event_uuid=schedule_event_uuid, 
-#             start_time=start_time, 
-#             end_time=end_time
-#         )
+## /satos/schedule_events
+#def satos_get_schedule_events(
+#    schedule_name: str | None = None, 
+#    schedule_event_uuid: str | UUID4 | None = None,
+#    start_time: datetime | None = None,
+#    end_time: datetime | None = None
+#) -> list[ScheduleEventModel]:
+#    """
+#    Get schedule events from the SatOS API.
+#    SatOS Connector to GET .../schedule_events
+#
+#    :param schedule_name: Name of the schedule
+#    :param schedule_event_uuid: str or UUID4 of the schedule event
+#    :param start_time: Fetch events after this time
+#    :param end_time: Fetch events before this time
+#    :return: list of ScheduleEventModel
+#    """
+#    with SatIOSession() as session:
+#        return get_schedule_events(
+#            session, 
+#            schedule_name=schedule_name, 
+#            schedule_event_uuid=schedule_event_uuid, 
+#            start_time=start_time, 
+#            end_time=end_time
+#        )
+#
 
 # /satos/activities/list
 def satos_get_activities_list(schedule_name: str) -> list[ActivityInfoModel]:

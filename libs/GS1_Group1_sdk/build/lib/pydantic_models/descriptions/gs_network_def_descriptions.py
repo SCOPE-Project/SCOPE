@@ -18,7 +18,7 @@ variable_definitions = "A list of defined GS network variables."
 
 tm_set_definitions = "A list of defined TM sets."
 
-ground_stations = "A list of ground stations that are part of this network.\
+groundstations = "A list of ground stations that are part of this network.\
     See GroundStationModel"
 
 custom_fields = "Custom fields of this GS network definition."
