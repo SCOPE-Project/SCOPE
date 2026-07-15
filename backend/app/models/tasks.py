@@ -1,11 +1,40 @@
-from pydantic import BaseModel, Field, conlist
-from typing import List, Optional, Any
+from pydantic import BaseModel, Field, conlist, UUID4, UUID7
+from typing import List, Optional, Any, Union
 from datetime import datetime
+from dataclasses import dataclass
 
-from app.models.satos import InitializedAssetInfo
+from core.models.domain import SatelliteInformation, GroundStationInformation
+from app.models.propagation import PropagationResultDTO
 
-class InitializeRepositoryResponse(BaseModel):
-    assets: list[InitializedAssetInfo]
+from pydantic_models.activity import ActivityInfoModel
+from pydantic_models.schedule_event import ScheduleEventModel
+
+@dataclass
+class Activity:
+    uuid: UUID4 | UUID7
+    schedule_name: str
+    status: int
+    start_event: Optional[ScheduleEventModel]
+    end_event: Optional[ScheduleEventModel]
+
+
+@dataclass
+class AssetSchedule:
+    name: str
+    activities: list[Activity]
+
+
+class AssetInformation(BaseModel):
+    name: str
+    eligible: bool
+    classification: str  # "satellite", "groundstation", or "ineligible"
+    details: Union[SatelliteInformation, GroundStationInformation, None] = None
+    error: str | None = None
+
+
+class AssetInitializationResponse(BaseModel):
+    assets: list[AssetInformation]
+    schedules: list[AssetSchedule]
 
 
 # ========================================
@@ -56,4 +85,4 @@ class TaskResultResponse(BaseModel):
     """
     task_id: str
     status: str = Field("Completed", description="The queue status of the task")
-    payload: Any
+    payload: Union[PropagationResultDTO, Any]

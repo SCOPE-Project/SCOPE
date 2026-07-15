@@ -18,9 +18,3 @@ class ScheduleEventsResponse(BaseModel):
 class ActivitiesListResponse(BaseModel):
     activities: list[ActivityInfoModel]
 
-class InitializedAssetInfo(BaseModel):
-    name: str
-    eligible: bool
-    classification: str  # "satellite", "groundstation", or "ineligible"
-    details: Union[SatelliteInformation, GroundStationInformation, None] = None
-    error: str | None = None

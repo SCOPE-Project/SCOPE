@@ -7,19 +7,24 @@ from app.models.tasks import (
     TradeOffRequest,
     TaskStatusResponse,
     TaskResultResponse,
-    TaskReceiptResponse
+    TaskReceiptResponse,
+    AssetInformation,
+    AssetInitializationResponse
 )
-
-from app.models.tasks import InitializeRepositoryResponse
 
 from app.services.asset_repository import AssetRepository
 
+
+
 router = APIRouter(prefix="/tasks", tags=["Task Processing Workspace"])
 
-@router.get("/initialize", response_model=InitializeRepositoryResponse)
+@router.get("/initialize", response_model=AssetInitializationResponse)
 def initialize_assets():
-    initialized_assets = AssetRepository.initialize_repository()
-    return {"assets": initialized_assets}
+    AssetRepository.initialize_repository()
+    
+    initialized_asset_infos = AssetRepository.get_assets()
+    initialized_asset_schedules = AssetRepository.get_asset_schedules()
+    return {"assets": initialized_asset_infos, "schedules": initialized_asset_schedules}
 
 @router.post("/extract-overpasses", response_model=TaskReceiptResponse)
 def trigger_orbit_engine(payload: OrbitEngineRequest, background_tasks: BackgroundTasks):

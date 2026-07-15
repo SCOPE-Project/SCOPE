@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from app.models.tasks import TaskStatusResponse, TaskResultResponse
 
-class InMemoryStateManager:
+class TaskManager:
     """Encapsulates task state storage in-memory with thread-safe operations."""
     def __init__(self):
         self._tasks: Dict[str, Dict[str, Any]] = {}
@@ -63,7 +63,7 @@ class InMemoryStateManager:
 
 
 # Instantiate the private singleton instance
-_manager = InMemoryStateManager()
+_manager = TaskManager()
 
 # Expose standard module functions that delegate to the manager instance
 def create_task_entry() -> str:
