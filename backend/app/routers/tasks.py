@@ -31,7 +31,7 @@ def trigger_orbit_engine(payload: OrbitEngineRequest, background_tasks: Backgrou
         task_orchestrator.run_orbit_engine_task, 
         task_id=task_id, 
         selected_satellites=payload.satellites, 
-        selected_groundstations=payload.ground_stations, 
+        selected_groundstations=payload.groundstations, 
         start_time=payload.start_time, 
         end_time=payload.end_time
     )

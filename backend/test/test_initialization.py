@@ -36,7 +36,7 @@ def run_tests():
     gs1 = next((a for a in results if a["name"] == "GS1_Group1"), None)
     assert gs1 is not None, "GS1_Group1 not found!"
     assert gs1["eligible"] is True, "GS1_Group1 should be eligible"
-    assert gs1["classification"] == "ground_station", "GS1_Group1 should be classified as ground_station"
+    assert gs1["classification"] == "groundstation", "GS1_Group1 should be classified as groundstation"
     assert gs1["details"].name == "GS1_Group1"
     print("[OK] GS1_Group1 test passed")
     
@@ -72,7 +72,7 @@ def run_tests():
     gs2 = next((a for a in results if a["name"] == "GS2_Group1"), None)
     assert gs2 is not None, "GS2_Group1 not found!"
     assert gs2["eligible"] is False
-    assert gs2["classification"] == "ground_station"
+    assert gs2["classification"] == "groundstation"
     assert "Malformed ground station model" in gs2["error"]
     print("[OK] GS2_Group1 candidate classification test passed")
 

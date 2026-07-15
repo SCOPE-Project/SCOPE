@@ -26,7 +26,7 @@ class TimeInterval:
 class OrbitPropagationTask:
     task_id: str
     satellite_infos: List[SatelliteInformation]
-    ground_station_infos: List[GroundStationInformation]
+    groundstation_infos: List[GroundStationInformation]
     time_interval: TimeInterval
 
 @dataclass

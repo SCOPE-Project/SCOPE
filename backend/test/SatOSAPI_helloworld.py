@@ -60,7 +60,7 @@ with SatIOSession() as session:
     # 1. Initialize sentinels instead of defaults
     latitude = None
     longitude = None
-    min_link_elevation = None
+    min_elevation_angle_deg = None
     print(groundstation_model)
     # 2. Extract values and fail hard on malformed definitions
     for var in groundstation_model.variableDefinitions:
@@ -78,26 +78,26 @@ with SatIOSession() as session:
             if longitude == 0.0:
                 warnings.warn("Longitude is 0.0, is this correct or an API default?", UserWarning)
                 
-        elif var.name == "min_link_elevation":
+        elif var.name == "min_elevation_angle_deg":
             if not var.floatDefinition or var.floatDefinition.defaultValue is None:
-                raise ValueError("Malformed groundstation model: 'min_link_elevation' missing definition or value.")
-            min_link_elevation = float(var.floatDefinition.defaultValue)
-            if min_link_elevation == 0.0:
-                warnings.warn("min_link_elevation is 0.0, is this correct or an API default?", UserWarning)
+                raise ValueError("Malformed groundstation model: 'min_elevation_angle_deg' missing definition or value.")
+            min_elevation_angle_deg = float(var.floatDefinition.defaultValue)
+            if min_elevation_angle_deg == 0.0:
+                warnings.warn("min_elevation_angle_deg is 0.0, is this correct or an API default?", UserWarning)
 
     # 3. Fail hard if variables were entirely missing from the loop
     if latitude is None:
         raise ValueError("Missing required variable: 'latitude'")
     if longitude is None:
         raise ValueError("Missing required variable: 'longitude'")
-    if min_link_elevation is None:
-        raise ValueError("Missing required variable: 'min_link_elevation'")
+    if min_elevation_angle_deg is None:
+        raise ValueError("Missing required variable: 'min_elevation_angle_deg'")
     
     
     groundstation_information = GroundStationInformation(
         name=name,
         latitude=latitude,
         longitude=longitude,
-        min_link_elevation=min_link_elevation,
+        min_elevation_angle_deg=min_elevation_angle_deg,
     )
     print(groundstation_information)

@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field, Json, conlist
 
-from pydantic_models.descriptions import ground_station_def_descriptions as desc
+from pydantic_models.descriptions import groundstation_def_descriptions as desc
 
 from .command_definition import CommandDefModel
 from .component_definition import ComponentModel

@@ -28,7 +28,7 @@ Die grobe Struktur aus `run_orekit_engine` bleibt erhalten:
 
 - `task_id`: ID fuer Fortschrittsmeldungen.
 - `satellite_infos`: Liste von `SatelliteInformation`.
-- `ground_station_infos`: Liste von `GroundStationInformation`.
+- `groundstation_infos`: Liste von `GroundStationInformation`.
 - `time_interval`: `TimeInterval` mit Start- und Endzeit.
 - `on_progress_update`: optionaler Callback mit `(task_id, message, progress)`.
 
@@ -112,7 +112,7 @@ Die Engine soll fuer jedes Satellit-Groundstation-Paar Sichtbarkeitsintervalle e
 
 Pro Paar wird ein `ElevationDetector` verwendet:
 
-- Mindest-Elevation: `ground_station_info.min_elevation_angle_deg`.
+- Mindest-Elevation: `groundstation_info.min_elevation_angle_deg`.
 - AOS ist der Zeitpunkt, an dem die Elevation die Schwelle aufsteigend kreuzt.
 - LOS ist der Zeitpunkt, an dem die Elevation die Schwelle absteigend kreuzt.
 - Jeder komplette Pass wird als Event mit Satellit, Groundstation, Startzeit und Endzeit gespeichert.
@@ -221,7 +221,7 @@ Ein Block soll so aussehen:
 {
   "overpass_id": "overpass_000001",
   "satellite_name": "SATELLITE_NAME",
-  "ground_station_name": "GROUND_STATION_NAME",
+  "groundstation_name": "GROUNDSTATION_NAME",
   "start_time": "2026-07-08T10:15:00+00:00",
   "end_time": "2026-07-08T10:22:00+00:00",
   "duration_seconds": 420.0,
@@ -233,7 +233,7 @@ Ein Block soll so aussehen:
 `overpass_id` ist nur ein technischer Key fuer das Frontend und fuer spaetere Referenzen innerhalb des Ergebnis-Payloads.
 Er ist keine SatOS-ID und keine fachliche Missions-ID.
 Die fachliche Identitaet des Overpasses ergibt sich aus Satellit, Groundstation, Startzeit und Endzeit.
-Groundstations werden im Ergebnis-Payload ueber `ground_station_name` referenziert, weil es keine separate `ground_station_id` gibt.
+Groundstations werden im Ergebnis-Payload ueber `groundstation_name` referenziert, weil es keine separate `groundstation_id` gibt.
 
 Im finalen Ergebnis-Payload werden Zeiten als ISO-Strings ausgegeben.
 Innerhalb der Berechnung duerfen und sollen `datetime`-Objekte und Orekit-/Java-Objekte verwendet werden.

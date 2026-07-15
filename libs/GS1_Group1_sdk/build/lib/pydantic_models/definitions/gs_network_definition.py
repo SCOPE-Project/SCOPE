@@ -7,7 +7,7 @@ from pydantic_models.descriptions import gs_network_def_descriptions as desc
 from .command_definition import CommandDefModel
 from .component_definition import ComponentModel
 from .event_definition import EventDefModel
-from .ground_station_definition import GroundStationModel
+from .groundstation_definition import GroundStationModel
 from .parameter_definition import ParameterDefModel
 from .tm_set_definition import TmSetModel
 from .version import VersionModel
@@ -33,8 +33,8 @@ class GroundStationNetworkModel(BaseModel):
     tmSetDefinitions: conlist(TmSetModel, min_length=0) = Field(
         default_factory=list, description=desc.tm_set_definitions
     )
-    ground_stations: conlist(GroundStationModel, min_length=0) = Field(
-        default_factory=list, description=desc.ground_stations
+    groundstations: conlist(GroundStationModel, min_length=0) = Field(
+        default_factory=list, description=desc.groundstations
     )
     custom_fields: Json | None = Field(default=None, description=desc.custom_fields)
 

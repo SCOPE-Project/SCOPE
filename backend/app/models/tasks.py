@@ -17,7 +17,7 @@ class OrbitEngineRequest(BaseModel):
     Request model for the OrbitEngine task.
     """
     satellites: List[str] = Field(..., min_items=1, description="List of satellite names")
-    ground_stations: List[str] = Field(..., min_items=1, description="List of ground station names")
+    groundstations: List[str] = Field(..., min_items=1, description="List of ground station names")
     start_time: datetime = Field(..., description="Start time for the orbit propagation")
     end_time: datetime = Field(..., description="End time for the orbit propagation")
 

@@ -6,7 +6,7 @@ from org.orekit.propagation import BoundedPropagator
 from datetime import datetime, timedelta
 from math import degrees
 
-from core.orbit_engine.ground_station_frames import GroundStationRuntimeContext
+from core.orbit_engine.groundstation_frames import GroundStationRuntimeContext
 from core.orbit_engine.time_utils import normalize_datetime_to_utc, to_utc_iso_string
 from core.orbit_engine.visibility_events import OverpassEvent
 
@@ -96,7 +96,7 @@ def extract_overpass_profile(
     ephemeris: BoundedPropagator,
     inertial_frame: Frame,
     earth_shape: OneAxisEllipsoid,
-    ground_station_context: GroundStationRuntimeContext,
+    groundstation_context: GroundStationRuntimeContext,
     start_time: datetime,
     end_time: datetime,
     step_seconds: float = OVERPASS_PROFILE_STEP_SECONDS,
@@ -128,7 +128,7 @@ def extract_overpass_profile(
     sample_times.append(profile_end_time)
 
     overpass_profile_points = []
-    topocentric_frame = ground_station_context.topocentric_frame
+    topocentric_frame = groundstation_context.topocentric_frame
 
     for sample_time in sample_times:
         sample_absolute_date = datetime_to_absolutedate(sample_time)
@@ -186,17 +186,17 @@ def build_overpass_block(
     )
 
     satellite_name = overpass_event.satellite_name
-    ground_station_name = overpass_event.ground_station_info.name
+    groundstation_name = overpass_event.groundstation_info.name
     overpass_id = (
         f"{satellite_name}__"
-        f"{ground_station_name}__"
+        f"{groundstation_name}__"
         f"pass_{pair_pass_number:03d}"
     )
 
     return {
         "overpass_id": overpass_id,
         "satellite_name": satellite_name,
-        "ground_station_name": ground_station_name,
+        "groundstation_name": groundstation_name,
         "start_time": to_utc_iso_string(overpass_start_time),
         "end_time": to_utc_iso_string(overpass_end_time),
         "duration_seconds": float(

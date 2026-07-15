@@ -10,9 +10,9 @@ from core.models.domain import (
     SatelliteInformation,
     TimeInterval,
 )
-from core.orbit_engine.ground_station_frames import (
+from core.orbit_engine.groundstation_frames import (
     GroundStationRuntimeContext,
-    build_ground_station_contexts,
+    build_groundstation_contexts,
 )
 from core.orbit_engine.input_validation import validate_orekit_engine_inputs
 from core.orbit_engine.orekit_setup import setup_orekit_environment
@@ -41,7 +41,7 @@ from core.orbit_engine.visibility_events import (
 def run_orekit_engine(
     task_id: str,
     satellite_infos: list[SatelliteInformation],
-    ground_station_infos: list[GroundStationInformation],
+    groundstation_infos: list[GroundStationInformation],
     time_interval: TimeInterval,
     on_progress_update: Callable[[str, str, int], None] | None = None,
 ) -> PropagationRawResult:
@@ -54,7 +54,7 @@ def run_orekit_engine(
     )
     validate_orekit_engine_inputs(
         satellite_infos=satellite_infos,
-        ground_station_infos=ground_station_infos,
+        groundstation_infos=groundstation_infos,
         time_interval=time_interval,
     )
 
@@ -82,15 +82,15 @@ def run_orekit_engine(
         earth_fixed_frame,
     )
 
-    ground_station_contexts = build_ground_station_contexts(
-        ground_station_infos=ground_station_infos,
+    groundstation_contexts = build_groundstation_contexts(
+        groundstation_infos=groundstation_infos,
         earth_shape=earth_shape,
     )
-    ground_station_context_by_name: dict[str, GroundStationRuntimeContext] = {}
+    groundstation_context_by_name: dict[str, GroundStationRuntimeContext] = {}
 
-    for ground_station_context in ground_station_contexts:
-        ground_station_name = ground_station_context.ground_station_info.name
-        ground_station_context_by_name[ground_station_name] = ground_station_context
+    for groundstation_context in groundstation_contexts:
+        groundstation_name = groundstation_context.groundstation_info.name
+        groundstation_context_by_name[groundstation_name] = groundstation_context
 
     global_tracks: dict[str, list[dict[str, object]]] = {}
     overpass_blocks: list[dict[str, object]] = []
@@ -131,7 +131,7 @@ def run_orekit_engine(
         attach_visibility_detectors(
             propagator=propagator,
             satellite_info=satellite_info,
-            ground_station_contexts=ground_station_contexts,
+            groundstation_contexts=groundstation_contexts,
             satellite_event_log=satellite_event_log,
             propagation_start_time=propagation_start_time,
             propagation_end_time=propagation_end_time,
@@ -162,16 +162,16 @@ def run_orekit_engine(
             satellite_event_log,
             key=lambda overpass_event: (
                 normalize_datetime_to_utc(overpass_event.start_time),
-                overpass_event.ground_station_info.name,
+                overpass_event.groundstation_info.name,
             ),
         )
 
         for overpass_event in sorted_overpass_events:
-            ground_station_name = overpass_event.ground_station_info.name
-            ground_station_context = ground_station_context_by_name[ground_station_name]
+            groundstation_name = overpass_event.groundstation_info.name
+            groundstation_context = groundstation_context_by_name[groundstation_name]
             overpass_pair_key = (
                 overpass_event.satellite_name,
-                ground_station_name,
+                groundstation_name,
             )
             previous_pair_pass_count = overpass_pair_counts.get(
                 overpass_pair_key,
@@ -184,7 +184,7 @@ def run_orekit_engine(
                 ephemeris=ephemeris,
                 inertial_frame=inertial_frame,
                 earth_shape=earth_shape,
-                ground_station_context=ground_station_context,
+                groundstation_context=groundstation_context,
                 start_time=overpass_event.start_time,
                 end_time=overpass_event.end_time,
                 step_seconds=OVERPASS_PROFILE_STEP_SECONDS,

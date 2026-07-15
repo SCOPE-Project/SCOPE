@@ -24,18 +24,18 @@ Die eigentliche Implementierung erfolgt danach in Schritt 3 Funktion fuer Funkti
 Ein reiner Identifier aus Satellit und Groundstation ist nicht eindeutig, wenn dasselbe Paar im Zeitintervall mehrere Overpasses hat.
 Deshalb soll der Ergebnisblock zwei Konzepte sauber trennen:
 
-- `satellite_name` und `ground_station_name` beschreiben das fachliche Paar.
+- `satellite_name` und `groundstation_name` beschreiben das fachliche Paar.
 - `overpass_id` identifiziert einen konkreten Overpass-Block innerhalb dieses Paares.
 
 Empfohlene deterministische Form fuer den MVP:
 
 ```python
-overpass_id = f"{satellite_name}__{ground_station_name}__pass_{pair_pass_number:03d}"
+overpass_id = f"{satellite_name}__{groundstation_name}__pass_{pair_pass_number:03d}"
 ```
 
 `pair_pass_number` wird pro Satellit-Groundstation-Paar nach Startzeit sortiert hochgezaehlt.
 Damit bleibt die ID lesbar, deterministisch fuer gleiche Inputs und ohne Zeitstempel-Monster im Key.
-Es gibt keine separate `ground_station_id`; Groundstations werden im Ergebnis-Payload ueber `ground_station_name` referenziert.
+Es gibt keine separate `groundstation_id`; Groundstations werden im Ergebnis-Payload ueber `groundstation_name` referenziert.
 
 ## Geplanter Modulaufbau
 
@@ -58,7 +58,7 @@ Diese Konstanten gehoeren in `orekit_engine.py`, weil sie die Engine-Konfigurati
 ```python
 GLOBAL_TRACK_STEP_SECONDS = 60.0
 OVERPASS_PROFILE_STEP_SECONDS = 10.0
-DEFAULT_GROUND_STATION_ALTITUDE_M = 0.0
+DEFAULT_GROUNDSTATION_ALTITUDE_M = 0.0
 DEFAULT_POSITION_TOLERANCE_M = 10.0
 ```
 
@@ -91,7 +91,7 @@ Ort: `core.orbit_engine.orekit_engine`
 ```python
 @dataclass
 class GroundStationRuntimeContext:
-    ground_station_info: GroundStationInformation
+    groundstation_info: GroundStationInformation
     topocentric_frame: Any
 ```
 
@@ -108,7 +108,7 @@ Ort: `core.orbit_engine.orekit_engine`
 @dataclass
 class OverpassEvent:
     satellite_name: str
-    ground_station_info: GroundStationInformation
+    groundstation_info: GroundStationInformation
     start_time: datetime
     end_time: datetime
 ```
@@ -124,7 +124,7 @@ Erst beim Bau des `overpass_blocks` Payloads werden Zeiten zu ISO-Strings.
 def run_orekit_engine(
     task_id: str,
     satellite_infos: list[SatelliteInformation],
-    ground_station_infos: list[GroundStationInformation],
+    groundstation_infos: list[GroundStationInformation],
     time_interval: TimeInterval,
     on_progress_update: Callable[[str, str, int], None] | None = None,
 ) -> PropagationRawResult:
@@ -157,7 +157,7 @@ def run_orekit_engine(...):
     # Earth frame and Earth shape are created here and passed down.
     # They do not need a one-use helper function.
 
-    ground_station_contexts = build_ground_station_contexts(...)
+    groundstation_contexts = build_groundstation_contexts(...)
     global_tracks = {}
     overpass_blocks = []
 
@@ -192,7 +192,7 @@ Sie sind keine kleinen Convenience-Helper.
 ```python
 def validate_orekit_engine_inputs(
     satellite_infos: list[SatelliteInformation],
-    ground_station_infos: list[GroundStationInformation],
+    groundstation_infos: list[GroundStationInformation],
     time_interval: TimeInterval,
 ) -> None:
 ```
@@ -228,11 +228,11 @@ Wichtig:
 - Die Auswahl des Datenpfads und des JVM-Pfads bleibt in dieser Funktion.
 - Dafuer werden keine einmalig genutzten Mini-Helper angelegt.
 
-### build_ground_station_contexts
+### build_groundstation_contexts
 
 ```python
-def build_ground_station_contexts(
-    ground_station_infos: list[GroundStationInformation],
+def build_groundstation_contexts(
+    groundstation_infos: list[GroundStationInformation],
     earth_shape: Any,
 ) -> list[GroundStationRuntimeContext]:
 ```
@@ -246,7 +246,7 @@ Verantwortung:
 Input-Annahmen:
 
 - Latitude und Longitude liegen in Grad vor.
-- Hoehe ist im MVP `DEFAULT_GROUND_STATION_ALTITUDE_M`.
+- Hoehe ist im MVP `DEFAULT_GROUNDSTATION_ALTITUDE_M`.
 
 ### build_satellite_propagator
 
@@ -283,7 +283,7 @@ Wichtig:
 def attach_ElevationDetectors(
     propagator: Any,
     satellite_info: SatelliteInformation,
-    ground_station_contexts: list[GroundStationRuntimeContext],
+    groundstation_contexts: list[GroundStationRuntimeContext],
     satellite_event_log: list[OverpassEvent],
     propagation_start_time: datetime,
     propagation_end_time: datetime,
@@ -293,7 +293,7 @@ def attach_ElevationDetectors(
 Verantwortung:
 
 - Haengt pro Groundstation einen `ElevationDetector` an den Satelliten-Propagator.
-- Verwendet `ground_station_info.min_elevation_angle_deg` als Elevationsschwelle.
+- Verwendet `groundstation_info.min_elevation_angle_deg` als Elevationsschwelle.
 - Schreibt gefundene AOS/LOS-Paare in `satellite_event_log`.
 
 Wichtig:
@@ -308,7 +308,7 @@ class OverpassEventHandler:
     def __init__(
         self,
         satellite_name: str,
-        ground_station_info: GroundStationInformation,
+        groundstation_info: GroundStationInformation,
         satellite_event_log: list[OverpassEvent],
         propagation_start_time: datetime,
         propagation_end_time: datetime,
@@ -383,7 +383,7 @@ def extract_overpass_profile(
     ephemeris: Any,
     inertial_frame: Any,
     earth_shape: Any,
-    ground_station_context: GroundStationRuntimeContext,
+    groundstation_context: GroundStationRuntimeContext,
     start_time: datetime,
     end_time: datetime,
     step_seconds: float = OVERPASS_PROFILE_STEP_SECONDS,
@@ -433,7 +433,7 @@ Rueckgabeformat:
 {
     "overpass_id": "...",
     "satellite_name": "...",
-    "ground_station_name": "...",
+    "groundstation_name": "...",
     "start_time": "...",
     "end_time": "...",
     "duration_seconds": 0.0,
@@ -562,7 +562,7 @@ Diese Schritte werden vorerst nicht als eigene Funktionen angelegt, weil sie nur
 3. `normalize_datetime_to_utc`, `to_utc_iso_string`, `report_progress` implementieren.
 4. `validate_orekit_engine_inputs` implementieren.
 5. `setup_orekit_environment` implementieren.
-6. `GroundStationRuntimeContext` und `build_ground_station_contexts` implementieren.
+6. `GroundStationRuntimeContext` und `build_groundstation_contexts` implementieren.
 7. `build_satellite_propagator` implementieren.
 8. `propagate_satellite` implementieren.
 9. `extract_global_track` implementieren.
