@@ -1,15 +1,18 @@
 import sys
 from pathlib import Path
+import pytest
 from dotenv import load_dotenv
 
-# Add backend directory and backend/app directory to sys.path
 backend_path = Path(__file__).resolve().parent.parent
 sys.path.append(str(backend_path))
 sys.path.append(str(backend_path / "app"))
 
 credentials_path = backend_path / "SatOS_credentials" / "credentials.env"
-if not load_dotenv(credentials_path):
-    raise Exception("No credentials file found")
+if not credentials_path.exists() or not load_dotenv(credentials_path):
+    pytest.skip(
+        "Skipping integration test: missing backend/SatOS_credentials/credentials.env",
+        allow_module_level=True,
+    )
 
 from app.services.asset_repository import AssetRepository
 
