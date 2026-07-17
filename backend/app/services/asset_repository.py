@@ -5,6 +5,7 @@ from pydantic_models.activity import ActivityInfoModel
 from app.services.satos_connector import satos_get_asset, satos_get_asset_list, satos_get_activities_list
 from datetime import datetime
 import warnings
+from api_connect.satio_session import SatIOSession
 from app.models.tasks import AssetInformation, AssetSchedule, Activity
 
 class AssetRepository:
@@ -43,49 +44,106 @@ class AssetRepository:
         if cls._initialized:
             return
 
-        try:
-            asset_list = satos_get_asset_list()
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch asset list from SatOS: {e}")
-
-        cls._schedules.clear()
-        results = []
-        for info in asset_list:
-            asset_name = info.name
+        with SatIOSession():
             try:
-                # 1. Fetch raw asset and cache it
-                raw_asset_model = satos_get_asset(asset_name=asset_name)
-                cls._raw_asset_models[asset_name] = raw_asset_model
-                
-                raw_schedule = satos_get_activities_list(schedule_name=asset_name)
-                cls._raw_schedules[asset_name] = raw_schedule
+                asset_list = satos_get_asset_list()
+            except Exception as e:
+                raise RuntimeError(f"Failed to fetch asset list from SatOS: {e}")
 
-                activities_list = []
-                for act in raw_schedule:
-                    activities_list.append(
-                        Activity(
-                            uuid=act.uuid,
-                            schedule_name=act.schedule_name,
-                            status=act.status,
-                            start_event=act.start_event,
-                            end_event=act.end_event
+            cls._schedules.clear()
+            results = []
+            for info in asset_list:
+                asset_name = info.name
+                try:
+                    # 1. Fetch raw asset and cache it
+                    raw_asset_model = satos_get_asset(asset_name=asset_name)
+                    cls._raw_asset_models[asset_name] = raw_asset_model
+                    
+                    raw_schedule = satos_get_activities_list(schedule_name=asset_name)
+                    cls._raw_schedules[asset_name] = raw_schedule
+
+                    activities_list = []
+                    for act in raw_schedule:
+                        activities_list.append(
+                            Activity(
+                                uuid=act.uuid,
+                                schedule_name=act.schedule_name,
+                                status=act.status,
+                                start_event=act.start_event,
+                                end_event=act.end_event
+                            )
+                        )
+                    cls._schedules.append(
+                        AssetSchedule(
+                            name=asset_name,
+                            activities=activities_list
                         )
                     )
-                cls._schedules.append(
-                    AssetSchedule(
-                        name=asset_name,
-                        activities=activities_list
-                    )
-                )
 
-                # 2. Identify the intended classification based on defined variables
-                var_names = {var.name for var in raw_asset_model.variableDefinitions}
-                
-                is_satellite_candidate = any(name in var_names for name in ["position_vector", "velocity_vector", "state_timestamp"])
-                is_groundstation_candidate = any(name in var_names for name in ["latitude", "longitude", "min_link_elevation"])
+                    # 2. Identify the intended classification based on defined variables
+                    var_names = {var.name for var in raw_asset_model.variableDefinitions}
+                    
+                    is_satellite_candidate = any(name in var_names for name in ["position_vector", "velocity_vector", "state_timestamp"])
+                    is_groundstation_candidate = any(name in var_names for name in ["latitude", "longitude", "min_link_elevation"])
 
-                if is_satellite_candidate and is_groundstation_candidate:
-                    reason = "Ambiguous asset type: contains both satellite and ground station variables"
+                    if is_satellite_candidate and is_groundstation_candidate:
+                        reason = "Ambiguous asset type: contains both satellite and ground station variables"
+                        cls._ineligible_cache[asset_name] = reason
+                        results.append(AssetInformation(
+                            name=asset_name,
+                            eligible=False,
+                            classification="ineligible",
+                            error=reason
+                        ))
+                    elif is_satellite_candidate:
+                        try:
+                            cls.get_satellite_information(asset_name)
+                            results.append(AssetInformation(
+                                name=asset_name,
+                                eligible=True,
+                                classification="satellite",
+                                details=cls._satellite_infos[asset_name]
+                            ))
+                        except Exception as e:
+                            reason = f"Malformed satellite model: {e}"
+                            cls._ineligible_cache[asset_name] = reason
+                            results.append(AssetInformation(
+                                name=asset_name,
+                                eligible=False,
+                                classification="satellite",
+                                error=reason
+                            ))
+                    elif is_groundstation_candidate:
+                        try:
+                            cls.get_groundstation_information(asset_name)
+                            results.append(AssetInformation(
+                                name=asset_name,
+                                eligible=True,
+                                classification="groundstation",
+                                details=cls._groundstation_infos[asset_name]
+                            ))
+                        except Exception as e:
+                            reason = f"Malformed ground station model: {e}"
+                            cls._ineligible_cache[asset_name] = reason
+                            results.append(AssetInformation(
+                                name=asset_name,
+                                eligible=False,
+                                classification="groundstation",
+                                error=reason
+                            ))
+                    else:
+                        reason = "Unknown asset type: missing both satellite and ground station variables"
+                        cls._ineligible_cache[asset_name] = reason
+                        results.append(AssetInformation(
+                            name=asset_name,
+                            eligible=False,
+                            classification="ineligible",
+                            error=reason
+                        ))
+
+                except Exception as e:
+                    # This catches communication/fetching failures (like 403 Forbidden)
+                    reason = f"Fetch error: {e}"
                     cls._ineligible_cache[asset_name] = reason
                     results.append(AssetInformation(
                         name=asset_name,
@@ -93,65 +151,9 @@ class AssetRepository:
                         classification="ineligible",
                         error=reason
                     ))
-                elif is_satellite_candidate:
-                    try:
-                        cls.get_satellite_information(asset_name)
-                        results.append(AssetInformation(
-                            name=asset_name,
-                            eligible=True,
-                            classification="satellite",
-                            details=cls._satellite_infos[asset_name]
-                        ))
-                    except Exception as e:
-                        reason = f"Malformed satellite model: {e}"
-                        cls._ineligible_cache[asset_name] = reason
-                        results.append(AssetInformation(
-                            name=asset_name,
-                            eligible=False,
-                            classification="satellite",
-                            error=reason
-                        ))
-                elif is_groundstation_candidate:
-                    try:
-                        cls.get_groundstation_information(asset_name)
-                        results.append(AssetInformation(
-                            name=asset_name,
-                            eligible=True,
-                            classification="groundstation",
-                            details=cls._groundstation_infos[asset_name]
-                        ))
-                    except Exception as e:
-                        reason = f"Malformed ground station model: {e}"
-                        cls._ineligible_cache[asset_name] = reason
-                        results.append(AssetInformation(
-                            name=asset_name,
-                            eligible=False,
-                            classification="groundstation",
-                            error=reason
-                        ))
-                else:
-                    reason = "Unknown asset type: missing both satellite and ground station variables"
-                    cls._ineligible_cache[asset_name] = reason
-                    results.append(AssetInformation(
-                        name=asset_name,
-                        eligible=False,
-                        classification="ineligible",
-                        error=reason
-                    ))
 
-            except Exception as e:
-                # This catches communication/fetching failures (like 403 Forbidden)
-                reason = f"Fetch error: {e}"
-                cls._ineligible_cache[asset_name] = reason
-                results.append(AssetInformation(
-                    name=asset_name,
-                    eligible=False,
-                    classification="ineligible",
-                    error=reason
-                ))
-
-        cls._initialized_assets = results
-        cls._initialized = True
+            cls._initialized_assets = results
+            cls._initialized = True
 
     @classmethod
     def get_assets(cls) -> list[AssetInformation]:
@@ -185,7 +187,10 @@ class AssetRepository:
         if satellite_name in cls._ineligible_cache:
             raise ValueError(f"Asset is marked ineligible: {cls._ineligible_cache[satellite_name]}")
         
-        raw_satellite_model = satos_get_asset(asset_name=satellite_name)
+        if satellite_name in cls._raw_asset_models:
+            raw_satellite_model = cls._raw_asset_models[satellite_name]
+        else:
+            raw_satellite_model = satos_get_asset(asset_name=satellite_name)
         
         satellite_name = raw_satellite_model.name
 
@@ -246,7 +251,10 @@ class AssetRepository:
         if groundstation_name in cls._ineligible_cache:
             raise ValueError(f"Asset is marked ineligible: {cls._ineligible_cache[groundstation_name]}")
         
-        groundstation_model = satos_get_asset(asset_name=groundstation_name)
+        if groundstation_name in cls._raw_asset_models:
+            groundstation_model = cls._raw_asset_models[groundstation_name]
+        else:
+            groundstation_model = satos_get_asset(asset_name=groundstation_name)
             
         groundstation_name = groundstation_model.name
 
