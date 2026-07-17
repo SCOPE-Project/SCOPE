@@ -2,7 +2,7 @@
 
 from .command_definition import CommandDefModel
 from .event_definition import EventDefModel, EventSeverity
-from .ground_station_definition import GroundStationInfoModel, GroundStationModel
+from .groundstation_definition import GroundStationInfoModel, GroundStationModel
 from .gs_network_definition import GroundStationNetworkInfoModel, GroundStationNetworkModel
 from .mission_definition import MissionModel
 from .parameter_definition import ParameterDefModel

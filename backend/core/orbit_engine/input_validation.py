@@ -15,14 +15,14 @@ from core.orbit_engine.time_utils import normalize_datetime_to_utc
 # INPUT VALIDATION
 def validate_orekit_engine_inputs(
     satellite_infos: list[SatelliteInformation],
-    ground_station_infos: list[GroundStationInformation],
+    groundstation_infos: list[GroundStationInformation],
     time_interval: TimeInterval,
 ) -> None:
     """Validate all inputs needed before starting an Orekit propagation run."""
     if not satellite_infos:
         raise ValueError("At least one satellite is required.")
 
-    if not ground_station_infos:
+    if not groundstation_infos:
         raise ValueError("At least one ground station is required.")
 
     if not isinstance(time_interval.start_time, datetime):
@@ -86,49 +86,49 @@ def validate_orekit_engine_inputs(
                 "datetime."
             )
 
-    ground_station_names = set()
-    for ground_station_info in ground_station_infos:
+    groundstation_names = set()
+    for groundstation_info in groundstation_infos:
         if (
-            not isinstance(ground_station_info.name, str)
-            or not ground_station_info.name.strip()
+            not isinstance(groundstation_info.name, str)
+            or not groundstation_info.name.strip()
         ):
             raise ValueError("Each ground station must have a non-empty name.")
 
-        if ground_station_info.name in ground_station_names:
+        if groundstation_info.name in groundstation_names:
             raise ValueError(
-                f"Ground station name {ground_station_info.name!r} is not unique."
+                f"Ground station name {groundstation_info.name!r} is not unique."
             )
-        ground_station_names.add(ground_station_info.name)
+        groundstation_names.add(groundstation_info.name)
 
         if (
-            not isinstance(ground_station_info.latitude, Real)
-            or isinstance(ground_station_info.latitude, bool)
-            or ground_station_info.latitude < -90.0
-            or ground_station_info.latitude > 90.0
+            not isinstance(groundstation_info.latitude, Real)
+            or isinstance(groundstation_info.latitude, bool)
+            or groundstation_info.latitude < -90.0
+            or groundstation_info.latitude > 90.0
         ):
             raise ValueError(
-                f"Ground station {ground_station_info.name!r} latitude must be "
+                f"Ground station {groundstation_info.name!r} latitude must be "
                 "between -90 and 90 degrees."
             )
 
         if (
-            not isinstance(ground_station_info.longitude, Real)
-            or isinstance(ground_station_info.longitude, bool)
-            or ground_station_info.longitude < -180.0
-            or ground_station_info.longitude > 180.0
+            not isinstance(groundstation_info.longitude, Real)
+            or isinstance(groundstation_info.longitude, bool)
+            or groundstation_info.longitude < -180.0
+            or groundstation_info.longitude > 180.0
         ):
             raise ValueError(
-                f"Ground station {ground_station_info.name!r} longitude must be "
+                f"Ground station {groundstation_info.name!r} longitude must be "
                 "between -180 and 180 degrees."
             )
 
         if (
-            not isinstance(ground_station_info.min_elevation_angle_deg, Real)
-            or isinstance(ground_station_info.min_elevation_angle_deg, bool)
-            or ground_station_info.min_elevation_angle_deg < 0.0
-            or ground_station_info.min_elevation_angle_deg > 90.0
+            not isinstance(groundstation_info.min_link_elevation, Real)
+            or isinstance(groundstation_info.min_link_elevation, bool)
+            or groundstation_info.min_link_elevation < 0.0
+            or groundstation_info.min_link_elevation > 90.0
         ):
             raise ValueError(
-                f"Ground station {ground_station_info.name!r} minimum elevation "
+                f"Ground station {groundstation_info.name!r} minimum elevation "
                 "must be between 0 and 90 degrees."
             )

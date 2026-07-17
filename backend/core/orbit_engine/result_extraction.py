@@ -1,14 +1,22 @@
-# core/orbit_engine/result_extraction.py
+from __future__ import annotations
+from typing import TYPE_CHECKING
 
-from org.orekit.bodies import OneAxisEllipsoid, GeodeticPoint
-from org.orekit.frames import Frame
-from org.orekit.propagation import BoundedPropagator
+if TYPE_CHECKING:
+    from org.orekit.bodies import OneAxisEllipsoid, GeodeticPoint
+    from org.orekit.frames import Frame
+    from org.orekit.propagation import BoundedPropagator
 from datetime import datetime, timedelta
 from math import degrees
 
-from core.orbit_engine.ground_station_frames import GroundStationRuntimeContext
-from core.orbit_engine.time_utils import normalize_datetime_to_utc, to_utc_iso_string
+from core.orbit_engine.groundstation_frames import GroundStationRuntimeContext
+from core.orbit_engine.time_utils import normalize_datetime_to_utc
 from core.orbit_engine.visibility_events import OverpassEvent
+from core.models.domain import (
+    GlobalTrackPoint,
+    OverpassProfilePoint,
+    OverpassBlock,
+    PropagationMetadata,
+)
 
 
 # ==========================================
@@ -26,8 +34,8 @@ def extract_global_track(
     start_time: datetime,
     end_time: datetime,
     step_seconds: float = GLOBAL_TRACK_STEP_SECONDS,
-) -> list[dict[str, object]]:
-    """Sample an Orekit ephemeris into JSON-friendly global track points.
+) -> list[GlobalTrackPoint]:
+    """Sample an Orekit ephemeris into global track points.
 
     setup_orekit_environment must run before this function imports Orekit helpers.
     """
@@ -69,22 +77,22 @@ def extract_global_track(
             sample_absolute_date,
         )
 
-        track_point = {
-            "timestamp": to_utc_iso_string(sample_time),
-            "position_gcrf_m": [
+        track_point = GlobalTrackPoint(
+            timestamp=sample_time,
+            position_gcrf_m=[
                 float(position_vector.getX()),
                 float(position_vector.getY()),
                 float(position_vector.getZ()),
             ],
-            "velocity_gcrf_mps": [
+            velocity_gcrf_mps=[
                 float(velocity_vector.getX()),
                 float(velocity_vector.getY()),
                 float(velocity_vector.getZ()),
             ],
-            "latitude_deg": float(degrees(geodetic_point.getLatitude())),
-            "longitude_deg": float(degrees(geodetic_point.getLongitude())),
-            "altitude_m": float(geodetic_point.getAltitude()),
-        }
+            latitude_deg=float(degrees(geodetic_point.getLatitude())),
+            longitude_deg=float(degrees(geodetic_point.getLongitude())),
+            altitude_m=float(geodetic_point.getAltitude()),
+        )
         global_track_points.append(track_point)
 
     return global_track_points
@@ -96,12 +104,12 @@ def extract_overpass_profile(
     ephemeris: BoundedPropagator,
     inertial_frame: Frame,
     earth_shape: OneAxisEllipsoid,
-    ground_station_context: GroundStationRuntimeContext,
+    groundstation_context: GroundStationRuntimeContext,
     start_time: datetime,
     end_time: datetime,
     step_seconds: float = OVERPASS_PROFILE_STEP_SECONDS,
-) -> list[dict[str, object]]:
-    """Sample one overpass into JSON-friendly ground-station-relative points.
+) -> list[OverpassProfilePoint]:
+    """Sample one overpass into ground-station-relative points.
 
     setup_orekit_environment must run before this function imports Orekit helpers.
     """
@@ -128,7 +136,7 @@ def extract_overpass_profile(
     sample_times.append(profile_end_time)
 
     overpass_profile_points = []
-    topocentric_frame = ground_station_context.topocentric_frame
+    topocentric_frame = groundstation_context.topocentric_frame
 
     for sample_time in sample_times:
         sample_absolute_date = datetime_to_absolutedate(sample_time)
@@ -149,15 +157,15 @@ def extract_overpass_profile(
 
         azimuth_deg = degrees(tracking_coordinates.getAzimuth()) % 360.0
 
-        overpass_profile_point = {
-            "timestamp": to_utc_iso_string(sample_time),
-            "latitude_deg": float(degrees(geodetic_point.getLatitude())),
-            "longitude_deg": float(degrees(geodetic_point.getLongitude())),
-            "altitude_m": float(geodetic_point.getAltitude()),
-            "elevation_deg": float(degrees(tracking_coordinates.getElevation())),
-            "azimuth_deg": float(azimuth_deg),
-            "range_m": float(tracking_coordinates.getRange()),
-        }
+        overpass_profile_point = OverpassProfilePoint(
+            timestamp=sample_time,
+            latitude_deg=float(degrees(geodetic_point.getLatitude())),
+            longitude_deg=float(degrees(geodetic_point.getLongitude())),
+            altitude_m=float(geodetic_point.getAltitude()),
+            elevation_deg=float(degrees(tracking_coordinates.getElevation())),
+            azimuth_deg=float(azimuth_deg),
+            range_m=float(tracking_coordinates.getRange()),
+        )
         overpass_profile_points.append(overpass_profile_point)
 
     return overpass_profile_points
@@ -167,10 +175,10 @@ def extract_overpass_profile(
 # OVERPASS BLOCK BUILDING
 def build_overpass_block(
     overpass_event: OverpassEvent,
-    high_res_trajectory: list[dict[str, object]],
+    high_res_trajectory: list[OverpassProfilePoint],
     pair_pass_number: int,
-) -> dict[str, object]:
-    """Build one JSON-friendly frontend block for a single satellite overpass."""
+) -> OverpassBlock:
+    """Build one frontend block for a single satellite overpass."""
     if not high_res_trajectory:
         raise ValueError("Cannot calculate max elevation without trajectory points.")
 
@@ -181,49 +189,49 @@ def build_overpass_block(
         raise ValueError("The overpass end time must be after the start time.")
 
     max_elevation_deg = max(
-        float(trajectory_point["elevation_deg"])
+        float(trajectory_point.elevation_deg)
         for trajectory_point in high_res_trajectory
     )
 
     satellite_name = overpass_event.satellite_name
-    ground_station_name = overpass_event.ground_station_info.name
+    groundstation_name = overpass_event.groundstation_info.name
     overpass_id = (
         f"{satellite_name}__"
-        f"{ground_station_name}__"
+        f"{groundstation_name}__"
         f"pass_{pair_pass_number:03d}"
     )
 
-    return {
-        "overpass_id": overpass_id,
-        "satellite_name": satellite_name,
-        "ground_station_name": ground_station_name,
-        "start_time": to_utc_iso_string(overpass_start_time),
-        "end_time": to_utc_iso_string(overpass_end_time),
-        "duration_seconds": float(
+    return OverpassBlock(
+        overpass_id=overpass_id,
+        satellite_name=satellite_name,
+        groundstation_name=groundstation_name,
+        start_time=overpass_start_time,
+        end_time=overpass_end_time,
+        duration_seconds=float(
             (overpass_end_time - overpass_start_time).total_seconds()
         ),
-        "max_elevation_deg": float(max_elevation_deg),
-        "high_res_trajectory": high_res_trajectory,
-    }
+        max_elevation_deg=float(max_elevation_deg),
+        high_res_trajectory=high_res_trajectory,
+    )
 
 
 # ==========================================
 # RESULT METADATA BUILDING
 def build_result_metadata(
-    task_id: str,
+    run_id: str,
     start_time: datetime,
     end_time: datetime,
     global_track_step_seconds: float,
     overpass_profile_step_seconds: float,
-) -> dict[str, object]:
-    """Build JSON-friendly run metadata for the propagation result."""
+) -> PropagationMetadata:
+    """Build run metadata for the propagation result."""
     metadata_start_time = normalize_datetime_to_utc(start_time)
     metadata_end_time = normalize_datetime_to_utc(end_time)
 
-    return {
-        "task_id": task_id,
-        "start_time": to_utc_iso_string(metadata_start_time),
-        "end_time": to_utc_iso_string(metadata_end_time),
-        "global_track_step_seconds": float(global_track_step_seconds),
-        "overpass_profile_step_seconds": float(overpass_profile_step_seconds),
-    }
+    return PropagationMetadata(
+        run_id=run_id,
+        start_time=metadata_start_time,
+        end_time=metadata_end_time,
+        global_track_step_seconds=float(global_track_step_seconds),
+        overpass_profile_step_seconds=float(overpass_profile_step_seconds),
+    )

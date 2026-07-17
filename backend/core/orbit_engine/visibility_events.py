@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 import jpype
 
-from core.models.domain import GroundStationInformation, SatelliteInformation
-from core.orbit_engine.ground_station_frames import GroundStationRuntimeContext
+from core.models.domain import GroundStationInformation, SatelliteInformation, OverpassEvent
+from core.orbit_engine.groundstation_frames import GroundStationRuntimeContext
 from core.orbit_engine.time_utils import normalize_datetime_to_utc
 
 if TYPE_CHECKING:
@@ -23,17 +23,6 @@ if TYPE_CHECKING:
 
 
 # ==========================================
-# INTERNAL DATACLASSES
-@dataclass
-class OverpassEvent:
-    """Internal AOS/LOS event pair for one satellite and one ground station."""
-    satellite_name: str
-    ground_station_info: GroundStationInformation
-    start_time: datetime
-    end_time: datetime
-
-
-# ==========================================
 # VISIBILITY EVENT HANDLING
 class VisibilityEventHandler:
     """Collect AOS/LOS event pairs for one satellite-groundstation detector."""
@@ -41,13 +30,13 @@ class VisibilityEventHandler:
     def __init__(
         self,
         satellite_name: str,
-        ground_station_info: GroundStationInformation,
+        groundstation_info: GroundStationInformation,
         satellite_event_log: list[OverpassEvent],
         propagation_start_time: datetime,
         propagation_end_time: datetime,
     ) -> None:
         self.satellite_name = satellite_name
-        self.ground_station_info = ground_station_info
+        self.groundstation_info = groundstation_info
         self.satellite_event_log = satellite_event_log
         self.propagation_start_time = normalize_datetime_to_utc(
             propagation_start_time,
@@ -99,7 +88,7 @@ class VisibilityEventHandler:
         if event_time > overpass_start_time:
             overpass_event = OverpassEvent(
                 satellite_name=self.satellite_name,
-                ground_station_info=self.ground_station_info,
+                groundstation_info=self.groundstation_info,
                 start_time=overpass_start_time,
                 end_time=event_time,
             )
@@ -123,7 +112,7 @@ class VisibilityEventHandler:
         if overpass_end_time > overpass_start_time:
             overpass_event = OverpassEvent(
                 satellite_name=self.satellite_name,
-                ground_station_info=self.ground_station_info,
+                groundstation_info=self.groundstation_info,
                 start_time=overpass_start_time,
                 end_time=overpass_end_time,
             )
@@ -145,7 +134,7 @@ class VisibilityEventHandler:
 def attach_visibility_detectors(
     propagator: NumericalPropagator,
     satellite_info: SatelliteInformation,
-    ground_station_contexts: list[GroundStationRuntimeContext],
+    groundstation_contexts: list[GroundStationRuntimeContext],
     satellite_event_log: list[OverpassEvent],
     propagation_start_time: datetime,
     propagation_end_time: datetime,
@@ -163,15 +152,15 @@ def attach_visibility_detectors(
     from org.orekit.propagation.events import ElevationDetector
     from org.orekit.propagation.events.handlers import EventHandler
 
-    for ground_station_context in ground_station_contexts:
-        ground_station_info = ground_station_context.ground_station_info
+    for groundstation_context in groundstation_contexts:
+        groundstation_info = groundstation_context.groundstation_info
         minimum_elevation_rad = radians(
-            ground_station_info.min_elevation_angle_deg,
+            groundstation_info.min_link_elevation,
         )
 
         visibility_event_handler = VisibilityEventHandler(
             satellite_name=satellite_info.name,
-            ground_station_info=ground_station_info,
+            groundstation_info=groundstation_info,
             satellite_event_log=satellite_event_log,
             propagation_start_time=visibility_start_time,
             propagation_end_time=visibility_end_time,
@@ -182,7 +171,7 @@ def attach_visibility_detectors(
         )
 
         visibility_detector = ElevationDetector(
-            ground_station_context.topocentric_frame,
+            groundstation_context.topocentric_frame,
         )
         visibility_detector = visibility_detector.withConstantElevation(
             minimum_elevation_rad,

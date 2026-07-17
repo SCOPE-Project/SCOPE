@@ -24,7 +24,10 @@ if not load_dotenv(credentials_path):
 # FastAPI App Initialization
 # -----------------------------------
 
-app = FastAPI(title="VLEO SCOPE API")
+app = FastAPI(
+    title="VLEO SCOPE API",
+    swagger_ui_parameters={"syntaxHighlight": False}
+    )
 
 # -----------------------------------
 # Enable CORS

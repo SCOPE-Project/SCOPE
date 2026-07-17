@@ -28,7 +28,7 @@ Die grobe Struktur aus `run_orekit_engine` bleibt erhalten:
 
 - `task_id`: ID fuer Fortschrittsmeldungen.
 - `satellite_infos`: Liste von `SatelliteInformation`.
-- `ground_station_infos`: Liste von `GroundStationInformation`.
+- `groundstation_infos`: Liste von `GroundStationInformation`.
 - `time_interval`: `TimeInterval` mit Start- und Endzeit.
 - `on_progress_update`: optionaler Callback mit `(task_id, message, progress)`.
 
@@ -40,7 +40,7 @@ Erwartete fachliche Bedeutung:
 - Satellitenzustand ist im GCRF Frame.
 - Groundstation-Koordinaten `latitude` und `longitude` werden als Grad interpretiert.
 - Groundstation-Hoehe wird vorerst als `0.0 m` angenommen, weil das aktuelle Domain-Modell kein Hoehenfeld enthaelt.
-- Mindest-Elevation kommt aus `GroundStationInformation.min_elevation_angle_deg` und wird als Grad interpretiert.
+- Mindest-Elevation kommt aus `GroundStationInformation.min_link_elevation` und wird als Grad interpretiert.
 
 ## Funktionalitaetsgruppe 1: Input-Validierung
 
@@ -112,7 +112,7 @@ Die Engine soll fuer jedes Satellit-Groundstation-Paar Sichtbarkeitsintervalle e
 
 Pro Paar wird ein `ElevationDetector` verwendet:
 
-- Mindest-Elevation: `ground_station_info.min_elevation_angle_deg`.
+- Mindest-Elevation: `groundstation_info.min_link_elevation`.
 - AOS ist der Zeitpunkt, an dem die Elevation die Schwelle aufsteigend kreuzt.
 - LOS ist der Zeitpunkt, an dem die Elevation die Schwelle absteigend kreuzt.
 - Jeder komplette Pass wird als Event mit Satellit, Groundstation, Startzeit und Endzeit gespeichert.
@@ -221,7 +221,7 @@ Ein Block soll so aussehen:
 {
   "overpass_id": "overpass_000001",
   "satellite_name": "SATELLITE_NAME",
-  "ground_station_name": "GROUND_STATION_NAME",
+  "groundstation_name": "GROUNDSTATION_NAME",
   "start_time": "2026-07-08T10:15:00+00:00",
   "end_time": "2026-07-08T10:22:00+00:00",
   "duration_seconds": 420.0,
@@ -233,7 +233,7 @@ Ein Block soll so aussehen:
 `overpass_id` ist nur ein technischer Key fuer das Frontend und fuer spaetere Referenzen innerhalb des Ergebnis-Payloads.
 Er ist keine SatOS-ID und keine fachliche Missions-ID.
 Die fachliche Identitaet des Overpasses ergibt sich aus Satellit, Groundstation, Startzeit und Endzeit.
-Groundstations werden im Ergebnis-Payload ueber `ground_station_name` referenziert, weil es keine separate `ground_station_id` gibt.
+Groundstations werden im Ergebnis-Payload ueber `groundstation_name` referenziert, weil es keine separate `groundstation_id` gibt.
 
 Im finalen Ergebnis-Payload werden Zeiten als ISO-Strings ausgegeben.
 Innerhalb der Berechnung duerfen und sollen `datetime`-Objekte und Orekit-/Java-Objekte verwendet werden.
@@ -268,8 +268,8 @@ Diese Punkte werden bewusst nicht in der ersten Implementierung geloest:
 
 ## Offene Entscheidungen vor Schritt 2
 
-1. Soll `GroundStationInformation` wieder `elevation_m` und `min_elevation_angle_deg` enthalten, oder bleiben fuer den MVP `0.0 m` und `0.0 deg` als Defaults?
-Antwort: Es soll nur `min_elevation_angle_deg` eingeführt werden (ist auch schon in domain.py deklariert)
+1. Soll `GroundStationInformation` wieder `elevation_m` und `min_link_elevation` enthalten, oder bleiben fuer den MVP `0.0 m` und `0.0 deg` als Defaults?
+Antwort: Es soll nur `min_link_elevation` eingeführt werden (ist auch schon in domain.py deklariert)
 2. Soll `SatelliteInformation` eine stabile `id` bekommen, oder ist `name` der stabile Key fuer `global_tracks` und `overpass_blocks`?
 Antwort: `name` ist der stabile key
 3. Sollen naive `datetime`-Werte abgelehnt oder als UTC interpretiert werden?

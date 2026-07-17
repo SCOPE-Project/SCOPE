@@ -1,7 +1,13 @@
 # /core/models/domain.py
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import List
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from org.orekit.frames import TopocentricFrame
 
 @dataclass
 class SatelliteInformation:
@@ -15,7 +21,7 @@ class GroundStationInformation:
     name: str
     latitude: float
     longitude: float
-    min_elevation_angle_deg: float
+    min_link_elevation: float
 
 @dataclass
 class TimeInterval:
@@ -26,12 +32,68 @@ class TimeInterval:
 class OrbitPropagationTask:
     task_id: str
     satellite_infos: List[SatelliteInformation]
-    ground_station_infos: List[GroundStationInformation]
+    groundstation_infos: List[GroundStationInformation]
     time_interval: TimeInterval
 
 @dataclass
-class PropagationRawResult:
-    """Typed orbit engine result from propagation before API-layer serialization."""
-    metadata: dict[str, object]
-    global_tracks: dict[str, list[dict[str, object]]]
-    overpass_blocks: list[dict[str, object]]
+class PropagationMetadata:
+    run_id: str
+    start_time: datetime
+    end_time: datetime
+    global_track_step_seconds: float
+    overpass_profile_step_seconds: float
+
+@dataclass
+class GlobalTrackPoint:
+    timestamp: datetime
+    position_gcrf_m: List[float]
+    velocity_gcrf_mps: List[float]
+    latitude_deg: float
+    longitude_deg: float
+    altitude_m: float
+
+@dataclass
+class OverpassProfilePoint:
+    timestamp: datetime
+    latitude_deg: float
+    longitude_deg: float
+    altitude_m: float
+    elevation_deg: float
+    azimuth_deg: float
+    range_m: float
+
+@dataclass
+class OverpassBlock:
+    overpass_id: str
+    satellite_name: str
+    groundstation_name: str
+    start_time: datetime
+    end_time: datetime
+    duration_seconds: float
+    max_elevation_deg: float
+    high_res_trajectory: List[OverpassProfilePoint]
+
+@dataclass
+class SatelliteTrajectory:
+    satellite_name: str
+    track: List[GlobalTrackPoint]
+
+@dataclass
+class PropagationResult:
+    metadata: PropagationMetadata
+    global_tracks: List[SatelliteTrajectory]
+    overpass_blocks: List[OverpassBlock]
+
+@dataclass
+class GroundStationRuntimeContext:
+    """Runtime link between a ground station and its Orekit topocentric frame."""
+    groundstation_info: GroundStationInformation
+    topocentric_frame: TopocentricFrame
+
+@dataclass
+class OverpassEvent:
+    """Internal AOS/LOS event pair for one satellite and one ground station."""
+    satellite_name: str
+    groundstation_info: GroundStationInformation
+    start_time: datetime
+    end_time: datetime
