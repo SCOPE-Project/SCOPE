@@ -26,7 +26,7 @@ test_gs = GroundStationInformation(
     name="gs1",
     latitude=0.0,
     longitude=0.0,
-    min_elevation_angle_deg=10.0,
+    min_link_elevation=10.0,
 )
 
 result = run_orekit_engine(

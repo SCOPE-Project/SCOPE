@@ -21,7 +21,7 @@ class GroundStationInformation:
     name: str
     latitude: float
     longitude: float
-    min_elevation_angle_deg: float
+    min_link_elevation: float
 
 @dataclass
 class TimeInterval:

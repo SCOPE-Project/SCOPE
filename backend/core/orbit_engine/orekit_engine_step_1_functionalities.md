@@ -40,7 +40,7 @@ Erwartete fachliche Bedeutung:
 - Satellitenzustand ist im GCRF Frame.
 - Groundstation-Koordinaten `latitude` und `longitude` werden als Grad interpretiert.
 - Groundstation-Hoehe wird vorerst als `0.0 m` angenommen, weil das aktuelle Domain-Modell kein Hoehenfeld enthaelt.
-- Mindest-Elevation kommt aus `GroundStationInformation.min_elevation_angle_deg` und wird als Grad interpretiert.
+- Mindest-Elevation kommt aus `GroundStationInformation.min_link_elevation` und wird als Grad interpretiert.
 
 ## Funktionalitaetsgruppe 1: Input-Validierung
 
@@ -112,7 +112,7 @@ Die Engine soll fuer jedes Satellit-Groundstation-Paar Sichtbarkeitsintervalle e
 
 Pro Paar wird ein `ElevationDetector` verwendet:
 
-- Mindest-Elevation: `groundstation_info.min_elevation_angle_deg`.
+- Mindest-Elevation: `groundstation_info.min_link_elevation`.
 - AOS ist der Zeitpunkt, an dem die Elevation die Schwelle aufsteigend kreuzt.
 - LOS ist der Zeitpunkt, an dem die Elevation die Schwelle absteigend kreuzt.
 - Jeder komplette Pass wird als Event mit Satellit, Groundstation, Startzeit und Endzeit gespeichert.
@@ -268,8 +268,8 @@ Diese Punkte werden bewusst nicht in der ersten Implementierung geloest:
 
 ## Offene Entscheidungen vor Schritt 2
 
-1. Soll `GroundStationInformation` wieder `elevation_m` und `min_elevation_angle_deg` enthalten, oder bleiben fuer den MVP `0.0 m` und `0.0 deg` als Defaults?
-Antwort: Es soll nur `min_elevation_angle_deg` eingeführt werden (ist auch schon in domain.py deklariert)
+1. Soll `GroundStationInformation` wieder `elevation_m` und `min_link_elevation` enthalten, oder bleiben fuer den MVP `0.0 m` und `0.0 deg` als Defaults?
+Antwort: Es soll nur `min_link_elevation` eingeführt werden (ist auch schon in domain.py deklariert)
 2. Soll `SatelliteInformation` eine stabile `id` bekommen, oder ist `name` der stabile Key fuer `global_tracks` und `overpass_blocks`?
 Antwort: `name` ist der stabile key
 3. Sollen naive `datetime`-Werte abgelehnt oder als UTC interpretiert werden?
