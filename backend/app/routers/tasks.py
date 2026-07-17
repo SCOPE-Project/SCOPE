@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Response
 
 from app.services import state_manager, task_orchestrator
 
@@ -19,8 +19,8 @@ from app.services.asset_repository import AssetRepository
 router = APIRouter(prefix="/tasks", tags=["Task Processing Workspace"])
 
 @router.get("/initialize", response_model=AssetInitializationResponse)
-def initialize_assets():
-    AssetRepository.initialize_repository()
+def initialize_assets(force_refresh: bool = False):
+    AssetRepository.initialize_repository(force_refresh=force_refresh)
     
     initialized_asset_infos = AssetRepository.get_assets()
     initialized_asset_schedules = AssetRepository.get_asset_schedules()
@@ -76,4 +76,9 @@ def get_task_result(task_id: str):
             detail=f"Task is in state '{task_result.status}' and has no result payload yet."
             )
             
-    return task_result
+    # Bypass FastAPI's runtime validation/serialization
+    # return task_result
+    return Response(
+        content=task_result.model_dump_json(),
+        media_type="application/json"
+    )
