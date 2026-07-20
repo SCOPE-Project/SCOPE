@@ -20,4 +20,4 @@ def normalize_datetime_to_utc(value: datetime) -> datetime:
 def to_utc_iso_string(value: datetime) -> str:
     """Return a UTC ISO timestamp for JSON-friendly engine output."""
     utc_datetime = normalize_datetime_to_utc(value)
-    return utc_datetime.isoformat()
+    return utc_datetime.isoformat().replace("+00:00", "Z")

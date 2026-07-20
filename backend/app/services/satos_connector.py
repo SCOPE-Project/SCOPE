@@ -22,8 +22,12 @@ def satos_get_asset_list() -> list[SatelliteInfoModel]:
     
     :return: list[SatelliteInfoModel] list of satellites
     """
-    with SatIOSession() as session:
+    try:
+        session = SatIOSession.get_session()
         return get_satellite_list(session)
+    except LookupError:
+        with SatIOSession() as session:
+            return get_satellite_list(session)
 
 # /satos/asset
 def satos_get_asset(asset_name: str) -> SatelliteModel:
@@ -34,8 +38,12 @@ def satos_get_asset(asset_name: str) -> SatelliteModel:
     :param asset_name: Name of the satellite to fetch
     :return: SatelliteModel (single latest version)
     """
-    with SatIOSession() as session:
+    try:
+        session = SatIOSession.get_session()
         return get_satellite(session, satellite_name=asset_name)
+    except LookupError:
+        with SatIOSession() as session:
+            return get_satellite(session, satellite_name=asset_name)
 
 ## /satos/schedule_events
 #def satos_get_schedule_events(
@@ -79,5 +87,9 @@ def satos_get_activities_list(schedule_name: str) -> list[ActivityInfoModel]:
     param start_time
     param end_time
     """
-    with SatIOSession() as session:
+    try:
+        session = SatIOSession.get_session()
         return get_activity_list(session, schedule_name)
+    except LookupError:
+        with SatIOSession() as session:
+            return get_activity_list(session, schedule_name)

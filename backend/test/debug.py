@@ -17,13 +17,14 @@ if not load_dotenv(credentials_path):
 
 from app.services.asset_repository import AssetRepository
 
-result = AssetRepository.initialize_repository()
+AssetRepository.initialize_repository()
+result = AssetRepository.get_assets()
 
 print("Satellite Cache:")
-for satellite in AssetRepository._satellite_cache.values():
+for satellite in AssetRepository._satellite_infos.values():
     print(satellite)
 print("\nGroundstation Cache:")
-for groundstation in AssetRepository._groundstation_cache.values():
+for groundstation in AssetRepository._groundstation_infos.values():
     print(groundstation)
 print("\nIneligible Cache:")
 for ineligible in AssetRepository._ineligible_cache.items():

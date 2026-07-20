@@ -7,7 +7,7 @@ from utils.propagation_utils.kep2rv import kep2rv
 # Initial Keplerian elements for the satellite
 a = Constants.R_E + 300_000.0
 e = 0.0001
-i = np.deg2rad(70.0)
+i = np.deg2rad(96.0)
 raan = 0.0
 omega = 0.0
 m0 = 0.0

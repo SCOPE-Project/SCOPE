@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Response
 
 from app.services import state_manager, task_orchestrator
 
@@ -7,19 +7,24 @@ from app.models.tasks import (
     TradeOffRequest,
     TaskStatusResponse,
     TaskResultResponse,
-    TaskReceiptResponse
+    TaskReceiptResponse,
+    AssetInformation,
+    AssetInitializationResponse
 )
-
-from app.models.tasks import InitializeRepositoryResponse
 
 from app.services.asset_repository import AssetRepository
 
+
+
 router = APIRouter(prefix="/tasks", tags=["Task Processing Workspace"])
 
-@router.get("/initialize", response_model=InitializeRepositoryResponse)
-def initialize_assets():
-    initialized_assets = AssetRepository.initialize_repository()
-    return {"assets": initialized_assets}
+@router.get("/initialize", response_model=AssetInitializationResponse)
+def initialize_assets(force_refresh: bool = False):
+    AssetRepository.initialize_repository(force_refresh=force_refresh)
+    
+    initialized_asset_infos = AssetRepository.get_assets()
+    initialized_asset_schedules = AssetRepository.get_asset_schedules()
+    return {"assets": initialized_asset_infos, "schedules": initialized_asset_schedules}
 
 @router.post("/extract-overpasses", response_model=TaskReceiptResponse)
 def trigger_orbit_engine(payload: OrbitEngineRequest, background_tasks: BackgroundTasks):
@@ -69,6 +74,11 @@ def get_task_result(task_id: str):
         raise HTTPException(
             status_code=400, 
             detail=f"Task is in state '{task_result.status}' and has no result payload yet."
-        )
-    
-    return task_result
+            )
+            
+    # Bypass FastAPI's runtime validation/serialization
+    # return task_result
+    return Response(
+        content=task_result.model_dump_json(),
+        media_type="application/json"
+    )

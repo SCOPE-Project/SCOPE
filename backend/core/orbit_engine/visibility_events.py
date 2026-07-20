@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import jpype
 
-from core.models.domain import GroundStationInformation, SatelliteInformation
+from core.models.domain import GroundStationInformation, SatelliteInformation, OverpassEvent
 from core.orbit_engine.groundstation_frames import GroundStationRuntimeContext
 from core.orbit_engine.time_utils import normalize_datetime_to_utc
 
@@ -20,17 +20,6 @@ if TYPE_CHECKING:
     from org.orekit.propagation.numerical import NumericalPropagator
     from org.orekit.time import AbsoluteDate
 
-
-
-# ==========================================
-# INTERNAL DATACLASSES
-@dataclass
-class OverpassEvent:
-    """Internal AOS/LOS event pair for one satellite and one ground station."""
-    satellite_name: str
-    groundstation_info: GroundStationInformation
-    start_time: datetime
-    end_time: datetime
 
 
 # ==========================================
