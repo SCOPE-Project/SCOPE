@@ -1,14 +1,19 @@
 # core/orbit_engine/result_extraction.py
 
-from org.orekit.bodies import OneAxisEllipsoid, GeodeticPoint
-from org.orekit.frames import Frame
-from org.orekit.propagation import BoundedPropagator
+from __future__ import annotations
+
 from datetime import datetime, timedelta
 from math import degrees
+from typing import TYPE_CHECKING
 
 from core.orbit_engine.groundstation_frames import GroundStationRuntimeContext
 from core.orbit_engine.time_utils import normalize_datetime_to_utc, to_utc_iso_string
 from core.orbit_engine.visibility_events import OverpassEvent
+
+if TYPE_CHECKING:
+    from org.orekit.bodies import OneAxisEllipsoid
+    from org.orekit.frames import Frame
+    from org.orekit.propagation import BoundedPropagator
 
 
 # ==========================================

@@ -123,10 +123,10 @@ def validate_orekit_engine_inputs(
             )
 
         if (
-            not isinstance(groundstation_info.min_elevation_angle_deg, Real)
-            or isinstance(groundstation_info.min_elevation_angle_deg, bool)
-            or groundstation_info.min_elevation_angle_deg < 0.0
-            or groundstation_info.min_elevation_angle_deg > 90.0
+            not isinstance(groundstation_info.min_link_elevation, Real)
+            or isinstance(groundstation_info.min_link_elevation, bool)
+            or groundstation_info.min_link_elevation < 0.0
+            or groundstation_info.min_link_elevation > 90.0
         ):
             raise ValueError(
                 f"Ground station {groundstation_info.name!r} minimum elevation "

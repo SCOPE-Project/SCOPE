@@ -166,7 +166,7 @@ def attach_visibility_detectors(
     for groundstation_context in groundstation_contexts:
         groundstation_info = groundstation_context.groundstation_info
         minimum_elevation_rad = radians(
-            groundstation_info.min_elevation_angle_deg,
+            groundstation_info.min_link_elevation,
         )
 
         visibility_event_handler = VisibilityEventHandler(

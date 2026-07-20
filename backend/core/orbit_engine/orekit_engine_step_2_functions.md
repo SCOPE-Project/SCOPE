@@ -9,8 +9,8 @@ Die eigentliche Implementierung erfolgt danach in Schritt 3 Funktion fuer Funkti
 ## Uebernommene Entscheidungen aus Schritt 1
 
 - `SatelliteInformation.name` ist der stabile Satelliten-Key.
-- `GroundStationInformation.min_elevation_angle_deg` wird verwendet.
-- `GroundStationInformation.min_elevation_angle_deg` muss im Bereich `[0.0, 90.0]` liegen.
+- `GroundStationInformation.min_link_elevation` wird verwendet.
+- `GroundStationInformation.min_link_elevation` muss im Bereich `[0.0, 90.0]` liegen.
 - Groundstation-Hoehe bleibt im MVP `0.0 m`, weil das Domain-Modell kein Hoehenfeld enthaelt.
 - Naive `datetime`-Werte werden als UTC interpretiert.
 - Globale Tracks werden mit `60 s` gesampelt.
@@ -293,7 +293,7 @@ def attach_ElevationDetectors(
 Verantwortung:
 
 - Haengt pro Groundstation einen `ElevationDetector` an den Satelliten-Propagator.
-- Verwendet `groundstation_info.min_elevation_angle_deg` als Elevationsschwelle.
+- Verwendet `groundstation_info.min_link_elevation` als Elevationsschwelle.
 - Schreibt gefundene AOS/LOS-Paare in `satellite_event_log`.
 
 Wichtig:

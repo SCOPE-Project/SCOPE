@@ -1,12 +1,17 @@
 # core/orbit_engine/propagator_builder.py
 
-from org.orekit.propagation import BoundedPropagator
-from org.orekit.propagation.numerical import NumericalPropagator
-from org.orekit.frames import Frame
+from __future__ import annotations
+
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from core.models.domain import SatelliteInformation
 from core.orbit_engine.time_utils import normalize_datetime_to_utc
+
+if TYPE_CHECKING:
+    from org.orekit.frames import Frame
+    from org.orekit.propagation import BoundedPropagator
+    from org.orekit.propagation.numerical import NumericalPropagator
 
 
 # ==========================================

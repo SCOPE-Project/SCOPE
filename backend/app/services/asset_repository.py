@@ -51,7 +51,7 @@ class AssetRepository:
                 var_names = {var.name for var in raw_model.variableDefinitions}
                 
                 is_satellite_candidate = any(name in var_names for name in ["position_vector", "velocity_vector", "state_timestamp"])
-                is_groundstation_candidate = any(name in var_names for name in ["latitude", "longitude", "min_elevation_angle_deg"])
+                is_groundstation_candidate = any(name in var_names for name in ["latitude", "longitude", "min_link_elevation"])
 
                 if is_satellite_candidate and is_groundstation_candidate:
                     reason = "Ambiguous asset type: contains both satellite and ground station variables"
@@ -200,7 +200,7 @@ class AssetRepository:
         # 2. Initialize sentinels instead of defaults
         latitude = None
         longitude = None
-        min_elevation_angle_deg = None
+        min_link_elevation = None
         
         # 3. Extract values and fail hard on malformed definitions
         for var in groundstation_model.variableDefinitions:
@@ -218,26 +218,26 @@ class AssetRepository:
                 if longitude == 0.0:
                     warnings.warn(f"{groundstation_name}: Longitude is 0.0, is this correct or an API default?", UserWarning)
                     
-            elif var.name == "min_elevation_angle_deg":
+            elif var.name == "min_link_elevation":
                 if not var.floatDefinition or var.floatDefinition.defaultValue is None:
-                    raise ValueError(f"{groundstation_name}: Malformed groundstation model: 'min_elevation_angle_deg' missing definition or value.")
-                min_elevation_angle_deg = float(var.floatDefinition.defaultValue)
-                if min_elevation_angle_deg == 0.0:
-                    warnings.warn(f"{groundstation_name}: min_elevation_angle_deg is 0.0, is this correct or an API default?", UserWarning)
+                    raise ValueError(f"{groundstation_name}: Malformed groundstation model: 'min_link_elevation' missing definition or value.")
+                min_link_elevation = float(var.floatDefinition.defaultValue)
+                if min_link_elevation == 0.0:
+                    warnings.warn(f"{groundstation_name}: min_link_elevation is 0.0, is this correct or an API default?", UserWarning)
 
         # 4. Fail hard if variables were entirely missing from the loop
         if latitude is None:
             raise ValueError(f"{groundstation_name}: Missing required variable: 'latitude'")
         if longitude is None:
             raise ValueError(f"{groundstation_name}: Missing required variable: 'longitude'")
-        if min_elevation_angle_deg is None:
-            raise ValueError(f"{groundstation_name}: Missing required variable: 'min_elevation_angle_deg'")
+        if min_link_elevation is None:
+            raise ValueError(f"{groundstation_name}: Missing required variable: 'min_link_elevation'")
         
         groundstation_information = GroundStationInformation(
             name=groundstation_name,
             latitude=latitude,
             longitude=longitude,
-            min_elevation_angle_deg=min_elevation_angle_deg,
+            min_link_elevation=min_link_elevation,
         )
         
         # 5. Cache and return

@@ -1,11 +1,15 @@
 # core/orbit_engine/groundstation_frames.py
+from __future__ import annotations
 
-from org.orekit.frames import TopocentricFrame
-from org.orekit.bodies import BodyShape
 from dataclasses import dataclass
 from math import radians
+from typing import TYPE_CHECKING
 
 from core.models.domain import GroundStationInformation
+
+if TYPE_CHECKING:
+    from org.orekit.bodies import BodyShape
+    from org.orekit.frames import TopocentricFrame
 
 
 # ==========================================
