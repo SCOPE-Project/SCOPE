@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useState } from 'react'
 
+const BACKEND_BASE_URL = 'http://localhost:8000'
+
 export default function App() {
   const [assets, setAssets] = useState([])
   const [loading, setLoading] = useState(false)
@@ -35,12 +37,12 @@ export default function App() {
   useEffect(() => {
     const checkConnections = async () => {
       try {
-        const backendResponse = await fetch('http://localhost:8000/status')
+        const backendResponse = await fetch(`${BACKEND_BASE_URL}/status`)
         if (backendResponse.ok) {
           setBackendAlive(true)
 
           try {
-            const satosResponse = await fetch('http://localhost:8000/satos/asset/list')
+            const satosResponse = await fetch(`${BACKEND_BASE_URL}/satos/asset/list`)
             setSatosAlive(satosResponse.ok)
           } catch {
             setSatosAlive(false)
@@ -338,6 +340,22 @@ export default function App() {
     }
   }
 
+  const normalizeAssetClassification = (asset) => {
+    if (asset.classification === 'satellite') {
+      return 'satellite'
+    }
+
+    if (asset.classification === 'groundstation' || asset.classification === 'ground_station') {
+      return 'ground_station'
+    }
+
+    if (asset.classification === 'ineligible' || asset.eligible === false) {
+      return 'ineligible'
+    }
+
+    return asset.classification ?? 'unknown'
+  }
+
   const fetchAssets = async () => {
     setLoading(true)
     setError(null)
@@ -345,7 +363,7 @@ export default function App() {
     setSelectedSatellites([])
     setSelectedGroundStations([])
     try {
-      const response = await fetch('http://localhost:8000/satos/initialize')
+      const response = await fetch(`${BACKEND_BASE_URL}/tasks/initialize`)
       if (!response.ok) {
         throw new Error(`Server returned status ${response.status}`)
       }
@@ -445,9 +463,11 @@ export default function App() {
     </header>
   )
 
-  const satelliteAssets = assets.filter((asset) => asset.classification === 'satellite')
-  const groundStationAssets = assets.filter((asset) => asset.classification === 'ground_station')
-  const unavailableAssets = assets.filter((asset) => asset.classification === 'ineligible')
+  const satelliteAssets = assets.filter((asset) => normalizeAssetClassification(asset) === 'satellite')
+  const groundStationAssets = assets.filter((asset) => normalizeAssetClassification(asset) === 'ground_station')
+  const unavailableAssets = assets.filter(
+    (asset) => normalizeAssetClassification(asset) === 'ineligible'
+  )
   const launchRequirementsMet =
     selectedSatellites.length >= 1 && selectedGroundStations.length >= 1
 

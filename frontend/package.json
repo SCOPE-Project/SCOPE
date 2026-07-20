@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "check:backend-compat": "node ./scripts/backend-compatibility-check.mjs"
   },
   "dependencies": {
     "react": "^19.2.6",
