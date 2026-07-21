@@ -1000,6 +1000,8 @@ export default function App() {
     assetSchedules,
     [...selectedSatellites, ...selectedGroundStations],
   )
+  const schedulableOverviewRows = overviewRows.filter((row) => !row.scheduleBlocked)
+  const tradeOffDemoAvailable = useDemoData && schedulerLaunched && schedulableOverviewRows.length > 0
   const timelineModel = buildTimelineModel(
     overviewRows,
     tradeOffCards,
@@ -1027,6 +1029,10 @@ export default function App() {
       </svg>
       <span className="asset-warning-tooltip">{message}</span>
     </span>
+  )
+
+  const renderDemoBadge = () => (
+    <span className="demo-badge">Demo</span>
   )
 
   const renderSectionChevron = (expanded) => (
@@ -1510,8 +1516,18 @@ export default function App() {
                   <span>End</span>
                   <span>Max Elev.</span>
                   <span>Duration</span>
-                  {tradeOffsCalculated && <span>Trade Off ID</span>}
-                  {tradeOffsCalculated && <span>Score</span>}
+                  {tradeOffsCalculated && (
+                    <span className="overview-header-cell">
+                      <span>Trade Off ID</span>
+                      {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                    </span>
+                  )}
+                  {tradeOffsCalculated && (
+                    <span className="overview-header-cell">
+                      <span>Score</span>
+                      {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                    </span>
+                  )}
                 </div>
                 {overviewRows.length === 0 ? (
                   <>
@@ -1579,7 +1595,7 @@ export default function App() {
             <div className="panel-action-wrapper">
               <button
                 className="panel-action"
-                disabled={!schedulerLaunched || calculatingTradeOffs || !useDemoData}
+                disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffDemoAvailable}
                 onClick={handleCalculateTradeOffs}
               >
                 {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
@@ -1589,22 +1605,29 @@ export default function App() {
                   {!schedulerLaunched
                     ? 'Launch Communication Scheduler first and wait for extraction to complete.'
                     : !useDemoData
-                      ? 'Enable Demo mode to preview simulated trade-off groups and scores.'
-                      : 'Calculate simulated trade-off groups from the extracted overpasses.'}
+                      ? 'Trade-off calculation is not connected for real-data mode yet. Enable demo data to preview this workflow.'
+                      : !tradeOffDemoAvailable
+                        ? overviewRows.length > 0
+                          ? 'All extracted overpasses are blocked by existing scheduled activities with higher priority.'
+                          : 'Launch the scheduler first so extracted overpasses are available for the simulated trade-off step.'
+                        : 'Calculate the simulated trade-off groups for the currently visible extracted overpasses.'}
                 </span>
               )}
             </div>
           </section>
 
           <section className="panel tradeoff-panel">
-            <h2>Trade-Off</h2>
+            <div className="panel-heading-title">
+              <h2>Trade-Off</h2>
+              {useDemoData && schedulerLaunched && renderDemoBadge()}
+            </div>
             {tradeOffsCalculated && (
               <p className="tradeoff-summary">
                 {tradeOffCards.length} trade-off group{tradeOffCards.length === 1 ? '' : 's'} identified.
               </p>
             )}
-            {!tradeOffsCalculated && (
-              <p>Trade-off decision cards will appear here after the trade-off calculation.</p>
+            {!tradeOffsCalculated && !useDemoData && (
+              <p>Enable Demo mode to use Trade-Off view.</p>
             )}
             {tradeOffsCalculated && tradeOffCards.length === 0 && (
               <p>No trade-off groups were identified for the current selection.</p>

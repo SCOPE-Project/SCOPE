@@ -729,6 +729,28 @@ body {
   color: var(--accent-primary);
 }
 
+@media (max-width: 760px) {
+  .time-window-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.demo-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.18rem 0.45rem;
+  border-radius: 0.18rem;
+  border: 1px solid #e2bf76;
+  background: #fff5dc;
+  color: #815300;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .time-window-field span {
   font-size: 0.84rem;
   color: var(--text-secondary);
@@ -1027,6 +1049,31 @@ body {
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.overview-header-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.16rem;
+  white-space: nowrap;
+}
+
+.overview-header-note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.6rem;
+  padding: 0.16rem 0.34rem;
+  border: 1px solid #d8b089;
+  border-radius: 0.18rem;
+  background: #f5e6d8;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8a4f12;
+  line-height: 1;
 }
 
 .overview-list-row {
