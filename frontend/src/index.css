@@ -1184,6 +1184,12 @@ body {
   text-transform: uppercase;
 }
 
+.overview-row-note--demo {
+  border-color: #e2bf76;
+  background: #fff1cf;
+  color: #815300;
+}
+
 .tradeoff-id-pill {
   display: inline-flex;
   align-items: center;

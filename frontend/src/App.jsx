@@ -153,83 +153,217 @@ export default function App() {
     setActiveTimelineItemId(null)
   }
 
-  const buildMockOverpasses = (selectedSatelliteNames, selectedGroundStationNames) => {
-    const candidateGroundStations =
-      selectedGroundStationNames.length > 0
-        ? selectedGroundStationNames.slice(0, Math.min(2, selectedGroundStationNames.length))
-        : ['GS-TBD-1']
-
-    let overpassIndex = 1
-
-    return selectedSatelliteNames.flatMap((satellite, satelliteIndex) =>
-      candidateGroundStations.map((groundStation, groundStationIndex) => ({
-        overpassId: `OP-${String(overpassIndex++).padStart(3, '0')}`,
-        satId: satellite,
-        gsId: groundStation,
-        duration: `${8 + satelliteIndex * 2 + groundStationIndex} min`,
-      }))
-    )
-  }
-
-  const buildMockTradeOffState = (rows) => {
-    const eligibleRows = rows.filter((row) => !row.scheduleBlocked)
-    const rowsBySatellite = eligibleRows.reduce((groups, row) => {
-      if (!groups[row.satId]) {
-        groups[row.satId] = []
-      }
-      groups[row.satId].push(row)
-      return groups
-    }, {})
-
-    let conflictIndex = 1
+  const buildDemoTradeOffState = (rows) => {
+    const schedulableRows = rows.filter((row) => !row.scheduleBlocked)
     const rowTradeOffMap = new Map()
-    const rowTradeOffScoreMap = new Map()
-    const rowTradeOffColorMap = new Map()
+    const sortedRows = [...schedulableRows].sort((left, right) => {
+      const satCompare = String(left.satId).localeCompare(String(right.satId))
+      if (satCompare !== 0) {
+        return satCompare
+      }
+      return (toTimestamp(left.startTime) ?? 0) - (toTimestamp(right.startTime) ?? 0)
+    })
 
-    const groups = Object.entries(rowsBySatellite)
-      .filter(([, groupRows]) => groupRows.length > 1)
-      .map(([satelliteId, groupRows], groupIndex) => {
-        const groupLabel = `TO-${String(conflictIndex).padStart(2, '0')}`
-        const colorIndex = groupIndex % TRADE_OFF_ACCENT_COLORS.length
-        const options = groupRows.map((row, optionIndex) => {
-          const score = `${92 - (conflictIndex - 1) * 8 - optionIndex * 9}/100`
-          rowTradeOffMap.set(row.overpassId, groupLabel)
-          rowTradeOffScoreMap.set(row.overpassId, score)
-          rowTradeOffColorMap.set(row.overpassId, colorIndex)
-          return {
-            optionId: `${satelliteId}-${row.overpassId}`,
-            overpassId: row.overpassId,
-            satId: row.satId,
-            gsId: row.gsId,
-            duration: row.duration,
-            tradeOffId: groupLabel,
-            score,
-            recommended: optionIndex === 0,
-            colorIndex,
+    const groupedRows = []
+
+    sortedRows.forEach((row) => {
+      const startTimestamp = toTimestamp(row.startTime)
+      const endTimestamp = toTimestamp(row.endTime)
+
+      if (startTimestamp === null || endTimestamp === null || endTimestamp <= startTimestamp) {
+        return
+      }
+
+      const overlapsWithGroup = (group) =>
+        group.satId === row.satId
+        && group.rows.some((groupRow) => {
+          const groupStart = toTimestamp(groupRow.startTime)
+          const groupEnd = toTimestamp(groupRow.endTime)
+
+          if (groupStart === null || groupEnd === null) {
+            return false
           }
+
+          return startTimestamp < groupEnd && endTimestamp > groupStart
         })
 
-        const group = {
-          id: `tradeoff-${conflictIndex}`,
-          title: groupLabel,
-          resourceLabel: satelliteId,
-          reason: `Multiple downlink options for the same satellite overlap in the current planning window.`,
+      const existingGroup = groupedRows.find(overlapsWithGroup)
+
+      if (existingGroup) {
+        existingGroup.rows.push(row)
+        return
+      }
+
+      groupedRows.push({
+        satId: row.satId,
+        rows: [row],
+      })
+    })
+
+    const groups = groupedRows
+      .filter((group) => group.rows.length > 1)
+      .map((group, groupIndex) => {
+        const tradeOffId = `TO-${String(groupIndex + 1).padStart(2, '0')}`
+        const colorIndex = groupIndex % TRADE_OFF_ACCENT_COLORS.length
+
+        const options = group.rows
+          .map((row) => {
+            const durationScore = Math.min(35, (row.durationSeconds ?? 0) / 60 * 3)
+            const elevationScore = Math.min(45, Number(row.maxElevationDeg ?? 0) * 0.8)
+            const totalScoreValue = Math.round(20 + durationScore + elevationScore)
+
+            return {
+              optionId: `${tradeOffId}-${row.overpassId}`,
+              overpassId: row.overpassId,
+              satId: row.satId,
+              gsId: row.gsId,
+              duration: row.duration,
+              startTime: row.startTime,
+              endTime: row.endTime,
+              maxElevation: row.maxElevation,
+              scoreValue: totalScoreValue,
+              score: `${totalScoreValue}/100`,
+              colorIndex,
+            }
+          })
+          .sort((left, right) => right.scoreValue - left.scoreValue)
+          .map((option, optionIndex) => ({
+            ...option,
+            recommended: optionIndex === 0,
+          }))
+
+        options.forEach((option) => {
+          rowTradeOffMap.set(option.overpassId, {
+            tradeOffId,
+            score: option.score,
+            colorIndex,
+          })
+        })
+
+        return {
+          id: `tradeoff-${tradeOffId}`,
+          title: tradeOffId,
+          resourceLabel: group.satId,
+          reason: `${group.satId} has overlapping downlink opportunities in this planning window and can only serve one of them.`,
           options,
           colorIndex,
         }
-
-        conflictIndex += 1
-        return group
       })
 
     const enrichedRows = rows.map((row) => ({
       ...row,
-      tradeOffId: rowTradeOffMap.get(row.overpassId) ?? '—',
-      tradeOffScore: rowTradeOffScoreMap.get(row.overpassId) ?? '—',
-      tradeOffColorIndex: rowTradeOffColorMap.get(row.overpassId) ?? null,
+      tradeOffId: row.scheduleBlocked ? '—' : rowTradeOffMap.get(row.overpassId)?.tradeOffId ?? '—',
+      tradeOffScore: row.scheduleBlocked ? '—' : rowTradeOffMap.get(row.overpassId)?.score ?? '—',
+      tradeOffColorIndex: row.scheduleBlocked ? null : rowTradeOffMap.get(row.overpassId)?.colorIndex ?? null,
     }))
 
     return { enrichedRows, groups }
+  }
+
+  const buildDemoTradeOffPreviewRows = (
+    rows,
+    planningWindow,
+    selectedSatelliteNames,
+    selectedGroundStationNames,
+  ) => {
+    const startTimestamp = toTimestamp(planningWindow?.startTime)
+    const endTimestamp = toTimestamp(planningWindow?.endTime)
+
+    if (
+      startTimestamp === null
+      || endTimestamp === null
+      || endTimestamp <= startTimestamp
+    ) {
+      return rows
+    }
+
+    const demoSatellites =
+      selectedSatelliteNames.length > 0
+        ? selectedSatelliteNames
+        : [...new Set(rows.map((row) => row.satId).filter(Boolean))]
+    const demoGroundStations =
+      selectedGroundStationNames.length > 1
+        ? selectedGroundStationNames
+        : [...new Set(rows.map((row) => row.gsId).filter(Boolean))]
+
+    if (demoSatellites.length === 0 || demoGroundStations.length < 2) {
+      return rows
+    }
+
+    const totalWindowMinutes = Math.max(90, Math.floor((endTimestamp - startTimestamp) / 60000))
+    const nextOverpassSequence =
+      rows.reduce((highest, row) => {
+        const match = String(row.overpassId ?? '').match(/^OP-(\d+)$/)
+        if (!match) {
+          return highest
+        }
+        return Math.max(highest, Number.parseInt(match[1], 10))
+      }, 0) + 1
+
+    const previewRows = []
+    const groupCount = Math.min(2, demoSatellites.length)
+    let sequence = nextOverpassSequence
+
+    for (let groupIndex = 0; groupIndex < groupCount; groupIndex += 1) {
+      const satId = demoSatellites[groupIndex]
+      const gsA = demoGroundStations[groupIndex % demoGroundStations.length]
+      const gsB = demoGroundStations[(groupIndex + 1) % demoGroundStations.length]
+
+      if (!satId || !gsA || !gsB || gsA === gsB) {
+        continue
+      }
+
+      const baseOffsetMinutes = Math.min(
+        totalWindowMinutes - 22,
+        Math.max(12, Math.floor(totalWindowMinutes * (0.26 + groupIndex * 0.22))),
+      )
+
+      const firstStart = new Date(startTimestamp + baseOffsetMinutes * 60000)
+      const firstEnd = new Date(firstStart.getTime() + 9 * 60000)
+      const secondStart = new Date(firstStart.getTime() + 2 * 60000)
+      const secondEnd = new Date(secondStart.getTime() + 10 * 60000)
+
+      previewRows.push(
+        {
+          overpassId: `OP-${String(sequence++).padStart(3, '0')}`,
+          satId,
+          gsId: gsA,
+          duration: '9 min',
+          durationSeconds: 9 * 60,
+          startTime: firstStart.toISOString(),
+          endTime: firstEnd.toISOString(),
+          maxElevation: '57.4°',
+          maxElevationDeg: 57.4,
+          scheduleBlocked: false,
+          scheduleBlockLabel: null,
+          scheduleBlockAsset: null,
+          tradeOffId: '—',
+          tradeOffScore: '—',
+          tradeOffColorIndex: null,
+          demoGenerated: true,
+        },
+        {
+          overpassId: `OP-${String(sequence++).padStart(3, '0')}`,
+          satId,
+          gsId: gsB,
+          duration: '10 min',
+          durationSeconds: 10 * 60,
+          startTime: secondStart.toISOString(),
+          endTime: secondEnd.toISOString(),
+          maxElevation: '52.1°',
+          maxElevationDeg: 52.1,
+          scheduleBlocked: false,
+          scheduleBlockLabel: null,
+          scheduleBlockAsset: null,
+          tradeOffId: '—',
+          tradeOffScore: '—',
+          tradeOffColorIndex: null,
+          demoGenerated: true,
+        },
+      )
+    }
+
+    return previewRows.length > 0 ? [...rows, ...previewRows] : rows
   }
 
   const getEventTimestamp = (event) => {
@@ -939,7 +1073,20 @@ export default function App() {
 
     await new Promise((resolve) => setTimeout(resolve, 1000))
 
-    const { enrichedRows, groups } = buildMockTradeOffState(overviewRows)
+    let demoInputRows = overviewRows
+    let tradeOffState = buildDemoTradeOffState(demoInputRows)
+
+    if (tradeOffState.groups.length === 0) {
+      demoInputRows = buildDemoTradeOffPreviewRows(
+        overviewRows,
+        activePlanningWindow,
+        selectedSatellites,
+        selectedGroundStations,
+      )
+      tradeOffState = buildDemoTradeOffState(demoInputRows)
+    }
+
+    const { enrichedRows, groups } = tradeOffState
 
     setOverviewRows(enrichedRows)
     setTradeOffCards(groups)
@@ -1936,6 +2083,14 @@ export default function App() {
                       >
                         <span className="overview-overpass-cell">
                           <span>{row.overpassId}</span>
+                          {row.demoGenerated && (
+                            <span
+                              className="overview-row-note overview-row-note--demo"
+                              title="Demo overpass added for the trade-off preview workflow."
+                            >
+                              Demo
+                            </span>
+                          )}
                           {row.scheduleBlocked && (
                             <span
                               className="overview-row-note"
