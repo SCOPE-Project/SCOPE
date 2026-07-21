@@ -35,6 +35,11 @@ export default function App() {
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
   const [activeTimelineItemId, setActiveTimelineItemId] = useState(null)
+  const [confirmingSchedule, setConfirmingSchedule] = useState(false)
+  const [confirmationProgress, setConfirmationProgress] = useState(0)
+  const [confirmationStep, setConfirmationStep] = useState('')
+  const [confirmationSuccess, setConfirmationSuccess] = useState(false)
+  const [confirmedScheduleCount, setConfirmedScheduleCount] = useState(0)
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
   const [timelineNow, setTimelineNow] = useState(() => Date.now())
@@ -93,6 +98,11 @@ export default function App() {
   useEffect(() => {
     setOverviewPage(0)
   }, [overviewRows, tradeOffsCalculated])
+
+  useEffect(() => {
+    setConfirmationSuccess(false)
+    setConfirmedScheduleCount(0)
+  }, [selectedTradeOffOption, tradeOffsCalculated, useDemoData, schedulerLaunched])
 
   const toggleSatellite = (name) => {
     setSelectedSatellites((current) =>
@@ -460,6 +470,23 @@ export default function App() {
     group.options.find((option) => option.optionId === selectedTradeOffOption)
     ?? group.options.find((option) => option.recommended)
     ?? group.options[0]
+
+  const getSelectedTradeOffOptions = (groups) => groups.map((group) => getSelectedTradeOffForGroup(group))
+
+  const getFinalScheduleRows = (rows, groups, tradeOffsReady) => {
+    const schedulableRows = rows.filter((row) => !row.scheduleBlocked)
+
+    if (!tradeOffsReady) {
+      return []
+    }
+
+    const selectedOptions = getSelectedTradeOffOptions(groups)
+    const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
+
+    return schedulableRows.filter(
+      (row) => row.tradeOffId === '—' || selectedOverpassIds.has(row.overpassId),
+    )
+  }
 
   const layoutTimelineItems = (items) => {
     const lanes = []
@@ -912,7 +939,42 @@ export default function App() {
     setSelectedTradeOffOption(groups[0]?.options.find((option) => option.recommended)?.optionId ?? null)
     setActiveTimelineItemId(null)
     setTradeOffsCalculated(true)
+    setConfirmationSuccess(false)
+    setConfirmedScheduleCount(0)
     setCalculatingTradeOffs(false)
+  }
+
+  const handleConfirmSchedule = async () => {
+    if (!confirmDemoAvailable || confirmingSchedule) {
+      return
+    }
+
+    const progressStages = [
+      { progress: 12, step: 'Locking workspace and freezing the current schedule selection.' },
+      { progress: 34, step: 'Collecting the final proposed links and preparing activity payloads.' },
+      { progress: 58, step: 'Generating demo SatOS activity objects for the selected planning window.' },
+      { progress: 82, step: 'Simulating SatOS write calls for the final communication schedule.' },
+      { progress: 100, step: 'Communication schedule confirmed.' },
+    ]
+
+    setConfirmingSchedule(true)
+    setConfirmationProgress(0)
+    setConfirmationStep('Preparing confirmation workflow...')
+    setConfirmationSuccess(false)
+    setConfirmedScheduleCount(0)
+
+    try {
+      for (const stage of progressStages) {
+        await wait(700)
+        setConfirmationProgress(stage.progress)
+        setConfirmationStep(stage.step)
+      }
+
+      setConfirmationSuccess(true)
+      setConfirmedScheduleCount(finalScheduleRows.length)
+    } finally {
+      setConfirmingSchedule(false)
+    }
   }
 
   const backendStatusClass =
@@ -1091,6 +1153,12 @@ export default function App() {
   )
   const schedulableOverviewRows = overviewRows.filter((row) => !row.scheduleBlocked)
   const tradeOffDemoAvailable = useDemoData && schedulerLaunched && schedulableOverviewRows.length > 0
+  const finalScheduleRows = getFinalScheduleRows(overviewRows, tradeOffCards, tradeOffsCalculated)
+  const confirmDemoAvailable =
+    useDemoData
+    && schedulerLaunched
+    && tradeOffsCalculated
+    && finalScheduleRows.length > 0
   const timelineModel = buildTimelineModel(
     overviewRows,
     tradeOffCards,
@@ -2085,6 +2153,55 @@ export default function App() {
                     </dl>
                   </div>
                 )}
+
+                <div className="timeline-confirmation">
+                  <div className="timeline-confirmation-copy">
+                    <div className="timeline-confirmation-heading">
+                      <span className="timeline-confirmation-title">Confirm Communication Schedule</span>
+                      {useDemoData && renderDemoBadge()}
+                    </div>
+                    <span className="timeline-confirmation-text">
+                      {useDemoData
+                        ? 'Demo mode simulates activity generation, SatOS write calls and the final confirmation state.'
+                        : 'Confirmation remains unavailable until the backend write workflow is connected.'}
+                    </span>
+                  </div>
+                  <div className="timeline-confirmation-actions">
+                    <button
+                      type="button"
+                      className="btn-fetch timeline-confirm-button"
+                      disabled={!confirmDemoAvailable || confirmingSchedule}
+                      onClick={handleConfirmSchedule}
+                    >
+                      {confirmingSchedule ? 'Confirming...' : 'Confirm Communication Schedule'}
+                    </button>
+                    {!confirmingSchedule && !confirmDemoAvailable && (
+                      <span className="timeline-confirmation-tooltip">
+                        {!useDemoData
+                          ? 'Enable Demo to preview the confirmation workflow.'
+                          : !schedulerLaunched
+                            ? 'Launch Communication Scheduler first.'
+                            : !tradeOffsCalculated
+                              ? 'Calculate Trade-Offs first so a final schedule exists.'
+                              : finalScheduleRows.length === 0
+                                ? 'No schedulable links remain for confirmation.'
+                                : 'The final schedule is not ready yet.'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {confirmationSuccess && (
+                  <div className="confirmation-success" role="status" aria-live="polite">
+                    <span className="confirmation-success-icon" aria-hidden="true">✓</span>
+                    <div className="confirmation-success-copy">
+                      <strong>Success</strong>
+                      <span>
+                        {confirmedScheduleCount} schedule entr{confirmedScheduleCount === 1 ? 'y was' : 'ies were'} confirmed in the demo workflow.
+                      </span>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </section>
@@ -2093,12 +2210,28 @@ export default function App() {
   )
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${confirmingSchedule ? 'app-shell--locked' : ''}`}>
       {appHeader(false)}
 
       <div className="app-content">
         {pageContent}
       </div>
+
+      {confirmingSchedule && (
+        <div className="workspace-lock-overlay" role="status" aria-live="polite">
+          <div className="workspace-lock-card">
+            <span className="workspace-lock-label">Confirming Schedule</span>
+            <h3>{confirmationStep || 'Preparing confirmation workflow...'}</h3>
+            <div className="workspace-lock-progress">
+              <div
+                className="workspace-lock-progress-bar"
+                style={{ width: `${confirmationProgress}%` }}
+              ></div>
+            </div>
+            <p>{confirmationProgress}% completed</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
