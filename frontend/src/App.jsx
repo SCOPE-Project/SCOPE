@@ -7,6 +7,14 @@ const TIMELINE_ZOOM_LEVELS = [
   { id: 'detail', label: 'Detail', multiplier: 2.6 },
 ]
 const OVERVIEW_PAGE_SIZE = 10
+const DEMO_REGION_BOUNDS = {
+  minLatitude: 76.8,
+  maxLatitude: 81.4,
+  minLongitude: 10.5,
+  maxLongitude: 28.5,
+}
+const MAP_TILE_SIZE = 256
+const DEMO_REGION_MAP_ZOOM = 6
 
 export default function App() {
   const [assets, setAssets] = useState([])
@@ -1079,6 +1087,77 @@ export default function App() {
     top: ((90 - latitude) / 180) * 100,
   })
 
+  const projectToMercator = (latitude, longitude, zoom) => {
+    const clampedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude))
+    const latitudeRadians = (clampedLatitude * Math.PI) / 180
+    const scale = MAP_TILE_SIZE * 2 ** zoom
+
+    return {
+      x: ((longitude + 180) / 360) * scale,
+      y:
+        (0.5
+          - Math.log((1 + Math.sin(latitudeRadians)) / (1 - Math.sin(latitudeRadians))) / (4 * Math.PI))
+        * scale,
+    }
+  }
+
+  const buildDemoRegionMapModel = (assets) => {
+    const topLeft = projectToMercator(
+      DEMO_REGION_BOUNDS.maxLatitude,
+      DEMO_REGION_BOUNDS.minLongitude,
+      DEMO_REGION_MAP_ZOOM,
+    )
+    const bottomRight = projectToMercator(
+      DEMO_REGION_BOUNDS.minLatitude,
+      DEMO_REGION_BOUNDS.maxLongitude,
+      DEMO_REGION_MAP_ZOOM,
+    )
+
+    const minTileX = Math.floor(topLeft.x / MAP_TILE_SIZE)
+    const maxTileX = Math.floor(bottomRight.x / MAP_TILE_SIZE)
+    const minTileY = Math.floor(topLeft.y / MAP_TILE_SIZE)
+    const maxTileY = Math.floor(bottomRight.y / MAP_TILE_SIZE)
+
+    const tileColumnCount = maxTileX - minTileX + 1
+    const tileRowCount = maxTileY - minTileY + 1
+    const originX = minTileX * MAP_TILE_SIZE
+    const originY = minTileY * MAP_TILE_SIZE
+    const widthPx = tileColumnCount * MAP_TILE_SIZE
+    const heightPx = tileRowCount * MAP_TILE_SIZE
+
+    const tiles = []
+    for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+      for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+        tiles.push({
+          key: `${tileX}-${tileY}`,
+          url: `https://tile.openstreetmap.org/${DEMO_REGION_MAP_ZOOM}/${tileX}/${tileY}.png`,
+          left: ((tileX - minTileX) / tileColumnCount) * 100,
+          top: ((tileY - minTileY) / tileRowCount) * 100,
+          width: 100 / tileColumnCount,
+          height: 100 / tileRowCount,
+        })
+      }
+    }
+
+    const markerPositions = assets.map((asset) => {
+      const point = projectToMercator(asset.latitude, asset.longitude, DEMO_REGION_MAP_ZOOM)
+
+      return {
+        id: asset.id,
+        left: ((point.x - originX) / widthPx) * 100,
+        top: ((point.y - originY) / heightPx) * 100,
+      }
+    })
+
+    return {
+      tiles,
+      markerPositions,
+      tileColumnCount,
+      tileRowCount,
+      aspectRatio: `${tileColumnCount} / ${tileRowCount}`,
+    }
+  }
+
   const formatCoordinate = (value, positiveLabel, negativeLabel) => {
     const direction = value >= 0 ? positiveLabel : negativeLabel
     return `${Math.abs(value).toFixed(2)}° ${direction}`
@@ -1127,6 +1206,34 @@ export default function App() {
       .filter(Boolean),
   ]
 
+  const demoRegionalMapAssets = selectedMapAssets.filter(
+    (asset) =>
+      asset.markerType === 'ground-station'
+      && asset.latitude >= DEMO_REGION_BOUNDS.minLatitude
+      && asset.latitude <= DEMO_REGION_BOUNDS.maxLatitude
+      && asset.longitude >= DEMO_REGION_BOUNDS.minLongitude
+      && asset.longitude <= DEMO_REGION_BOUNDS.maxLongitude,
+  )
+
+  const showDemoRegionalMap = useDemoData && demoRegionalMapAssets.length > 0
+  const demoRegionMapModel = showDemoRegionalMap
+    ? buildDemoRegionMapModel(demoRegionalMapAssets)
+    : null
+  const demoRegionMarkerPositions = new Map(
+    (demoRegionMapModel?.markerPositions ?? []).map((marker) => [marker.id, marker]),
+  )
+  const visibleMapAssets = showDemoRegionalMap ? demoRegionalMapAssets : selectedMapAssets
+
+  const selectedAssetsWithoutLocation = [
+    ...selectedSatelliteAssets
+      .filter((asset) => !getAssetCoordinates(asset))
+      .map((asset) => ({
+        id: `selected-satellite-${asset.name}`,
+        name: asset.name,
+        type: 'Satellite',
+      })),
+  ]
+
   const unmappedSelectedAssets = [
     ...selectedGroundStationAssets
       .filter((asset) => !getAssetCoordinates(asset))
@@ -1135,17 +1242,11 @@ export default function App() {
         name: asset.name,
         type: 'Ground Station',
       })),
-    ...selectedSatelliteAssets
-      .filter((asset) => !getAssetCoordinates(asset))
-      .map((asset) => ({
-        id: `unmapped-satellite-${asset.name}`,
-        name: asset.name,
-        type: 'Satellite',
-      })),
+    ...selectedAssetsWithoutLocation,
   ]
 
   const activeMapAsset =
-    selectedMapAssets.find((asset) => asset.id === activeMapAssetId) ?? selectedMapAssets[0] ?? null
+    visibleMapAssets.find((asset) => asset.id === activeMapAssetId) ?? visibleMapAssets[0] ?? null
 
   const currentScheduleItems = buildCurrentScheduleItems(
     assetSchedules,
@@ -1581,7 +1682,10 @@ export default function App() {
           <section className="panel panel--fullwidth map-panel">
             <div className="panel-heading panel-heading--map">
               <div className="panel-heading-title">
-                <h2>Map View</h2>
+                <h2>
+                  Map View
+                  {showDemoRegionalMap && renderDemoBadge()}
+                </h2>
               </div>
               <div className="map-panel-controls">
                 <button
@@ -1599,96 +1703,157 @@ export default function App() {
             </div>
 
             {expandedSections.mapView && (
-              <div className="map-layout">
-                <div className="map-canvas-shell">
-                  <div className="map-canvas" aria-label="Selected asset map view">
-                    {selectedMapAssets.length === 0 && (
-                      <div className="map-empty-state">
-                        Select a ground station to place it on the map.
-                      </div>
-                    )}
+              <>
+                <div className="map-layout">
+                  <div className="map-canvas-shell">
+                    <div
+                      className={`map-canvas ${showDemoRegionalMap ? 'map-canvas--regional' : ''}`}
+                      aria-label="Selected asset map view"
+                    >
+                      {visibleMapAssets.length === 0 && (
+                        <div className="map-empty-state">
+                          Select a ground station to place it on the map.
+                        </div>
+                      )}
 
-                    {selectedMapAssets.map((asset) => {
-                      const markerPosition = projectToMap(asset.latitude, asset.longitude)
+                      {showDemoRegionalMap && demoRegionMapModel && (
+                        <>
+                          <div
+                            className="map-region-art map-region-art--cropped"
+                            style={{
+                              '--map-region-width': `${demoRegionMapModel.width}px`,
+                              '--map-region-height': `${demoRegionMapModel.height}px`,
+                              '--map-region-crop-top': `${demoRegionMapModel.crop.top}px`,
+                              '--map-region-crop-right': `${demoRegionMapModel.crop.right}px`,
+                              '--map-region-crop-bottom': `${demoRegionMapModel.crop.bottom}px`,
+                              '--map-region-crop-left': `${demoRegionMapModel.crop.left}px`,
+                            }}
+                          >
+                            {demoRegionMapModel.tiles.map((tile) => (
+                              <img
+                                key={`${tile.x}-${tile.y}`}
+                                className="map-region-tile"
+                                src={`https://tile.openstreetmap.org/${DEMO_REGION_MAP_ZOOM}/${tile.x}/${tile.y}.png`}
+                                alt=""
+                                style={{
+                                  left: `${tile.left}px`,
+                                  top: `${tile.top}px`,
+                                  width: `${MAP_TILE_SIZE}px`,
+                                  height: `${MAP_TILE_SIZE}px`,
+                                }}
+                              />
+                            ))}
 
-                      return (
-                        <button
-                          key={asset.id}
-                          type="button"
-                          className={`map-marker map-marker--${asset.markerType} ${
-                            activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
-                          }`}
-                          style={{
-                            left: `${markerPosition.left}%`,
-                            top: `${markerPosition.top}%`,
-                          }}
-                          onClick={() => setActiveMapAssetId(asset.id)}
-                          aria-label={`${asset.name} on map`}
-                        >
-                          <span className="map-marker-label">{asset.name}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                  <p className="map-note">
-                    Selected assets with map coordinates appear here once this section is expanded.
-                  </p>
-                </div>
+                            {demoRegionalMapAssets.map((asset) => {
+                              const marker = demoRegionMarkerPositions.get(asset.id)
+                              if (!marker) {
+                                return null
+                              }
 
-                <aside className="map-sidebar">
-                  <div className="map-sidebar-section">
-                    <h3>Visible Assets</h3>
-                    {selectedMapAssets.length > 0 ? (
-                      <div className="map-asset-list">
-                        {selectedMapAssets.map((asset) => (
+                              return (
+                                <button
+                                  key={asset.id}
+                                  type="button"
+                                  className={`map-marker map-marker--${asset.markerType} ${
+                                    activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
+                                  }`}
+                                  style={{
+                                    left: `${marker.left}px`,
+                                    top: `${marker.top}px`,
+                                  }}
+                                  onClick={() => setActiveMapAssetId(asset.id)}
+                                  aria-label={`${asset.name} on map`}
+                                >
+                                  <span className="map-marker-label">{asset.name}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                          <div className="map-attribution">Map data © OpenStreetMap contributors</div>
+                        </>
+                      )}
+
+                      {!showDemoRegionalMap && visibleMapAssets.map((asset) => {
+                        const markerPosition = projectToMap(asset.latitude, asset.longitude)
+
+                        return (
                           <button
                             key={asset.id}
                             type="button"
-                            className={`map-asset-button ${
-                              activeMapAsset?.id === asset.id ? 'map-asset-button--active' : ''
+                            className={`map-marker map-marker--${asset.markerType} ${
+                              activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
                             }`}
+                            style={{
+                              left: `${markerPosition.left}%`,
+                              top: `${markerPosition.top}%`,
+                            }}
                             onClick={() => setActiveMapAssetId(asset.id)}
+                            aria-label={`${asset.name} on map`}
                           >
-                            <span className={`map-asset-dot map-asset-dot--${asset.markerType}`}></span>
-                            <span className="map-asset-name">{asset.name}</span>
+                            <span className="map-marker-label">{asset.name}</span>
                           </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <p>No selected assets with usable map coordinates yet.</p>
-                    )}
-                  </div>
-
-                  <div className="map-sidebar-section">
-                    <h3>Awaiting Map Position</h3>
-                    {unmappedSelectedAssets.length > 0 ? (
-                      <ul className="map-unmapped-list">
-                        {unmappedSelectedAssets.map((asset) => (
-                          <li key={asset.id}>
-                            <span className="map-unmapped-name">{asset.name}</span>
-                            <span className="map-unmapped-type">{asset.type}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p>All selected assets with available location data are already shown on the map.</p>
-                    )}
-                  </div>
-
-                  {activeMapAsset && (
-                    <div className="map-detail-card">
-                      <h3>{activeMapAsset.name}</h3>
-                      <p>{activeMapAsset.type}</p>
-                      <dl className="map-detail-grid">
-                        <dt>Latitude</dt>
-                        <dd>{formatCoordinate(activeMapAsset.latitude, 'N', 'S')}</dd>
-                        <dt>Longitude</dt>
-                        <dd>{formatCoordinate(activeMapAsset.longitude, 'E', 'W')}</dd>
-                      </dl>
+                        )
+                      })}
                     </div>
-                  )}
-                </aside>
-              </div>
+                  </div>
+
+                  <aside className="map-sidebar">
+                    <div className="map-sidebar-section">
+                      <h3>Selected Assets</h3>
+                      {visibleMapAssets.length > 0 ? (
+                        <div className="map-asset-card-list">
+                          {visibleMapAssets.map((asset) => (
+                            <button
+                              key={asset.id}
+                              type="button"
+                              className={`map-asset-card ${
+                                activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
+                              }`}
+                              onClick={() => setActiveMapAssetId(asset.id)}
+                            >
+                              <div className="map-asset-card-header">
+                                <span className="map-asset-card-name">{asset.name}</span>
+                                <span className="map-asset-card-type">{asset.type}</span>
+                              </div>
+                              <dl className="map-asset-card-grid">
+                                <dt>Latitude</dt>
+                                <dd>{formatCoordinate(asset.latitude, 'N', 'S')}</dd>
+                                <dt>Longitude</dt>
+                                <dd>{formatCoordinate(asset.longitude, 'E', 'W')}</dd>
+                              </dl>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p>No selected assets with usable map coordinates yet.</p>
+                      )}
+                    </div>
+
+                    {unmappedSelectedAssets.length > 0 && (
+                      <div className="map-sidebar-section">
+                        <h3>Selected Without Location</h3>
+                        <div className="map-missing-location-list">
+                          {unmappedSelectedAssets.map((asset) => (
+                            <div key={asset.id} className="map-missing-location-card">
+                              <span className="map-missing-location-name">{asset.name}</span>
+                              <span className="map-missing-location-type">{asset.type}</span>
+                              <p className="map-missing-location-copy">
+                                Location data not available.
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </aside>
+                </div>
+
+                {showDemoRegionalMap && (
+                  <p className="map-panel-note">
+                    Static demo map. Ground-station markers use real coordinates within this regional excerpt.
+                  </p>
+                )}
+              </>
             )}
           </section>
 
