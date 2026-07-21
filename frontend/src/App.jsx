@@ -145,12 +145,27 @@ export default function App() {
   const handleDemoModeToggle = () => {
     setUseDemoData((current) => !current)
     setError(null)
+    setOverviewRows((current) =>
+      current
+        .filter((row) => !row.demoGenerated)
+        .map((row) => ({
+          ...row,
+          tradeOffId: '—',
+          tradeOffScore: '—',
+          tradeOffColorIndex: null,
+        }))
+    )
     setCalculatingTradeOffs(false)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
     setActiveTimelineItemId(null)
+    setConfirmingSchedule(false)
+    setConfirmationProgress(0)
+    setConfirmationStep('')
+    setConfirmationSuccess(false)
+    setConfirmedScheduleCount(0)
   }
 
   const buildDemoTradeOffState = (rows) => {
