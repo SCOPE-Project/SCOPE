@@ -91,6 +91,12 @@ body {
   align-items: center;
 }
 
+.app-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
 .app-status-stack {
   display: flex;
   flex-direction: column;
@@ -510,9 +516,23 @@ body {
   width: 1.1rem;
   height: 1.1rem;
   color: var(--text-muted);
-  font-size: 1.1rem;
-  line-height: 1;
   flex: 0 0 auto;
+}
+
+.section-toggle-chevron {
+  width: 0.8rem;
+  height: 0.8rem;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+.section-toggle-chevron--expanded {
+  transform: rotate(0deg);
 }
 
 .checkbox-list {
@@ -658,6 +678,13 @@ body {
 
 .panel-heading--map {
   margin-bottom: 1rem;
+}
+
+.panel-heading-title {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
 }
 
 .panel-intro {
@@ -1033,6 +1060,32 @@ body {
 .map-panel-copy {
   margin-top: -0.15rem;
   font-size: 0.84rem;
+}
+
+.map-panel-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.map-panel-toggle {
+  width: 1.9rem;
+  height: 1.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.map-panel-toggle:hover {
+  background: var(--bg-hover);
+  border-color: #9aa8b5;
+  color: var(--text-primary);
 }
 
 .map-summary {
