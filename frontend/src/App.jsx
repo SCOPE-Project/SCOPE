@@ -182,6 +182,186 @@ export default function App() {
     return { enrichedRows, groups }
   }
 
+  const getEventTimestamp = (event) => {
+    if (!event) {
+      return null
+    }
+
+    if (typeof event === 'string') {
+      return event
+    }
+
+    if (typeof event.timestamp === 'string') {
+      return event.timestamp
+    }
+
+    return null
+  }
+
+  const getActivityStartTimestamp = (activity) =>
+    getEventTimestamp(activity?.start_event)
+    ?? getEventTimestamp(activity?.startEvent)
+    ?? activity?.start_timestamp
+    ?? activity?.startTimestamp
+    ?? null
+
+  const getActivityEndTimestamp = (activity) =>
+    getEventTimestamp(activity?.end_event)
+    ?? getEventTimestamp(activity?.endEvent)
+    ?? activity?.end_timestamp
+    ?? activity?.endTimestamp
+    ?? null
+
+  const toTimestamp = (value) => {
+    if (!value) {
+      return null
+    }
+
+    const timestamp = new Date(value).getTime()
+    return Number.isFinite(timestamp) ? timestamp : null
+  }
+
+  const formatDurationFromSeconds = (seconds) => {
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return '—'
+    }
+
+    if (seconds < 60) {
+      return `${Math.round(seconds)} sec`
+    }
+
+    return `${Math.round(seconds / 60)} min`
+  }
+
+  const formatDateTimeCompact = (value) => {
+    if (!value) {
+      return '—'
+    }
+
+    const parsed = new Date(value)
+    if (!Number.isFinite(parsed.getTime())) {
+      return '—'
+    }
+
+    return parsed.toLocaleString([], {
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
+
+  const formatElevation = (value) => {
+    if (!Number.isFinite(value)) {
+      return '—'
+    }
+
+    return `${value.toFixed(1)}°`
+  }
+
+  const formatOverpassDisplayId = (index) => `OP-${String(index + 1).padStart(3, '0')}`
+
+  const buildOverviewRowsFromOverpasses = (overpassBlocks) =>
+    [...overpassBlocks]
+      .sort((left, right) => {
+        const leftTimestamp = toTimestamp(left.start_time) ?? 0
+        const rightTimestamp = toTimestamp(right.start_time) ?? 0
+        return leftTimestamp - rightTimestamp
+      })
+      .map((block, index) => ({
+        overpassId: formatOverpassDisplayId(index),
+        backendOverpassId: block.overpass_id,
+        satId: block.satellite_name,
+        gsId: block.groundstation_name,
+        duration: formatDurationFromSeconds(block.duration_seconds),
+        durationSeconds: block.duration_seconds,
+        startTime: block.start_time,
+        endTime: block.end_time,
+        maxElevation: formatElevation(block.max_elevation_deg),
+        maxElevationDeg: block.max_elevation_deg,
+      }))
+
+  const buildCurrentScheduleItems = (schedules, relevantScheduleNames) => {
+    const relevantNames = new Set(relevantScheduleNames)
+
+    return schedules
+      .filter((schedule) => relevantNames.size === 0 || relevantNames.has(schedule.name))
+      .flatMap((schedule) =>
+        (schedule.activities ?? []).map((activity, activityIndex) => {
+          const startTime = getActivityStartTimestamp(activity)
+          const endTime = getActivityEndTimestamp(activity)
+
+          if (!startTime || !endTime) {
+            return null
+          }
+
+          return {
+            id: `current-${schedule.name}-${activity.uuid ?? activityIndex}`,
+            label: activity.name?.trim() || 'Scheduled activity',
+            detail: schedule.name,
+            startTime,
+            endTime,
+          }
+        })
+      )
+      .filter(Boolean)
+      .sort((left, right) => {
+        const leftTimestamp = toTimestamp(left.startTime) ?? 0
+        const rightTimestamp = toTimestamp(right.startTime) ?? 0
+        return leftTimestamp - rightTimestamp
+      })
+  }
+
+  const hasTimeOverlap = (startA, endA, startB, endB) => startA < endB && endA > startB
+
+  const getBlockingScheduledActivity = (row, scheduleItems) => {
+    const rowStartTimestamp = toTimestamp(row.startTime)
+    const rowEndTimestamp = toTimestamp(row.endTime)
+
+    if (
+      rowStartTimestamp === null
+      || rowEndTimestamp === null
+      || rowEndTimestamp <= rowStartTimestamp
+    ) {
+      return null
+    }
+
+    return scheduleItems.find((item) => {
+      const itemStartTimestamp = toTimestamp(item.startTime)
+      const itemEndTimestamp = toTimestamp(item.endTime)
+      const scheduleOwner = item.detail ?? ''
+      const sameAsset = scheduleOwner === row.satId || scheduleOwner === row.gsId
+
+      if (
+        !sameAsset
+        || itemStartTimestamp === null
+        || itemEndTimestamp === null
+        || itemEndTimestamp <= itemStartTimestamp
+      ) {
+        return false
+      }
+
+      return hasTimeOverlap(
+        rowStartTimestamp,
+        rowEndTimestamp,
+        itemStartTimestamp,
+        itemEndTimestamp,
+      )
+    }) ?? null
+  }
+
+  const annotateRowsWithSchedulePriority = (rows, scheduleItems) =>
+    rows.map((row) => {
+      const blockingActivity = getBlockingScheduledActivity(row, scheduleItems)
+
+      return {
+        ...row,
+        scheduleBlocked: Boolean(blockingActivity),
+        scheduleBlockLabel: blockingActivity?.label ?? null,
+        scheduleBlockAsset: blockingActivity?.detail ?? null,
+      }
+    })
+
   const getDayOfYear = (date) => {
     const start = new Date(date.getFullYear(), 0, 0)
     const diff = date - start
@@ -393,15 +573,46 @@ export default function App() {
 
   const localDateAndTimeToIso = (dateValue, timeValue) => {
     if (!dateValue || !timeValue) {
-      return ''
+      return null
     }
 
     const combined = new Date(`${dateValue}T${timeValue}`)
     if (!Number.isFinite(combined.getTime())) {
-      return ''
+      return null
     }
 
     return combined.toISOString()
+  }
+
+  const wait = (durationMs) =>
+    new Promise((resolve) => {
+      window.setTimeout(resolve, durationMs)
+    })
+
+  const pollTaskResult = async (taskId) => {
+    while (true) {
+      const statusResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}`)
+      if (!statusResponse.ok) {
+        throw new Error(`Status polling failed with ${statusResponse.status}`)
+      }
+
+      const taskStatus = await statusResponse.json()
+
+      if (taskStatus.status === 'completed') {
+        const resultResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}/result`)
+        if (!resultResponse.ok) {
+          throw new Error(`Result request failed with ${resultResponse.status}`)
+        }
+
+        return resultResponse.json()
+      }
+
+      if (taskStatus.status === 'failed') {
+        throw new Error(taskStatus.message || 'Overpass extraction failed.')
+      }
+
+      await wait(1200)
+    }
   }
 
   const fetchAssets = async () => {
@@ -438,8 +649,8 @@ export default function App() {
 
     setLaunchingScheduler(true)
     setError(null)
-    setExtractionStatus('Running')
-    setSchedulerLaunched(false)
+    setExtractionStatus('Queued')
+    setSchedulerLaunched(true)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
     setSelectedTradeOffOption(null)
@@ -463,16 +674,51 @@ export default function App() {
 
     setActivePlanningWindow(planningWindow)
 
-    const simulatedRows = buildMockOverpasses(selectedSatellites, selectedGroundStations)
+    try {
+      const response = await fetch(`${BACKEND_BASE_URL}/tasks/extract-overpasses`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          satellites: selectedSatellites,
+          groundstations: selectedGroundStations,
+          start_time: planningWindow.startTime,
+          end_time: planningWindow.endTime,
+        }),
+      })
 
-    await new Promise((resolve) => setTimeout(resolve, 900))
+      if (!response.ok) {
+        throw new Error(`Scheduler launch failed with status ${response.status}`)
+      }
 
-    setOverviewRows(simulatedRows)
-    setTimelineNow(Date.now())
-    setSchedulerLaunched(true)
-    setSidebarCollapsed(true)
-    setExtractionStatus('Completed')
-    setLaunchingScheduler(false)
+      setExtractionStatus('Running')
+
+      const receipt = await response.json()
+      const result = await pollTaskResult(receipt.task_id)
+      const scheduleItems = buildCurrentScheduleItems(
+        assetSchedules,
+        [...selectedSatellites, ...selectedGroundStations],
+      )
+      const realRows = annotateRowsWithSchedulePriority(
+        buildOverviewRowsFromOverpasses(result?.payload?.overpass_blocks ?? []),
+        scheduleItems,
+      )
+
+      setOverviewRows(realRows)
+      setTimelineNow(Date.now())
+      setSidebarCollapsed(true)
+      setExtractionStatus('Completed')
+    } catch (err) {
+      console.error(err)
+      setOverviewRows([])
+      setActivePlanningWindow(null)
+      setSchedulerLaunched(false)
+      setExtractionStatus('Failed')
+      setError(err.message || 'Failed to extract overpasses from the backend.')
+    } finally {
+      setLaunchingScheduler(false)
+    }
   }
 
   const handleCalculateTradeOffs = async () => {
@@ -679,6 +925,17 @@ export default function App() {
       <path d="M2.25 4.25 6 8l3.75-3.75" />
     </svg>
   )
+
+  const getScheduleBlockMessage = (row) => {
+    if (!row.scheduleBlocked) {
+      return ''
+    }
+
+    const blockingActivityLabel = row.scheduleBlockLabel ?? 'a scheduled activity'
+    const blockingAsset = row.scheduleBlockAsset ?? 'the current schedule'
+
+    return `${row.overpassId} is blocked because ${blockingActivityLabel} on ${blockingAsset} has priority.`
+  }
 
   const renderTimeInput = (menuKey, value, setValue) => (
     <div
@@ -1135,7 +1392,10 @@ export default function App() {
                   <span>Overpass ID</span>
                   <span>Sat ID</span>
                   <span>GS ID</span>
-                  <span>Overpass Duration</span>
+                  <span>Start</span>
+                  <span>End</span>
+                  <span>Max Elev.</span>
+                  <span>Duration</span>
                   {tradeOffsCalculated && <span>Trade Off ID</span>}
                   {tradeOffsCalculated && <span>Score</span>}
                 </div>
@@ -1146,11 +1406,17 @@ export default function App() {
                       <span>Pending</span>
                       <span>Pending</span>
                       <span>Pending</span>
+                      <span>Pending</span>
+                      <span>Pending</span>
+                      <span>Pending</span>
                       {tradeOffsCalculated && <span>—</span>}
                       {tradeOffsCalculated && <span>—</span>}
                     </div>
                     <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
                       <span>OP-002</span>
+                      <span>Pending</span>
+                      <span>Pending</span>
+                      <span>Pending</span>
                       <span>Pending</span>
                       <span>Pending</span>
                       <span>Pending</span>
@@ -1163,11 +1429,24 @@ export default function App() {
                     {overviewRows.map((row) => (
                       <div
                         key={row.overpassId}
-                        className={`overview-list-row ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
+                        className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
                       >
-                        <span>{row.overpassId}</span>
+                        <span className="overview-overpass-cell">
+                          <span>{row.overpassId}</span>
+                          {row.scheduleBlocked && (
+                            <span
+                              className="overview-row-note"
+                              title={getScheduleBlockMessage(row)}
+                            >
+                              Blocked
+                            </span>
+                          )}
+                        </span>
                         <span>{row.satId}</span>
                         <span>{row.gsId}</span>
+                        <span>{formatDateTimeCompact(row.startTime)}</span>
+                        <span>{formatDateTimeCompact(row.endTime)}</span>
+                        <span>{row.maxElevation ?? '—'}</span>
                         <span>{row.duration}</span>
                         {tradeOffsCalculated && <span>{row.tradeOffId}</span>}
                         {tradeOffsCalculated && <span>{row.tradeOffScore}</span>}
@@ -1178,8 +1457,7 @@ export default function App() {
               </div>
               {overviewRows.length > 0 && (
                 <p className="overview-note">
-                  Overpass duration and trade-off values shown here are currently placeholder values and do not
-                  represent final calculation results.
+                  Trade-off values shown here remain placeholder values until trade-off processing is connected.
                 </p>
               )}
             </div>
