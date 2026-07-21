@@ -4,6 +4,7 @@ const BACKEND_BASE_URL = 'http://localhost:8000'
 
 export default function App() {
   const [assets, setAssets] = useState([])
+  const [assetSchedules, setAssetSchedules] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [backendAlive, setBackendAlive] = useState(null)
@@ -357,12 +358,33 @@ export default function App() {
     return asset.classification ?? 'unknown'
   }
 
+  const resetWorkspaceState = () => {
+    setSelectedSatellites([])
+    setSelectedGroundStations([])
+    setSidebarCollapsed(false)
+    setLaunchingScheduler(false)
+    setSchedulerLaunched(false)
+    setOverviewRows([])
+    setExtractionStatus('Not started')
+    setCalculatingTradeOffs(false)
+    setTradeOffsCalculated(false)
+    setTradeOffCards([])
+    setSelectedTradeOffOption(null)
+    setActiveMapAssetId(null)
+    setTimelineNow(Date.now())
+    setTimelineLayers({
+      current: true,
+      potential: true,
+      proposed: true,
+    })
+  }
+
   const fetchAssets = async () => {
     setLoading(true)
     setError(null)
     setAssets([])
-    setSelectedSatellites([])
-    setSelectedGroundStations([])
+    setAssetSchedules([])
+    resetWorkspaceState()
     try {
       const response = await fetch(`${BACKEND_BASE_URL}/tasks/initialize`)
       if (!response.ok) {
@@ -372,6 +394,7 @@ export default function App() {
       if (data && Array.isArray(data.assets)) {
         setSatosAlive(true)
         setAssets(data.assets)
+        setAssetSchedules(Array.isArray(data.schedules) ? data.schedules : [])
         setView('workspace')
       } else {
         throw new Error("Invalid response format from server")
@@ -379,7 +402,7 @@ export default function App() {
     } catch (err) {
       console.error(err)
       setSatosAlive(false)
-      setError(err.message || 'Failed to fetch satellites. Verify your backend or SatOS credentials.')
+      setError(err.message || 'Failed to fetch assets. Verify your backend or SatOS credentials.')
     } finally {
       setLoading(false)
     }
