@@ -27,6 +27,7 @@ export default function App() {
   const [useDemoData, setUseDemoData] = useState(false)
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
   const [tradeOffCards, setTradeOffCards] = useState([])
+  const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
@@ -117,6 +118,7 @@ export default function App() {
     setCalculatingTradeOffs(false)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
+    setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
   }
 
@@ -763,6 +765,7 @@ export default function App() {
     setSchedulerLaunched(true)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
+    setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
 
     const planningWindow = {
@@ -842,6 +845,7 @@ export default function App() {
 
     setOverviewRows(enrichedRows)
     setTradeOffCards(groups)
+    setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(groups[0]?.options.find((option) => option.recommended)?.optionId ?? null)
     setTradeOffsCalculated(true)
     setCalculatingTradeOffs(false)
@@ -1031,6 +1035,7 @@ export default function App() {
     activePlanningWindow,
   )
   const visibleTimelineTracks = timelineModel?.tracks.filter((track) => timelineLayers[track.id]) ?? []
+  const activeTradeOffCard = tradeOffCards[activeTradeOffCardIndex] ?? null
 
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-hidden="true">
@@ -1671,26 +1676,44 @@ export default function App() {
             )}
             {tradeOffsCalculated && tradeOffCards.length > 0 && (
               <div className="tradeoff-card-list">
-                {tradeOffCards.map((card) => (
+                {tradeOffCards.length > 1 && (
+                  <div className="tradeoff-browser">
+                    <div className="tradeoff-browser-tabs">
+                      {tradeOffCards.map((card, index) => (
+                        <button
+                          key={`${card.id}-tab`}
+                          type="button"
+                          className={`tradeoff-browser-tab ${index === activeTradeOffCardIndex ? 'tradeoff-browser-tab--active' : ''}`}
+                          style={{ '--tradeoff-accent': getTradeOffAccentColor(card.colorIndex) }}
+                          onClick={() => setActiveTradeOffCardIndex(index)}
+                        >
+                          {card.title}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {activeTradeOffCard && (
                   <article
-                    key={card.id}
+                    key={activeTradeOffCard.id}
                     className="tradeoff-card"
+                    style={{ '--tradeoff-accent': getTradeOffAccentColor(activeTradeOffCard.colorIndex) }}
                   >
                     <div className="tradeoff-card-header">
                       <div className="tradeoff-card-titleblock">
-                        <h3>{card.title}</h3>
-                        <p className="tradeoff-card-resource">{card.resourceLabel}</p>
+                        <h3>{renderTradeOffPill(activeTradeOffCard.title, activeTradeOffCard.colorIndex)}</h3>
+                        <p className="tradeoff-card-resource">{activeTradeOffCard.resourceLabel}</p>
                       </div>
                       <div className="tradeoff-meta">
-                        <span className="tradeoff-score">{card.options.length} options</span>
+                        <span className="tradeoff-score">{activeTradeOffCard.options.length} options</span>
                       </div>
                     </div>
                     <p className="tradeoff-reason">
-                      <span className="tradeoff-reason-label">Reason:</span> {card.reason}
+                      <span className="tradeoff-reason-label">Reason:</span> {activeTradeOffCard.reason}
                     </p>
 
                     <div className="tradeoff-option-list">
-                      {card.options.map((option) => (
+                      {activeTradeOffCard.options.map((option) => (
                         <div
                           key={option.optionId}
                           className={`tradeoff-option ${selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : ''}`}
@@ -1715,7 +1738,30 @@ export default function App() {
                       ))}
                     </div>
                   </article>
-                ))}
+                )}
+                {tradeOffCards.length > 1 && (
+                  <div className="tradeoff-browser-nav tradeoff-browser-nav--bottom">
+                    <button
+                      type="button"
+                      className="tradeoff-browser-button"
+                      disabled={activeTradeOffCardIndex === 0}
+                      onClick={() => setActiveTradeOffCardIndex((current) => Math.max(0, current - 1))}
+                    >
+                      Previous
+                    </button>
+                    <span className="tradeoff-browser-status">
+                      {activeTradeOffCardIndex + 1} / {tradeOffCards.length}
+                    </span>
+                    <button
+                      type="button"
+                      className="tradeoff-browser-button"
+                      disabled={activeTradeOffCardIndex >= tradeOffCards.length - 1}
+                      onClick={() => setActiveTradeOffCardIndex((current) => Math.min(tradeOffCards.length - 1, current + 1))}
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </section>

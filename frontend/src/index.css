@@ -1211,6 +1211,79 @@ body {
   gap: 0.9rem;
 }
 
+.tradeoff-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.tradeoff-browser-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.tradeoff-browser-nav--bottom {
+  margin-top: 0.9rem;
+  width: 100%;
+}
+
+.tradeoff-browser-status {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.tradeoff-browser-button {
+  min-width: 5.6rem;
+  height: 2rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.tradeoff-browser-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.tradeoff-browser-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tradeoff-browser-tabs {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+}
+
+.tradeoff-browser-tab {
+  flex: 0 0 auto;
+  min-width: 4.4rem;
+  padding: 0.38rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--tradeoff-accent) 38%, white);
+  border-radius: 0.18rem;
+  background: color-mix(in srgb, var(--tradeoff-accent) 9%, white);
+  color: color-mix(in srgb, var(--tradeoff-accent) 68%, black);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tradeoff-browser-tab--active {
+  background: color-mix(in srgb, var(--tradeoff-accent) 18%, white);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tradeoff-accent) 40%, white);
+}
+
 .tradeoff-panel {
   min-width: 0;
 }
