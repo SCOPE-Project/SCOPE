@@ -97,6 +97,34 @@ body {
   gap: 1rem;
 }
 
+.app-header-demo {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.app-header-demo-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.88);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.app-header .demo-switch-track {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.app-header .demo-switch-thumb {
+  background: #f5f7fa;
+}
+
+.app-header .demo-switch input:checked + .demo-switch-track {
+  background: #c56b2d;
+  border-color: #c56b2d;
+}
+
 .app-status-stack {
   display: flex;
   flex-direction: column;
@@ -275,6 +303,51 @@ body {
   font-size: 0.78rem;
   line-height: 1.35;
   color: var(--text-muted);
+}
+
+.demo-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.demo-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.demo-switch-track {
+  width: 2.6rem;
+  height: 1.45rem;
+  border-radius: 999px;
+  background: #d2d9e0;
+  border: 1px solid #b7c3cf;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.18rem;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.demo-switch-thumb {
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(31, 42, 51, 0.18);
+  transform: translateX(0);
+  transition: transform 0.2s ease;
+}
+
+.demo-switch input:checked + .demo-switch-track {
+  background: #dfe9f5;
+  border-color: #85a4c6;
+}
+
+.demo-switch input:checked + .demo-switch-track .demo-switch-thumb {
+  transform: translateX(1.1rem);
+  background: var(--accent-primary);
 }
 
 .btn-fetch:hover {

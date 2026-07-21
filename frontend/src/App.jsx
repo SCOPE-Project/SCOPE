@@ -23,6 +23,7 @@ export default function App() {
   const [overviewRows, setOverviewRows] = useState([])
   const [extractionStatus, setExtractionStatus] = useState('Not started')
   const [calculatingTradeOffs, setCalculatingTradeOffs] = useState(false)
+  const [useDemoData, setUseDemoData] = useState(false)
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
@@ -107,6 +108,15 @@ export default function App() {
       ...current,
       [layer]: !current[layer],
     }))
+  }
+
+  const handleDemoModeToggle = () => {
+    setUseDemoData((current) => !current)
+    setError(null)
+    setCalculatingTradeOffs(false)
+    setTradeOffsCalculated(false)
+    setTradeOffCards([])
+    setSelectedTradeOffOption(null)
   }
 
   const buildMockOverpasses = (selectedSatelliteNames, selectedGroundStationNames) => {
@@ -801,7 +811,7 @@ export default function App() {
   }
 
   const handleCalculateTradeOffs = async () => {
-    if (!schedulerLaunched || overviewRows.length === 0) return
+    if (!schedulerLaunched || overviewRows.length === 0 || !useDemoData) return
 
     setCalculatingTradeOffs(true)
 
@@ -840,8 +850,23 @@ export default function App() {
         <div className="app-header-title">SCOPE</div>
         <div className="app-header-subtitle">Satellite Communication Optimizer and Planning Engine</div>
       </div>
-      {showStatus && (
-        <div className="app-header-controls">
+      <div className="app-header-controls">
+        {view !== 'landing' && (
+          <div className="app-header-demo">
+            <span className="app-header-demo-label">Demo</span>
+            <label className="demo-switch">
+              <input
+                type="checkbox"
+                checked={useDemoData}
+                onChange={handleDemoModeToggle}
+              />
+              <span className="demo-switch-track" aria-hidden="true">
+                <span className="demo-switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+        )}
+        {showStatus && (
           <div className="app-header-status">
             <div className="app-status-stack">
               <div className={`app-status app-status--${backendStatusClass}`}>
@@ -854,8 +879,8 @@ export default function App() {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </header>
   )
 
@@ -1546,7 +1571,7 @@ export default function App() {
               </div>
               {overviewRows.length > 0 && (
                 <p className="overview-note">
-                  Trade-off values shown here remain placeholder values until trade-off processing is connected.
+                  Enable Demo mode to preview simulated trade-off values on top of the extracted backend data.
                 </p>
               )}
             </div>
@@ -1554,14 +1579,18 @@ export default function App() {
             <div className="panel-action-wrapper">
               <button
                 className="panel-action"
-                disabled={!schedulerLaunched || calculatingTradeOffs}
+                disabled={!schedulerLaunched || calculatingTradeOffs || !useDemoData}
                 onClick={handleCalculateTradeOffs}
               >
                 {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
               </button>
-              {!schedulerLaunched && !calculatingTradeOffs && (
+              {!calculatingTradeOffs && (
                 <span className="panel-action-tooltip">
-                  Launch Communication Scheduler first and wait for extraction to complete.
+                  {!schedulerLaunched
+                    ? 'Launch Communication Scheduler first and wait for extraction to complete.'
+                    : !useDemoData
+                      ? 'Enable Demo mode to preview simulated trade-off groups and scores.'
+                      : 'Calculate simulated trade-off groups from the extracted overpasses.'}
                 </span>
               )}
             </div>
