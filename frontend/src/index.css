@@ -1127,6 +1127,23 @@ body {
   text-transform: uppercase;
 }
 
+.tradeoff-id-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4rem;
+  padding: 0.16rem 0.42rem;
+  border-radius: 0.18rem;
+  border: 1px solid var(--tradeoff-accent, #c6d6e6);
+  background: color-mix(in srgb, var(--tradeoff-accent, #c56b2d) 12%, #ffffff);
+  color: var(--text-primary);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .panel-action {
   font-family: var(--font-family);
   font-size: 0.95rem;
@@ -1302,11 +1319,12 @@ body {
   background: var(--bg-panel-strong);
   padding: 0.8rem 0.85rem;
   min-width: 0;
+  box-shadow: inset 3px 0 0 var(--tradeoff-accent, transparent);
 }
 
 .tradeoff-option--selected {
   border-color: var(--accent-primary);
-  box-shadow: inset 0 0 0 1px var(--accent-primary);
+  box-shadow: inset 3px 0 0 var(--tradeoff-accent, transparent), inset 0 0 0 1px var(--accent-primary);
 }
 
 .tradeoff-option-header {
@@ -1769,9 +1787,28 @@ body {
 }
 
 .timeline-track-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   font-size: 0.83rem;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.timeline-track-demo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.6rem;
+  padding: 0.12rem 0.34rem;
+  border: 1px solid #d8b089;
+  border-radius: 0.18rem;
+  background: #f5e6d8;
+  color: #8c4f18;
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .timeline-track-copy {
@@ -1937,6 +1974,12 @@ body {
 .timeline-bar--selected {
   background: rgba(0, 57, 117, 0.22);
   border-color: rgba(0, 57, 117, 0.42);
+}
+
+.timeline-bar--tradeoff {
+  box-shadow:
+    inset 3px 0 0 var(--tradeoff-accent),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.28);
 }
 
 .panel--fullwidth:last-child {

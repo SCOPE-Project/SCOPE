@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react'
 
 const BACKEND_BASE_URL = 'http://localhost:8000'
+const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
 
 export default function App() {
   const [assets, setAssets] = useState([])
@@ -138,7 +139,8 @@ export default function App() {
   }
 
   const buildMockTradeOffState = (rows) => {
-    const rowsBySatellite = rows.reduce((groups, row) => {
+    const eligibleRows = rows.filter((row) => !row.scheduleBlocked)
+    const rowsBySatellite = eligibleRows.reduce((groups, row) => {
       if (!groups[row.satId]) {
         groups[row.satId] = []
       }
@@ -148,14 +150,19 @@ export default function App() {
 
     let conflictIndex = 1
     const rowTradeOffMap = new Map()
+    const rowTradeOffScoreMap = new Map()
+    const rowTradeOffColorMap = new Map()
 
     const groups = Object.entries(rowsBySatellite)
       .filter(([, groupRows]) => groupRows.length > 1)
-      .map(([satelliteId, groupRows]) => {
+      .map(([satelliteId, groupRows], groupIndex) => {
         const groupLabel = `TO-${String(conflictIndex).padStart(2, '0')}`
+        const colorIndex = groupIndex % TRADE_OFF_ACCENT_COLORS.length
         const options = groupRows.map((row, optionIndex) => {
           const score = `${92 - (conflictIndex - 1) * 8 - optionIndex * 9}/100`
           rowTradeOffMap.set(row.overpassId, groupLabel)
+          rowTradeOffScoreMap.set(row.overpassId, score)
+          rowTradeOffColorMap.set(row.overpassId, colorIndex)
           return {
             optionId: `${satelliteId}-${row.overpassId}`,
             overpassId: row.overpassId,
@@ -165,6 +172,7 @@ export default function App() {
             tradeOffId: groupLabel,
             score,
             recommended: optionIndex === 0,
+            colorIndex,
           }
         })
 
@@ -174,6 +182,7 @@ export default function App() {
           resourceLabel: satelliteId,
           reason: `Multiple downlink options for the same satellite overlap in the current planning window.`,
           options,
+          colorIndex,
         }
 
         conflictIndex += 1
@@ -183,10 +192,8 @@ export default function App() {
     const enrichedRows = rows.map((row) => ({
       ...row,
       tradeOffId: rowTradeOffMap.get(row.overpassId) ?? '—',
-      tradeOffScore:
-        groups
-          .flatMap((group) => group.options)
-          .find((option) => option.overpassId === row.overpassId)?.score ?? '—',
+      tradeOffScore: rowTradeOffScoreMap.get(row.overpassId) ?? '—',
+      tradeOffColorIndex: rowTradeOffColorMap.get(row.overpassId) ?? null,
     }))
 
     return { enrichedRows, groups }
@@ -461,6 +468,7 @@ export default function App() {
     const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
 
     const potentialSourceItems = rows
+      .filter((row) => !row.scheduleBlocked)
       .map((row) => {
         const startTimestamp = toTimestamp(row.startTime)
         const endTimestamp = toTimestamp(row.endTime)
@@ -476,10 +484,14 @@ export default function App() {
         return {
           id: `potential-${row.overpassId}`,
           label: row.overpassId,
-          detail: `${row.satId} → ${row.gsId}`,
+          detail: row.tradeOffId && row.tradeOffId !== '—'
+            ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
+            : `${row.satId} → ${row.gsId}`,
           variant: row.tradeOffId && row.tradeOffId !== '—' ? 'candidate' : 'neutral',
           startTimestamp,
           endTimestamp,
+          tradeOffId: row.tradeOffId ?? null,
+          tradeOffColorIndex: row.tradeOffColorIndex ?? null,
           optionId: groups
             .flatMap((group) => group.options)
             .find((option) => option.overpassId === row.overpassId)?.optionId ?? null,
@@ -488,6 +500,7 @@ export default function App() {
       .filter(Boolean)
 
     const proposedSourceItems = (tradeOffsCalculated ? rows : [])
+      .filter((row) => !row.scheduleBlocked)
       .filter((row) => row.tradeOffId === '—' || selectedOverpassIds.has(row.overpassId))
       .map((row) => {
         const startTimestamp = toTimestamp(row.startTime)
@@ -514,6 +527,8 @@ export default function App() {
             : 'fixed',
           startTimestamp,
           endTimestamp,
+          tradeOffId: row.tradeOffId ?? null,
+          tradeOffColorIndex: row.tradeOffColorIndex ?? null,
           optionId: chosenOption?.optionId ?? null,
         }
       })
@@ -602,14 +617,20 @@ export default function App() {
         {
           id: 'potential',
           label: 'Potential Links',
-          copy: 'All extracted communication windows before trade-off resolution.',
+          copy: useDemoData
+            ? 'Extracted windows with demo trade-off context.'
+            : 'All extracted communication windows before trade-off resolution.',
+          demoLabel: useDemoData ? 'Demo' : null,
           laneCount: potentialItems.laneCount,
           items: potentialItems.items,
         },
         {
           id: 'proposed',
           label: 'Proposed Schedule',
-          copy: 'Conflict-free windows plus the currently selected trade-off results.',
+          copy: useDemoData
+            ? 'Current simulated trade-off selection.'
+            : 'Conflict-free windows plus the currently selected trade-off results.',
+          demoLabel: useDemoData ? 'Demo' : null,
           laneCount: proposedItems.laneCount,
           items: proposedItems.items,
         },
@@ -1033,6 +1054,18 @@ export default function App() {
 
   const renderDemoBadge = () => (
     <span className="demo-badge">Demo</span>
+  )
+
+  const getTradeOffAccentColor = (colorIndex) =>
+    TRADE_OFF_ACCENT_COLORS[(colorIndex ?? 0) % TRADE_OFF_ACCENT_COLORS.length]
+
+  const renderTradeOffPill = (tradeOffId, colorIndex) => (
+    <span
+      className="tradeoff-id-pill"
+      style={{ '--tradeoff-accent': getTradeOffAccentColor(colorIndex) }}
+    >
+      {tradeOffId}
+    </span>
   )
 
   const renderSectionChevron = (expanded) => (
@@ -1578,7 +1611,11 @@ export default function App() {
                         <span>{formatDateTimeCompact(row.endTime)}</span>
                         <span>{row.maxElevation ?? '—'}</span>
                         <span>{row.duration}</span>
-                        {tradeOffsCalculated && <span>{row.tradeOffId}</span>}
+                        {tradeOffsCalculated && (
+                          row.tradeOffId !== '—'
+                            ? renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)
+                            : <span>—</span>
+                        )}
                         {tradeOffsCalculated && <span>{row.tradeOffScore}</span>}
                       </div>
                     ))}
@@ -1657,6 +1694,7 @@ export default function App() {
                         <div
                           key={option.optionId}
                           className={`tradeoff-option ${selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : ''}`}
+                          style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
                         >
                           <div className="tradeoff-option-header">
                             <span className="tradeoff-option-id">{option.overpassId}</span>
@@ -1768,7 +1806,10 @@ export default function App() {
                       {visibleTimelineTracks.map((track) => (
                         <Fragment key={track.id}>
                           <div key={`${track.id}-label`} className="timeline-label-cell">
-                            <span className="timeline-track-name">{track.label}</span>
+                            <span className="timeline-track-name">
+                              {track.label}
+                              {track.demoLabel && <span className="timeline-track-demo">{track.demoLabel}</span>}
+                            </span>
                             <span className="timeline-track-copy">{track.copy}</span>
                           </div>
                           <div
@@ -1799,11 +1840,14 @@ export default function App() {
                               <button
                                 key={item.id}
                                 type="button"
-                                className={`timeline-bar timeline-bar--${item.variant}`}
+                                className={`timeline-bar timeline-bar--${item.variant} ${item.tradeOffColorIndex !== null ? 'timeline-bar--tradeoff' : ''}`}
                                 style={{
                                   left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
                                   width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
                                   top: `calc(0.65rem + ${(item.laneIndex ?? 0) * 2.95}rem)`,
+                                  '--tradeoff-accent': item.tradeOffColorIndex !== null
+                                    ? getTradeOffAccentColor(item.tradeOffColorIndex)
+                                    : 'transparent',
                                 }}
                                 onClick={() => {
                                   if (item.optionId) {
