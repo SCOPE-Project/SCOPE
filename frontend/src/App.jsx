@@ -2128,13 +2128,13 @@ export default function App() {
                   <span>Max Elev.</span>
                   <span>Duration</span>
                   {tradeOffsCalculated && (
-                    <span className="overview-header-cell">
-                      <span>Trade Off ID</span>
+                    <span className="overview-header-cell overview-header-cell--tradeoff">
+                      <span>Trade-Off ID</span>
                       {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
                     </span>
                   )}
                   {tradeOffsCalculated && (
-                    <span className="overview-header-cell">
+                    <span className="overview-header-cell overview-header-cell--score">
                       <span>Score</span>
                       {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
                     </span>
@@ -2204,10 +2204,10 @@ export default function App() {
                           <span>{row.duration}</span>
                           {tradeOffsCalculated && (
                             row.tradeOffId !== '—'
-                              ? renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)
-                              : <span>—</span>
+                              ? <span className="overview-tradeoff-cell">{renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)}</span>
+                              : <span className="overview-tradeoff-cell">—</span>
                           )}
-                          {tradeOffsCalculated && <span>{row.tradeOffScore}</span>}
+                          {tradeOffsCalculated && <span className="overview-score-cell">{row.tradeOffScore}</span>}
                         </div>
                       )
                     })}
@@ -2226,19 +2226,21 @@ export default function App() {
                         className="overview-pagination-button"
                         disabled={overviewPage === 0}
                         onClick={() => setOverviewPage((current) => Math.max(0, current - 1))}
+                        aria-label="Previous overview page"
                       >
-                        Previous
+                        ‹
                       </button>
                       <span className="overview-pagination-page">
-                        Page {overviewPage + 1} / {overviewTotalPages}
+                        {overviewPage + 1} / {overviewTotalPages}
                       </span>
                       <button
                         type="button"
                         className="overview-pagination-button"
                         disabled={overviewPage >= overviewTotalPages - 1}
                         onClick={() => setOverviewPage((current) => Math.min(overviewTotalPages - 1, current + 1))}
+                        aria-label="Next overview page"
                       >
-                        Next
+                        ›
                       </button>
                     </div>
                   </div>
@@ -2350,8 +2352,9 @@ export default function App() {
                       className="tradeoff-browser-button"
                       disabled={activeTradeOffCardIndex === 0}
                       onClick={() => setActiveTradeOffCardIndex((current) => Math.max(0, current - 1))}
+                      aria-label="Previous trade-off card"
                     >
-                      Previous
+                      ‹
                     </button>
                     <span className="tradeoff-browser-status">
                       {activeTradeOffCardIndex + 1} / {tradeOffCards.length}
@@ -2361,8 +2364,9 @@ export default function App() {
                       className="tradeoff-browser-button"
                       disabled={activeTradeOffCardIndex >= tradeOffCards.length - 1}
                       onClick={() => setActiveTradeOffCardIndex((current) => Math.min(tradeOffCards.length - 1, current + 1))}
+                      aria-label="Next trade-off card"
                     >
-                      Next
+                      ›
                     </button>
                   </div>
                 )}
