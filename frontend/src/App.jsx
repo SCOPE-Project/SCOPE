@@ -12,6 +12,11 @@ export default function App() {
   const [view, setView] = useState('landing')
   const [selectedSatellites, setSelectedSatellites] = useState([])
   const [selectedGroundStations, setSelectedGroundStations] = useState([])
+  const [planningWindowStartDate, setPlanningWindowStartDate] = useState('')
+  const [planningWindowStartTime, setPlanningWindowStartTime] = useState('00:00')
+  const [planningWindowEndDate, setPlanningWindowEndDate] = useState('')
+  const [planningWindowEndTime, setPlanningWindowEndTime] = useState('23:59')
+  const [activeTimeMenu, setActiveTimeMenu] = useState(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [launchingScheduler, setLaunchingScheduler] = useState(false)
   const [schedulerLaunched, setSchedulerLaunched] = useState(false)
@@ -22,6 +27,7 @@ export default function App() {
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
+  const [activePlanningWindow, setActivePlanningWindow] = useState(null)
   const [timelineNow, setTimelineNow] = useState(() => Date.now())
   const [timelineLayers, setTimelineLayers] = useState({
     current: true,
@@ -361,6 +367,11 @@ export default function App() {
   const resetWorkspaceState = () => {
     setSelectedSatellites([])
     setSelectedGroundStations([])
+    setPlanningWindowStartDate('')
+    setPlanningWindowStartTime('00:00')
+    setPlanningWindowEndDate('')
+    setPlanningWindowEndTime('23:59')
+    setActiveTimeMenu(null)
     setSidebarCollapsed(false)
     setLaunchingScheduler(false)
     setSchedulerLaunched(false)
@@ -371,12 +382,26 @@ export default function App() {
     setTradeOffCards([])
     setSelectedTradeOffOption(null)
     setActiveMapAssetId(null)
+    setActivePlanningWindow(null)
     setTimelineNow(Date.now())
     setTimelineLayers({
       current: true,
       potential: true,
       proposed: true,
     })
+  }
+
+  const localDateAndTimeToIso = (dateValue, timeValue) => {
+    if (!dateValue || !timeValue) {
+      return ''
+    }
+
+    const combined = new Date(`${dateValue}T${timeValue}`)
+    if (!Number.isFinite(combined.getTime())) {
+      return ''
+    }
+
+    return combined.toISOString()
   }
 
   const fetchAssets = async () => {
@@ -409,14 +434,34 @@ export default function App() {
   }
 
   const handleLaunchScheduler = async () => {
-    if (selectedSatellites.length === 0 || selectedGroundStations.length === 0) return
+    if (!launchRequirementsMet) return
 
     setLaunchingScheduler(true)
+    setError(null)
     setExtractionStatus('Running')
     setSchedulerLaunched(false)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
     setSelectedTradeOffOption(null)
+
+    const planningWindow = {
+      startTime: localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime),
+      endTime: localDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime),
+    }
+
+    if (!planningWindow.startTime || !planningWindow.endTime) {
+      setError('Enter a valid planning window before launching the scheduler.')
+      setLaunchingScheduler(false)
+      return
+    }
+
+    if (new Date(planningWindow.endTime) <= new Date(planningWindow.startTime)) {
+      setError('The planning window end must be after the start time.')
+      setLaunchingScheduler(false)
+      return
+    }
+
+    setActivePlanningWindow(planningWindow)
 
     const simulatedRows = buildMockOverpasses(selectedSatellites, selectedGroundStations)
 
@@ -494,8 +539,25 @@ export default function App() {
   const unavailableAssets = assets.filter(
     (asset) => normalizeAssetClassification(asset) === 'ineligible'
   )
+  const planningWindowComplete =
+    planningWindowStartDate !== ''
+    && planningWindowStartTime !== ''
+    && planningWindowEndDate !== ''
+    && planningWindowEndTime !== ''
+  const planningWindowValid =
+    planningWindowComplete
+    && localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime)
+    && localDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)
+    && new Date(localDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)) > new Date(localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime))
   const launchRequirementsMet =
-    selectedSatellites.length >= 1 && selectedGroundStations.length >= 1
+    planningWindowValid
+    && selectedSatellites.length >= 1
+    && selectedGroundStations.length >= 1
+  const timeOptions = Array.from({ length: 96 }, (_, index) => {
+    const hours = String(Math.floor(index / 4)).padStart(2, '0')
+    const minutes = String((index % 4) * 15).padStart(2, '0')
+    return `${hours}:${minutes}`
+  })
 
   const getAssetCoordinates = (asset) => {
     if (
@@ -618,6 +680,60 @@ export default function App() {
     </svg>
   )
 
+  const renderTimeInput = (menuKey, value, setValue) => (
+    <div
+      className={`time-window-dropdown ${activeTimeMenu === menuKey ? 'time-window-dropdown--open' : ''}`}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setActiveTimeMenu(null)
+        }
+      }}
+    >
+      <div className="time-window-input-shell">
+        <input
+          type="text"
+          inputMode="numeric"
+          placeholder="HH:MM"
+          value={value}
+          onFocus={() => setActiveTimeMenu(menuKey)}
+          onChange={(event) => setValue(event.target.value)}
+          className="time-window-input time-window-input--combo"
+        />
+        <button
+          type="button"
+          className="time-window-input-toggle"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setActiveTimeMenu((current) => (current === menuKey ? null : menuKey))}
+          aria-haspopup="listbox"
+          aria-expanded={activeTimeMenu === menuKey}
+          aria-label={`Toggle ${menuKey} time suggestions`}
+        >
+          <span className="time-window-select-arrow" aria-hidden="true">▾</span>
+        </button>
+      </div>
+      {activeTimeMenu === menuKey && (
+        <div className="time-window-select-menu" role="listbox" aria-label={`${menuKey} time`}>
+          {timeOptions.map((timeValue) => (
+            <button
+              key={`${menuKey}-${timeValue}`}
+              type="button"
+              role="option"
+              aria-selected={value === timeValue}
+              className={`time-window-select-option ${value === timeValue ? 'time-window-select-option--selected' : ''}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                setValue(timeValue)
+                setActiveTimeMenu(null)
+              }}
+            >
+              {timeValue}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+
   if (view === 'landing') {
     return (
       <div className="app-shell">
@@ -715,9 +831,50 @@ export default function App() {
                   </span>
                 </button>
                 {expandedSections.timeWindow && (
-                  <p>
-                    Planning interval controls will be added here in the next step.
-                  </p>
+                  <div className="time-window-panel">
+                    <div className="time-window-header">
+                      <span className="time-window-title">Planning Interval</span>
+                      <span className="time-window-meta">Local time</span>
+                    </div>
+                    <div className="time-window-row">
+                      <label className="time-window-field">
+                        <span>Start Date</span>
+                        <input
+                          type="date"
+                          value={planningWindowStartDate}
+                          onChange={(event) => setPlanningWindowStartDate(event.target.value)}
+                          className="time-window-input"
+                        />
+                      </label>
+                      <label className="time-window-field time-window-field--time">
+                        <span>Start Time</span>
+                        {renderTimeInput('start', planningWindowStartTime, setPlanningWindowStartTime)}
+                      </label>
+                    </div>
+                    <div className="time-window-row">
+                      <label className="time-window-field">
+                        <span>End Date</span>
+                        <input
+                          type="date"
+                          value={planningWindowEndDate}
+                          onChange={(event) => setPlanningWindowEndDate(event.target.value)}
+                          className="time-window-input"
+                        />
+                      </label>
+                      <label className="time-window-field time-window-field--time">
+                        <span>End Time</span>
+                        {renderTimeInput('end', planningWindowEndTime, setPlanningWindowEndTime)}
+                      </label>
+                    </div>
+                    <p className="time-window-note">
+                      Extracted data is limited to this interval.
+                    </p>
+                    {planningWindowComplete && !planningWindowValid && (
+                      <p className="time-window-error">
+                        Enter a valid time window with an end time after the start time.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -824,7 +981,7 @@ export default function App() {
                 </button>
                 {!launchRequirementsMet && !launchingScheduler && (
                   <span className="sidebar-action-tooltip">
-                    Select at least 1 satellite and 1 ground station first.
+                    Enter a valid time window and select at least 1 satellite and 1 ground station first.
                   </span>
                 )}
               </div>
