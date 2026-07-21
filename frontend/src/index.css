@@ -1714,7 +1714,7 @@ body {
 }
 
 .timeline-track-row {
-  min-height: 4rem;
+  min-height: var(--timeline-row-height, 4rem);
   border-top: 1px solid var(--line-soft);
   background: linear-gradient(180deg, rgba(0, 57, 117, 0.025) 0%, rgba(0, 57, 117, 0) 100%);
 }

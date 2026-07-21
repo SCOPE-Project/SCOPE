@@ -388,6 +388,33 @@ export default function App() {
     ?? group.options.find((option) => option.recommended)
     ?? group.options[0]
 
+  const layoutTimelineItems = (items) => {
+    const lanes = []
+
+    const positionedItems = [...items]
+      .sort((left, right) => left.startMinutes - right.startMinutes)
+      .map((item) => {
+        let laneIndex = lanes.findIndex((laneEnd) => item.startMinutes >= laneEnd)
+
+        if (laneIndex === -1) {
+          laneIndex = lanes.length
+          lanes.push(item.startMinutes + item.durationMinutes)
+        } else {
+          lanes[laneIndex] = item.startMinutes + item.durationMinutes
+        }
+
+        return {
+          ...item,
+          laneIndex,
+        }
+      })
+
+    return {
+      laneCount: Math.max(1, lanes.length),
+      items: positionedItems,
+    }
+  }
+
   const buildDayBands = (baseDate, totalMinutes) => {
     const bands = []
     let cursor = new Date(baseDate)
@@ -419,73 +446,122 @@ export default function App() {
     return bands
   }
 
-  const buildTimelineModel = (rows, groups, currentTimestamp) => {
-    if (rows.length === 0) {
-      return null
-    }
-
-    const baseDate = new Date()
-    baseDate.setMinutes(0, 0, 0)
-    baseDate.setHours(baseDate.getHours() - 1)
-
-    const rowIndexMap = new Map(rows.map((row, index) => [row.overpassId, index]))
-
-    const findOptionForOverpass = (overpassId) =>
-      groups.flatMap((group) => group.options).find((option) => option.overpassId === overpassId)
-
-    const buildTiming = (row, index) => ({
-      startMinutes: index * 85 + 35,
-      durationMinutes: Math.max(parseDurationMinutes(row.duration), 35),
-    })
-
-    const currentItems = rows.slice(0, Math.min(2, rows.length)).map((row, index) => ({
-      id: `current-${row.overpassId}`,
-      track: 'current',
-      label: row.satId,
-      detail: 'SatOS baseline window',
-      variant: 'current',
-      ...buildTiming(row, index * 2),
-    }))
-
-    const potentialItems = rows.map((row, index) => ({
-      id: `potential-${row.overpassId}`,
-      track: 'potential',
-      label: row.overpassId,
-      detail: `${row.satId} → ${row.gsId}`,
-      variant: row.tradeOffId && row.tradeOffId !== '—' ? 'candidate' : 'neutral',
-      optionId: findOptionForOverpass(row.overpassId)?.optionId ?? null,
-      ...buildTiming(row, index),
-    }))
-
+  const buildTimelineModel = (rows, groups, currentTimestamp, currentScheduleItems, planningWindow) => {
     const selectedOptions = groups.map((group) => getSelectedTradeOffForGroup(group))
     const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
 
-    const proposedItems = rows
+    const potentialSourceItems = rows
+      .map((row) => {
+        const startTimestamp = toTimestamp(row.startTime)
+        const endTimestamp = toTimestamp(row.endTime)
+
+        if (
+          startTimestamp === null
+          || endTimestamp === null
+          || endTimestamp <= startTimestamp
+        ) {
+          return null
+        }
+
+        return {
+          id: `potential-${row.overpassId}`,
+          label: row.overpassId,
+          detail: `${row.satId} → ${row.gsId}`,
+          variant: row.tradeOffId && row.tradeOffId !== '—' ? 'candidate' : 'neutral',
+          startTimestamp,
+          endTimestamp,
+          optionId: groups
+            .flatMap((group) => group.options)
+            .find((option) => option.overpassId === row.overpassId)?.optionId ?? null,
+        }
+      })
+      .filter(Boolean)
+
+    const proposedSourceItems = (tradeOffsCalculated ? rows : [])
       .filter((row) => row.tradeOffId === '—' || selectedOverpassIds.has(row.overpassId))
       .map((row) => {
-        const index = rowIndexMap.get(row.overpassId) ?? 0
+        const startTimestamp = toTimestamp(row.startTime)
+        const endTimestamp = toTimestamp(row.endTime)
+
+        if (
+          startTimestamp === null
+          || endTimestamp === null
+          || endTimestamp <= startTimestamp
+        ) {
+          return null
+        }
+
         const chosenOption = selectedOptions.find((option) => option.overpassId === row.overpassId)
 
         return {
           id: `proposed-${row.overpassId}`,
-          track: 'proposed',
           label: row.overpassId,
-          detail: chosenOption ? `${row.tradeOffId} active selection` : 'Fixed window',
+          detail: chosenOption ? `${row.tradeOffId} selected path` : 'Fixed window',
           variant: chosenOption
             ? chosenOption.optionId === selectedTradeOffOption
               ? 'selected'
               : 'recommended'
             : 'fixed',
+          startTimestamp,
+          endTimestamp,
           optionId: chosenOption?.optionId ?? null,
-          ...buildTiming(row, index),
         }
       })
+      .filter(Boolean)
 
-    const allItems = [...currentItems, ...potentialItems, ...proposedItems]
-    const totalMinutes = Math.max(
-      10 * 60,
-      ...allItems.map((item) => item.startMinutes + item.durationMinutes + 45),
-    )
+    const currentSourceItems = currentScheduleItems
+      .map((item) => {
+        const startTimestamp = toTimestamp(item.startTime)
+        const endTimestamp = toTimestamp(item.endTime)
+
+        if (
+          startTimestamp === null
+          || endTimestamp === null
+          || endTimestamp <= startTimestamp
+        ) {
+          return null
+        }
+
+        return {
+          id: item.id,
+          label: item.label,
+          detail: item.detail,
+          variant: 'current',
+          startTimestamp,
+          endTimestamp,
+          optionId: null,
+        }
+      })
+      .filter(Boolean)
+
+    const allTimestampItems = [
+      ...currentSourceItems,
+      ...potentialSourceItems,
+      ...proposedSourceItems,
+    ]
+
+    if (allTimestampItems.length === 0) {
+      return null
+    }
+
+    const planningStartTimestamp = toTimestamp(planningWindow?.startTime)
+    const planningEndTimestamp = toTimestamp(planningWindow?.endTime)
+    const minTimestamp = Math.min(...allTimestampItems.map((item) => item.startTimestamp))
+    const maxTimestamp = Math.max(...allTimestampItems.map((item) => item.endTimestamp))
+    const baseTimestamp = planningStartTimestamp ?? (minTimestamp - 30 * 60000)
+    const endTimestamp = planningEndTimestamp ?? (maxTimestamp + 30 * 60000)
+    const totalMinutes = Math.max(60, Math.ceil((endTimestamp - baseTimestamp) / 60000))
+    const baseDate = new Date(baseTimestamp)
+
+    const mapToTimelineItem = (item) => ({
+      ...item,
+      startMinutes: (item.startTimestamp - baseTimestamp) / 60000,
+      durationMinutes: Math.max(5, (item.endTimestamp - item.startTimestamp) / 60000),
+    })
+
+    const currentItems = layoutTimelineItems(currentSourceItems.map(mapToTimelineItem))
+    const potentialItems = layoutTimelineItems(potentialSourceItems.map(mapToTimelineItem))
+    const proposedItems = layoutTimelineItems(proposedSourceItems.map(mapToTimelineItem))
 
     const ticks = Array.from({ length: Math.floor(totalMinutes / 60) + 2 }, (_, index) => {
       const offsetMinutes = index * 60
@@ -510,19 +586,22 @@ export default function App() {
           id: 'current',
           label: 'Current SatOS Schedule',
           copy: 'Existing schedule context imported from SatOS.',
-          items: currentItems,
+          laneCount: currentItems.laneCount,
+          items: currentItems.items,
         },
         {
           id: 'potential',
           label: 'Potential Links',
           copy: 'All extracted communication windows before trade-off resolution.',
-          items: potentialItems,
+          laneCount: potentialItems.laneCount,
+          items: potentialItems.items,
         },
         {
           id: 'proposed',
           label: 'Proposed Schedule',
           copy: 'Conflict-free windows plus the currently selected trade-off results.',
-          items: proposedItems,
+          laneCount: proposedItems.laneCount,
+          items: proposedItems.items,
         },
       ],
     }
@@ -892,7 +971,17 @@ export default function App() {
   const activeMapAsset =
     selectedMapAssets.find((asset) => asset.id === activeMapAssetId) ?? selectedMapAssets[0] ?? null
 
-  const timelineModel = buildTimelineModel(overviewRows, tradeOffCards, timelineNow)
+  const currentScheduleItems = buildCurrentScheduleItems(
+    assetSchedules,
+    [...selectedSatellites, ...selectedGroundStations],
+  )
+  const timelineModel = buildTimelineModel(
+    overviewRows,
+    tradeOffCards,
+    timelineNow,
+    currentScheduleItems,
+    activePlanningWindow,
+  )
   const visibleTimelineTracks = timelineModel?.tracks.filter((track) => timelineLayers[track.id]) ?? []
 
   const renderAssetWarning = (message) => (
@@ -1583,7 +1672,7 @@ export default function App() {
                     ))}
                   </div>
                   <div className="timeline-toolbar-copy">
-                    Timeline bars use placeholder timings until schedule windows arrive from the backend.
+                    Current schedule activities and extracted overpasses use backend timestamps. Proposed scheduling reflects the current frontend trade-off selection.
                   </div>
                 </div>
 
@@ -1630,7 +1719,13 @@ export default function App() {
                             <span className="timeline-track-name">{track.label}</span>
                             <span className="timeline-track-copy">{track.copy}</span>
                           </div>
-                          <div key={`${track.id}-row`} className="timeline-track-row">
+                          <div
+                            key={`${track.id}-row`}
+                            className="timeline-track-row"
+                            style={{
+                              '--timeline-row-height': `${Math.max(4, (track.laneCount ?? 1) * 2.95 + 0.9)}rem`,
+                            }}
+                          >
                             {timelineModel.ticks.map((tick) => (
                               <div
                                 key={`${track.id}-tick-${tick.offsetMinutes}`}
@@ -1656,13 +1751,14 @@ export default function App() {
                                 style={{
                                   left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
                                   width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
+                                  top: `calc(0.65rem + ${(item.laneIndex ?? 0) * 2.95}rem)`,
                                 }}
                                 onClick={() => {
                                   if (item.optionId) {
                                     setSelectedTradeOffOption(item.optionId)
                                   }
                                 }}
-                                title={`${item.label} · ${item.detail}`}
+                                title={`${item.label}\n${item.detail}\nStart: ${formatDateTimeCompact(item.startTime)}\nEnd: ${formatDateTimeCompact(item.endTime)}`}
                               >
                                 <span className="timeline-bar-title">{item.label}</span>
                                 <span className="timeline-bar-copy">{item.detail}</span>
