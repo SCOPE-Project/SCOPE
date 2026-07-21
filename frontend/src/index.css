@@ -1106,6 +1106,63 @@ body {
   font-size: 0.88rem;
 }
 
+.overview-footer {
+  border-top: 1px solid var(--line-soft);
+}
+
+.overview-footer .overview-note {
+  border-top: none;
+  padding-bottom: 0.4rem;
+}
+
+.overview-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  padding: 0 1rem 1rem;
+  flex-wrap: wrap;
+}
+
+.overview-pagination-copy,
+.overview-pagination-page {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.overview-pagination-copy {
+  margin-left: auto;
+}
+
+.overview-pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 auto;
+}
+
+.overview-pagination-button {
+  min-width: 5.6rem;
+  height: 2rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.overview-pagination-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.overview-pagination-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .overview-overpass-cell {
   display: inline-flex;
   align-items: center;
