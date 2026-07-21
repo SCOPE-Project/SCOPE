@@ -55,6 +55,10 @@ body {
   min-height: 100vh;
 }
 
+.app-shell--locked {
+  overflow: hidden;
+}
+
 .app-header {
   display: flex;
   align-items: center;
@@ -1517,27 +1521,25 @@ body {
 .map-panel-controls {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: flex-end;
+  gap: 0.75rem;
 }
 
 .map-panel-toggle {
-  width: 1.9rem;
-  height: 1.9rem;
+  width: 2rem;
+  height: 2rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--line-strong);
   border-radius: 0.18rem;
-  background: transparent;
-  color: var(--text-secondary);
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .map-panel-toggle:hover {
   background: var(--bg-hover);
-  border-color: #9aa8b5;
-  color: var(--text-primary);
 }
 
 .map-summary {
@@ -1578,7 +1580,7 @@ body {
 
 .map-canvas {
   position: relative;
-  min-height: 360px;
+  min-height: 300px;
   border: 1px solid var(--line-soft);
   border-radius: 0.22rem;
   overflow: hidden;
@@ -1591,11 +1593,8 @@ body {
 }
 
 .map-canvas--regional {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 520px;
-  background: linear-gradient(180deg, #d7e1ea 0%, #d2dce4 100%);
+  min-height: 0;
+  background: #d9e7f2;
 }
 
 .map-canvas::before {
@@ -1635,41 +1634,35 @@ body {
 }
 
 .map-region-art {
-  position: relative;
-  width: min(100%, var(--map-region-width));
-  aspect-ratio: calc(var(--map-region-width) / var(--map-region-height));
-  overflow: hidden;
-  border: 1px solid rgba(31, 42, 51, 0.12);
-  border-radius: 0.22rem;
-  background: #d7e1ea;
+  position: absolute;
+  left: 50%;
+  top: 50%;
 }
 
 .map-region-art--cropped {
   width: 112%;
-  max-width: 112%;
-  aspect-ratio: calc(
-    (var(--map-region-width) - var(--map-region-crop-left) - var(--map-region-crop-right)) /
-    (var(--map-region-height) - var(--map-region-crop-top) - var(--map-region-crop-bottom))
-  );
+  aspect-ratio: var(--map-region-aspect-ratio);
+  transform: translate(-50%, -50%);
 }
 
 .map-region-tile {
   position: absolute;
-  user-select: none;
+  display: block;
+  object-fit: fill;
   pointer-events: none;
 }
 
 .map-attribution {
   position: absolute;
-  right: 0.55rem;
-  bottom: 0.45rem;
-  z-index: 2;
-  padding: 0.18rem 0.36rem;
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(31, 42, 51, 0.12);
+  right: 0.6rem;
+  bottom: 0.55rem;
+  z-index: 4;
+  padding: 0.18rem 0.42rem;
   border-radius: 0.16rem;
-  color: var(--text-secondary);
-  font-size: 0.66rem;
+  background: rgba(255, 255, 255, 0.88);
+  color: #34506f;
+  font-size: 0.65rem;
+  line-height: 1.2;
 }
 
 .map-marker {
@@ -1775,83 +1768,134 @@ body {
 .map-asset-card--active {
   background: #e7eef6;
   border-color: #b8cade;
+  box-shadow: inset 0 0 0 1px rgba(0, 57, 117, 0.06);
 }
 
 .map-asset-card-header {
   display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
+  align-items: center;
+  gap: 0.55rem;
   margin-bottom: 0.55rem;
-  align-items: baseline;
+}
+
+.map-asset-dot {
+  width: 0.78rem;
+  height: 0.78rem;
+  flex: 0 0 auto;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(31, 42, 51, 0.12);
+}
+
+.map-asset-dot--ground-station {
+  border-radius: 999px;
+  background: #d16a2d;
+}
+
+.map-asset-dot--satellite {
+  border-radius: 0.12rem;
+  background: var(--accent-primary);
+  transform: rotate(45deg);
 }
 
 .map-asset-card-name {
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  min-width: 0;
   overflow-wrap: anywhere;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .map-asset-card-type {
-  flex: 0 0 auto;
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   color: var(--text-secondary);
 }
 
-.map-asset-card-grid,
+.map-asset-card-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.18rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.map-asset-card-grid dt {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.map-asset-card-grid dd {
+  color: var(--text-primary);
+}
+
+.map-missing-location-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.map-missing-location-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+  padding: 0.7rem 0.78rem;
+  border: 1px solid #e0d7c8;
+  border-radius: 0.2rem;
+  background: #fbf7f1;
+}
+
+.map-missing-location-name {
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.map-missing-location-type {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.map-missing-location-copy {
+  font-size: 0.78rem;
+  color: #8c6130;
+}
+
+.map-panel-note {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.map-detail-card {
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  background: var(--bg-panel-strong);
+  padding: 0.9rem;
+}
+
+.map-detail-card > p {
+  margin-bottom: 0.65rem;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
 .map-detail-grid {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.3rem 0.7rem;
-  font-size: 0.8rem;
+  gap: 0.35rem 0.7rem;
+  font-size: 0.84rem;
 }
 
-.map-asset-card-grid dt,
 .map-detail-grid dt {
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.map-asset-card-grid dd,
 .map-detail-grid dd {
   color: var(--text-primary);
-}
-
-.map-missing-location-card {
-  border: 1px solid var(--line-soft);
-  border-radius: 0.18rem;
-  background: #f7f9fb;
-  padding: 0.7rem 0.75rem;
-}
-
-.map-missing-location-name {
-  display: block;
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  overflow-wrap: anywhere;
-}
-
-.map-missing-location-type {
-  display: block;
-  margin-top: 0.18rem;
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-}
-
-.map-missing-location-copy {
-  margin-top: 0.48rem;
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-}
-
-.map-panel-note {
-  margin-top: 0.7rem;
-  font-size: 0.78rem;
-  color: var(--text-muted);
 }
 
 

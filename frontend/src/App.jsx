@@ -916,6 +916,7 @@ export default function App() {
     setCalculatingTradeOffs(false)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
+    setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
     setActiveTimelineItemId(null)
     setActiveMapAssetId(null)
@@ -927,6 +928,19 @@ export default function App() {
       potential: true,
       proposed: true,
     })
+    setOverviewPage(0)
+    setExpandedSections({
+      timeWindow: true,
+      satellites: true,
+      groundStations: true,
+      unavailableAssets: false,
+      mapView: false,
+    })
+    setConfirmingSchedule(false)
+    setConfirmationProgress(0)
+    setConfirmationStep('')
+    setConfirmationSuccess(false)
+    setConfirmedScheduleCount(0)
   }
 
   const localDateAndTimeToIso = (dateValue, timeValue) => {
@@ -1005,6 +1019,21 @@ export default function App() {
   const handleLaunchScheduler = async () => {
     if (!launchRequirementsMet) return
 
+    const planningWindow = {
+      startTime: localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime),
+      endTime: localDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime),
+    }
+
+    if (!planningWindow.startTime || !planningWindow.endTime) {
+      setError('Enter a valid planning window before launching the scheduler.')
+      return
+    }
+
+    if (new Date(planningWindow.endTime) <= new Date(planningWindow.startTime)) {
+      setError('The planning window end must be after the start time.')
+      return
+    }
+
     setLaunchingScheduler(true)
     setError(null)
     setExtractionStatus('Queued')
@@ -1018,23 +1047,6 @@ export default function App() {
     setConfirmedScheduleCount(0)
     setTimelineNow(Date.now())
     setSidebarCollapsed(true)
-
-    const planningWindow = {
-      startTime: localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime),
-      endTime: localDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime),
-    }
-
-    if (!planningWindow.startTime || !planningWindow.endTime) {
-      setError('Enter a valid planning window before launching the scheduler.')
-      setLaunchingScheduler(false)
-      return
-    }
-
-    if (new Date(planningWindow.endTime) <= new Date(planningWindow.startTime)) {
-      setError('The planning window end must be after the start time.')
-      setLaunchingScheduler(false)
-      return
-    }
 
     setActivePlanningWindow(planningWindow)
 
@@ -1076,6 +1088,7 @@ export default function App() {
       setOverviewRows([])
       setActivePlanningWindow(null)
       setSchedulerLaunched(false)
+      setSidebarCollapsed(false)
       setExtractionStatus('Failed')
       setError(err.message || 'Failed to extract overpasses from the backend.')
     } finally {
@@ -1294,6 +1307,8 @@ export default function App() {
       for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
         tiles.push({
           key: `${tileX}-${tileY}`,
+          x: tileX,
+          y: tileY,
           url: `https://tile.openstreetmap.org/${DEMO_REGION_MAP_ZOOM}/${tileX}/${tileY}.png`,
           left: ((tileX - minTileX) / tileColumnCount) * 100,
           top: ((tileY - minTileY) / tileRowCount) * 100,
@@ -1396,17 +1411,6 @@ export default function App() {
         name: asset.name,
         type: 'Satellite',
       })),
-  ]
-
-  const unmappedSelectedAssets = [
-    ...selectedGroundStationAssets
-      .filter((asset) => !getAssetCoordinates(asset))
-      .map((asset) => ({
-        id: `unmapped-ground-station-${asset.name}`,
-        name: asset.name,
-        type: 'Ground Station',
-      })),
-    ...selectedAssetsWithoutLocation,
   ]
 
   const activeMapAsset =
@@ -1852,10 +1856,7 @@ export default function App() {
           <section className="panel panel--fullwidth map-panel">
             <div className="panel-heading panel-heading--map">
               <div className="panel-heading-title">
-                <h2>
-                  Map View
-                  {showDemoRegionalMap && renderDemoBadge()}
-                </h2>
+                <h2>Map View</h2>
               </div>
               <div className="map-panel-controls">
                 <button
@@ -1873,157 +1874,155 @@ export default function App() {
             </div>
 
             {expandedSections.mapView && (
-              <>
-                <div className="map-layout">
-                  <div className="map-canvas-shell">
-                    <div
-                      className={`map-canvas ${showDemoRegionalMap ? 'map-canvas--regional' : ''}`}
-                      aria-label="Selected asset map view"
-                    >
-                      {visibleMapAssets.length === 0 && (
-                        <div className="map-empty-state">
-                          Select a ground station to place it on the map.
-                        </div>
-                      )}
-
-                      {showDemoRegionalMap && demoRegionMapModel && (
-                        <>
-                          <div
-                            className="map-region-art map-region-art--cropped"
+              <div className="map-layout">
+                <div className="map-canvas-shell">
+                  <div
+                    className={`map-canvas ${showDemoRegionalMap ? 'map-canvas--regional' : ''}`}
+                    aria-label="Selected asset map view"
+                    style={
+                      showDemoRegionalMap && demoRegionMapModel
+                        ? {
+                            height: '520px',
+                          }
+                        : undefined
+                    }
+                  >
+                    {showDemoRegionalMap && demoRegionMapModel && (
+                      <div
+                        className="map-region-art map-region-art--cropped"
+                        style={{ '--map-region-aspect-ratio': demoRegionMapModel.aspectRatio }}
+                        aria-hidden="true"
+                      >
+                        {demoRegionMapModel.tiles.map((tile) => (
+                          <img
+                            key={tile.key}
+                            className="map-region-tile"
+                            src={tile.url}
+                            alt=""
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
                             style={{
-                              '--map-region-width': `${demoRegionMapModel.width}px`,
-                              '--map-region-height': `${demoRegionMapModel.height}px`,
-                              '--map-region-crop-top': `${demoRegionMapModel.crop.top}px`,
-                              '--map-region-crop-right': `${demoRegionMapModel.crop.right}px`,
-                              '--map-region-crop-bottom': `${demoRegionMapModel.crop.bottom}px`,
-                              '--map-region-crop-left': `${demoRegionMapModel.crop.left}px`,
+                              left: `${tile.left}%`,
+                              top: `${tile.top}%`,
+                              width: `${tile.width}%`,
+                              height: `${tile.height}%`,
                             }}
-                          >
-                            {demoRegionMapModel.tiles.map((tile) => (
-                              <img
-                                key={`${tile.x}-${tile.y}`}
-                                className="map-region-tile"
-                                src={`https://tile.openstreetmap.org/${DEMO_REGION_MAP_ZOOM}/${tile.x}/${tile.y}.png`}
-                                alt=""
-                                style={{
-                                  left: `${tile.left}px`,
-                                  top: `${tile.top}px`,
-                                  width: `${MAP_TILE_SIZE}px`,
-                                  height: `${MAP_TILE_SIZE}px`,
-                                }}
-                              />
-                            ))}
+                          />
+                        ))}
+                        {visibleMapAssets.map((asset) => {
+                          const markerPosition = demoRegionMarkerPositions.get(asset.id)
 
-                            {demoRegionalMapAssets.map((asset) => {
-                              const marker = demoRegionMarkerPositions.get(asset.id)
-                              if (!marker) {
-                                return null
-                              }
-
-                              return (
-                                <button
-                                  key={asset.id}
-                                  type="button"
-                                  className={`map-marker map-marker--${asset.markerType} ${
-                                    activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
-                                  }`}
-                                  style={{
-                                    left: `${marker.left}px`,
-                                    top: `${marker.top}px`,
-                                  }}
-                                  onClick={() => setActiveMapAssetId(asset.id)}
-                                  aria-label={`${asset.name} on map`}
-                                >
-                                  <span className="map-marker-label">{asset.name}</span>
-                                </button>
-                              )
-                            })}
-                          </div>
-                          <div className="map-attribution">Map data © OpenStreetMap contributors</div>
-                        </>
-                      )}
-
-                      {!showDemoRegionalMap && visibleMapAssets.map((asset) => {
-                        const markerPosition = projectToMap(asset.latitude, asset.longitude)
-
-                        return (
-                          <button
-                            key={asset.id}
-                            type="button"
-                            className={`map-marker map-marker--${asset.markerType} ${
-                              activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
-                            }`}
-                            style={{
-                              left: `${markerPosition.left}%`,
-                              top: `${markerPosition.top}%`,
-                            }}
-                            onClick={() => setActiveMapAssetId(asset.id)}
-                            aria-label={`${asset.name} on map`}
-                          >
-                            <span className="map-marker-label">{asset.name}</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-
-                  <aside className="map-sidebar">
-                    <div className="map-sidebar-section">
-                      <h3>Selected Assets</h3>
-                      {visibleMapAssets.length > 0 ? (
-                        <div className="map-asset-card-list">
-                          {visibleMapAssets.map((asset) => (
+                          return (
                             <button
                               key={asset.id}
                               type="button"
-                              className={`map-asset-card ${
-                                activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
+                              className={`map-marker map-marker--${asset.markerType} ${
+                                activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
                               }`}
+                              style={{
+                                left: `${markerPosition.left}%`,
+                                top: `${markerPosition.top}%`,
+                              }}
                               onClick={() => setActiveMapAssetId(asset.id)}
+                              aria-label={`${asset.name} on map`}
                             >
-                              <div className="map-asset-card-header">
-                                <span className="map-asset-card-name">{asset.name}</span>
-                                <span className="map-asset-card-type">{asset.type}</span>
-                              </div>
-                              <dl className="map-asset-card-grid">
-                                <dt>Latitude</dt>
-                                <dd>{formatCoordinate(asset.latitude, 'N', 'S')}</dd>
-                                <dt>Longitude</dt>
-                                <dd>{formatCoordinate(asset.longitude, 'E', 'W')}</dd>
-                              </dl>
+                              <span className="map-marker-label">{asset.name}</span>
                             </button>
-                          ))}
-                        </div>
-                      ) : (
-                        <p>No selected assets with usable map coordinates yet.</p>
-                      )}
-                    </div>
-
-                    {unmappedSelectedAssets.length > 0 && (
-                      <div className="map-sidebar-section">
-                        <h3>Selected Without Location</h3>
-                        <div className="map-missing-location-list">
-                          {unmappedSelectedAssets.map((asset) => (
-                            <div key={asset.id} className="map-missing-location-card">
-                              <span className="map-missing-location-name">{asset.name}</span>
-                              <span className="map-missing-location-type">{asset.type}</span>
-                              <p className="map-missing-location-copy">
-                                Location data not available.
-                              </p>
-                            </div>
-                          ))}
-                        </div>
+                          )
+                        })}
                       </div>
                     )}
-                  </aside>
+                    {visibleMapAssets.length === 0 && (
+                      <div className="map-empty-state">
+                        {showDemoRegionalMap
+                          ? 'Select one of the demo ground stations to place it on the regional map.'
+                          : 'Select a ground station to place it on the map.'}
+                      </div>
+                    )}
+
+                    {!showDemoRegionalMap && visibleMapAssets.map((asset) => {
+                      const markerPosition = projectToMap(asset.latitude, asset.longitude)
+
+                      return (
+                        <button
+                          key={asset.id}
+                          type="button"
+                          className={`map-marker map-marker--${asset.markerType} ${
+                            activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
+                          }`}
+                          style={{
+                            left: `${markerPosition.left}%`,
+                            top: `${markerPosition.top}%`,
+                          }}
+                          onClick={() => setActiveMapAssetId(asset.id)}
+                          aria-label={`${asset.name} on map`}
+                        >
+                          <span className="map-marker-label">{asset.name}</span>
+                        </button>
+                      )
+                    })}
+                    {showDemoRegionalMap && (
+                      <div className="map-attribution">
+                        Map data © OpenStreetMap contributors
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {showDemoRegionalMap && (
-                  <p className="map-panel-note">
-                    Static demo map. Ground-station markers use real coordinates within this regional excerpt.
-                  </p>
-                )}
-              </>
+                <aside className="map-sidebar">
+                  <div className="map-sidebar-section">
+                    <h3>Visible Assets</h3>
+                    {visibleMapAssets.length > 0 ? (
+                      <div className="map-asset-card-list">
+                        {visibleMapAssets.map((asset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            className={`map-asset-card ${
+                              activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
+                            }`}
+                            onClick={() => setActiveMapAssetId(asset.id)}
+                          >
+                            <div className="map-asset-card-header">
+                              <span className={`map-asset-dot map-asset-dot--${asset.markerType}`}></span>
+                              <span className="map-asset-card-name">{asset.name.toUpperCase()}</span>
+                            </div>
+                            <div className="map-asset-card-type">{asset.type}</div>
+                            <dl className="map-asset-card-grid">
+                              <dt>Latitude</dt>
+                              <dd>{formatCoordinate(asset.latitude, 'N', 'S')}</dd>
+                              <dt>Longitude</dt>
+                              <dd>{formatCoordinate(asset.longitude, 'E', 'W')}</dd>
+                            </dl>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p>No selected assets with usable map coordinates yet.</p>
+                    )}
+                  </div>
+
+                  {selectedAssetsWithoutLocation.length > 0 && (
+                    <div className="map-sidebar-section">
+                      <h3>Selected Without Location</h3>
+                      <div className="map-missing-location-list">
+                        {selectedAssetsWithoutLocation.map((asset) => (
+                          <div key={asset.id} className="map-missing-location-card">
+                            <span className="map-missing-location-name">{asset.name.toUpperCase()}</span>
+                            <span className="map-missing-location-type">{asset.type}</span>
+                            <span className="map-missing-location-copy">Location data not available.</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </aside>
+              </div>
+            )}
+            {expandedSections.mapView && showDemoRegionalMap && (
+              <p className="map-panel-note">
+                Static demo map. Ground-station markers use real coordinates within this regional excerpt.
+              </p>
             )}
           </section>
 
