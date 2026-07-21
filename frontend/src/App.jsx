@@ -2,6 +2,10 @@ import { Fragment, useEffect, useState } from 'react'
 
 const BACKEND_BASE_URL = 'http://localhost:8000'
 const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
+const TIMELINE_ZOOM_LEVELS = [
+  { id: 'fit', label: 'Fit', multiplier: 1 },
+  { id: 'detail', label: 'Detail', multiplier: 2.6 },
+]
 
 export default function App() {
   const [assets, setAssets] = useState([])
@@ -29,9 +33,11 @@ export default function App() {
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
+  const [activeTimelineItemId, setActiveTimelineItemId] = useState(null)
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
   const [timelineNow, setTimelineNow] = useState(() => Date.now())
+  const [timelineZoomLevel, setTimelineZoomLevel] = useState('detail')
   const [timelineLayers, setTimelineLayers] = useState({
     current: true,
     potential: true,
@@ -120,6 +126,7 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
+    setActiveTimelineItemId(null)
   }
 
   const buildMockOverpasses = (selectedSatelliteNames, selectedGroundStationNames) => {
@@ -395,6 +402,47 @@ export default function App() {
   const formatTimelineHour = (date) =>
     date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
+  const formatTimelineDateTime = (value) => {
+    if (!value) {
+      return '—'
+    }
+
+    const parsed = new Date(value)
+    if (!Number.isFinite(parsed.getTime())) {
+      return '—'
+    }
+
+    return parsed.toLocaleString([], {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
+
+  const formatTimelineDuration = (startValue, endValue) => {
+    const startTimestamp = toTimestamp(startValue)
+    const endTimestamp = toTimestamp(endValue)
+
+    if (
+      startTimestamp === null
+      || endTimestamp === null
+      || endTimestamp <= startTimestamp
+    ) {
+      return '—'
+    }
+
+    const durationMinutes = Math.round((endTimestamp - startTimestamp) / 60000)
+    if (durationMinutes < 60) {
+      return `${durationMinutes} min`
+    }
+
+    const hours = Math.floor(durationMinutes / 60)
+    const minutes = durationMinutes % 60
+    return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`
+  }
+
   const formatTimelineDay = (date) =>
     `${date.toLocaleDateString([], {
       year: 'numeric',
@@ -486,6 +534,8 @@ export default function App() {
         return {
           id: `potential-${row.overpassId}`,
           label: row.overpassId,
+          startTime: row.startTime,
+          endTime: row.endTime,
           detail: row.tradeOffId && row.tradeOffId !== '—'
             ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
             : `${row.satId} → ${row.gsId}`,
@@ -521,6 +571,8 @@ export default function App() {
         return {
           id: `proposed-${row.overpassId}`,
           label: row.overpassId,
+          startTime: row.startTime,
+          endTime: row.endTime,
           detail: chosenOption ? `${row.tradeOffId} selected path` : 'Fixed window',
           variant: chosenOption
             ? chosenOption.optionId === selectedTradeOffOption
@@ -552,6 +604,8 @@ export default function App() {
         return {
           id: item.id,
           label: item.label,
+          startTime: item.startTime,
+          endTime: item.endTime,
           detail: item.detail,
           variant: 'current',
           startTimestamp,
@@ -673,9 +727,11 @@ export default function App() {
     setTradeOffsCalculated(false)
     setTradeOffCards([])
     setSelectedTradeOffOption(null)
+    setActiveTimelineItemId(null)
     setActiveMapAssetId(null)
     setActivePlanningWindow(null)
     setTimelineNow(Date.now())
+    setTimelineZoomLevel('detail')
     setTimelineLayers({
       current: true,
       potential: true,
@@ -767,6 +823,7 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
+    setActiveTimelineItemId(null)
 
     const planningWindow = {
       startTime: localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime),
@@ -847,6 +904,7 @@ export default function App() {
     setTradeOffCards(groups)
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(groups[0]?.options.find((option) => option.recommended)?.optionId ?? null)
+    setActiveTimelineItemId(null)
     setTradeOffsCalculated(true)
     setCalculatingTradeOffs(false)
   }
@@ -1034,8 +1092,23 @@ export default function App() {
     currentScheduleItems,
     activePlanningWindow,
   )
+  const timelineZoomMultiplier =
+    TIMELINE_ZOOM_LEVELS.find((level) => level.id === timelineZoomLevel)?.multiplier ?? 1
+  const timelineWidthPx = timelineModel
+    ? Math.round(timelineModel.widthPx * timelineZoomMultiplier)
+    : 0
   const visibleTimelineTracks = timelineModel?.tracks.filter((track) => timelineLayers[track.id]) ?? []
+  const timelineItemsFlat = timelineModel
+    ? timelineModel.tracks.flatMap((track) =>
+        track.items.map((item) => ({
+          ...item,
+          trackLabel: track.label,
+        }))
+      )
+    : []
   const activeTradeOffCard = tradeOffCards[activeTradeOffCardIndex] ?? null
+  const activeTimelineItem =
+    timelineItemsFlat.find((item) => item.id === activeTimelineItemId) ?? null
 
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-hidden="true">
@@ -1072,6 +1145,22 @@ export default function App() {
       {tradeOffId}
     </span>
   )
+
+  const handleTimelineItemClick = (item) => {
+    setActiveTimelineItemId(item.id)
+
+    if (item.optionId) {
+      setSelectedTradeOffOption(item.optionId)
+    }
+  }
+
+  const getCompactTimelineLabel = (label) => {
+    if (label.length <= 8 || label.startsWith('OP-')) {
+      return label
+    }
+
+    return label.split(' ')[0]
+  }
 
   const renderSectionChevron = (expanded) => (
     <svg
@@ -1768,19 +1857,16 @@ export default function App() {
 
           <section className="panel panel--fullwidth timeline-panel">
             <div className="panel-heading panel-heading--timeline">
-              <div>
+              <div className="panel-heading-title">
                 <h2>Timeline</h2>
-                <p className="timeline-panel-copy">
-                  Current schedule context, extracted windows and the proposed communication plan.
-                </p>
               </div>
               {timelineModel && (
                 <div className="timeline-header-meta">
                   <span className="timeline-meta-pill">
-                    Window {formatTimelineHour(timelineModel.baseDate)} - {formatTimelineHour(timelineModel.endDate)}
+                    Selected Window {formatTimelineDateTime(activePlanningWindow?.startTime)} - {formatTimelineDateTime(activePlanningWindow?.endTime)}
                   </span>
                   <span className="timeline-meta-pill timeline-meta-pill--muted">
-                    {visibleTimelineTracks.length} visible track{visibleTimelineTracks.length === 1 ? '' : 's'}
+                    Visible Range {formatTimelineDay(timelineModel.baseDate)}
                   </span>
                 </div>
               )}
@@ -1795,17 +1881,31 @@ export default function App() {
             {schedulerLaunched && timelineModel && (
               <>
                 <div className="timeline-toolbar">
-                  <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
-                    {timelineModel.tracks.map((track) => (
-                      <button
-                        key={track.id}
-                        type="button"
-                        className={`timeline-toggle ${timelineLayers[track.id] ? 'timeline-toggle--active' : ''}`}
-                        onClick={() => toggleTimelineLayer(track.id)}
-                      >
-                        {track.label}
-                      </button>
-                    ))}
+                  <div className="timeline-toolbar-groups">
+                    <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
+                      {timelineModel.tracks.map((track) => (
+                        <button
+                          key={track.id}
+                          type="button"
+                          className={`timeline-toggle ${timelineLayers[track.id] ? 'timeline-toggle--active' : ''}`}
+                          onClick={() => toggleTimelineLayer(track.id)}
+                        >
+                          {track.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="timeline-toggle-group" role="group" aria-label="Timeline zoom">
+                      {TIMELINE_ZOOM_LEVELS.map((level) => (
+                        <button
+                          key={level.id}
+                          type="button"
+                          className={`timeline-toggle ${timelineZoomLevel === level.id ? 'timeline-toggle--active' : ''}`}
+                          onClick={() => setTimelineZoomLevel(level.id)}
+                        >
+                          {level.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div className="timeline-toolbar-copy">
                     Current schedule activities and extracted overpasses use backend timestamps. Proposed scheduling reflects the current frontend trade-off selection.
@@ -1818,7 +1918,7 @@ export default function App() {
                   <div className="timeline-scroll">
                     <div
                       className="timeline-grid"
-                      style={{ gridTemplateColumns: `11rem ${timelineModel.widthPx}px` }}
+                      style={{ gridTemplateColumns: `11rem ${timelineWidthPx}px` }}
                     >
                       <div className="timeline-label-cell timeline-label-cell--blank"></div>
                       <div className="timeline-day-row">
@@ -1883,33 +1983,65 @@ export default function App() {
                             )}
 
                             {track.items.map((item) => (
-                              <button
-                                key={item.id}
-                                type="button"
-                                className={`timeline-bar timeline-bar--${item.variant} ${item.tradeOffColorIndex !== null ? 'timeline-bar--tradeoff' : ''}`}
-                                style={{
-                                  left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
-                                  width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
-                                  top: `calc(0.65rem + ${(item.laneIndex ?? 0) * 2.95}rem)`,
-                                  '--tradeoff-accent': item.tradeOffColorIndex !== null
-                                    ? getTradeOffAccentColor(item.tradeOffColorIndex)
-                                    : 'transparent',
-                                }}
-                                onClick={() => {
-                                  if (item.optionId) {
-                                    setSelectedTradeOffOption(item.optionId)
-                                  }
-                                }}
-                                title={`${item.label}\n${item.detail}\nStart: ${formatDateTimeCompact(item.startTime)}\nEnd: ${formatDateTimeCompact(item.endTime)}`}
-                              >
-                                <span className="timeline-bar-title">{item.label}</span>
-                                <span className="timeline-bar-copy">{item.detail}</span>
-                              </button>
+                              (() => {
+                                const itemWidthPx = (item.durationMinutes / timelineModel.totalMinutes) * timelineWidthPx
+                                const compactBar = itemWidthPx < 150
+                                const tinyBar = itemWidthPx < 88
+
+                                return (
+                                  <button
+                                    key={item.id}
+                                    type="button"
+                                    className={`timeline-bar timeline-bar--${item.variant} ${item.tradeOffColorIndex !== null ? 'timeline-bar--tradeoff' : ''} ${compactBar ? 'timeline-bar--compact' : ''} ${tinyBar ? 'timeline-bar--tiny' : ''}`}
+                                    style={{
+                                      left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
+                                      width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
+                                      top: `calc(0.65rem + ${(item.laneIndex ?? 0) * 2.95}rem)`,
+                                      '--tradeoff-accent': item.tradeOffColorIndex !== null
+                                        ? getTradeOffAccentColor(item.tradeOffColorIndex)
+                                        : 'transparent',
+                                    }}
+                                    onClick={() => handleTimelineItemClick(item)}
+                                    title={`${item.label}\n${item.detail}\nStart: ${formatTimelineDateTime(item.startTime)}\nEnd: ${formatTimelineDateTime(item.endTime)}\nDuration: ${formatTimelineDuration(item.startTime, item.endTime)}`}
+                                  >
+                                    <span className="timeline-bar-title">
+                                      {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
+                                    </span>
+                                    {!compactBar && <span className="timeline-bar-copy">{item.detail}</span>}
+                                  </button>
+                                )
+                              })()
                             ))}
                           </div>
                         </Fragment>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {activeTimelineItem && (
+                  <div className="timeline-detail-card">
+                    <div className="timeline-detail-header">
+                      <div className="timeline-detail-titleblock">
+                        <span className="timeline-detail-track">{activeTimelineItem.trackLabel}</span>
+                        <h3>{activeTimelineItem.label}</h3>
+                      </div>
+                      {activeTimelineItem.tradeOffId && activeTimelineItem.tradeOffId !== '—' && (
+                        renderTradeOffPill(
+                          activeTimelineItem.tradeOffId,
+                          activeTimelineItem.tradeOffColorIndex,
+                        )
+                      )}
+                    </div>
+                    <p className="timeline-detail-copy">{activeTimelineItem.detail}</p>
+                    <dl className="timeline-detail-grid">
+                      <dt>Start</dt>
+                      <dd>{formatTimelineDateTime(activeTimelineItem.startTime)}</dd>
+                      <dt>End</dt>
+                      <dd>{formatTimelineDateTime(activeTimelineItem.endTime)}</dd>
+                      <dt>Duration</dt>
+                      <dd>{formatTimelineDuration(activeTimelineItem.startTime, activeTimelineItem.endTime)}</dd>
+                    </dl>
                   </div>
                 )}
               </>

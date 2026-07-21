@@ -1797,6 +1797,12 @@ body {
   margin-bottom: 0.9rem;
 }
 
+.timeline-toolbar-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
 .timeline-toggle-group {
   display: flex;
   align-items: center;
@@ -1837,6 +1843,66 @@ body {
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 0.25rem;
+}
+
+.timeline-detail-card {
+  margin-top: 0.95rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  background: var(--bg-panel);
+}
+
+.timeline-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.timeline-detail-titleblock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+}
+
+.timeline-detail-track {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+}
+
+.timeline-detail-titleblock h3 {
+  font-size: 0.94rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.timeline-detail-copy {
+  margin-top: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.timeline-detail-grid {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.9rem;
+  font-size: 0.81rem;
+}
+
+.timeline-detail-grid dt {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.timeline-detail-grid dd {
+  color: var(--text-primary);
 }
 
 .timeline-grid {
@@ -1998,6 +2064,16 @@ body {
   text-align: left;
   overflow: hidden;
   cursor: pointer;
+}
+
+.timeline-bar--compact {
+  padding: 0.28rem 0.38rem;
+}
+
+.timeline-bar--tiny {
+  align-items: center;
+  text-align: center;
+  padding-inline: 0.2rem;
 }
 
 .timeline-bar-title,
