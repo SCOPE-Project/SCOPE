@@ -1490,11 +1490,17 @@ export default function App() {
     </span>
   )
 
+  const handleSelectTradeOffOption = (optionId) => {
+    setSelectedTradeOffOption(optionId)
+    setConfirmationSuccess(false)
+    setConfirmedScheduleCount(0)
+  }
+
   const handleTimelineItemClick = (item) => {
     setActiveTimelineItemId(item.id)
 
     if (item.optionId) {
-      setSelectedTradeOffOption(item.optionId)
+      handleSelectTradeOffOption(item.optionId)
     }
   }
 
@@ -2263,7 +2269,7 @@ export default function App() {
                           <button
                             type="button"
                             className="tradeoff-select-button"
-                            onClick={() => setSelectedTradeOffOption(option.optionId)}
+                            onClick={() => handleSelectTradeOffOption(option.optionId)}
                           >
                             {selectedTradeOffOption === option.optionId ? 'Selected' : 'Select'}
                           </button>
