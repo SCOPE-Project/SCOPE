@@ -1584,6 +1584,24 @@ export default function App() {
     return `${row.overpassId} is blocked because ${blockingActivityLabel} on ${blockingAsset} has priority.`
   }
 
+  const formatTimeTextInput = (rawValue, previousValue = '') => {
+    const digitsOnly = rawValue.replace(/\D/g, '').slice(0, 4)
+
+    if (digitsOnly.length <= 1) {
+      return digitsOnly
+    }
+
+    if (digitsOnly.length === 2) {
+      if (rawValue === digitsOnly && previousValue === `${digitsOnly}:`) {
+        return digitsOnly.slice(0, 1)
+      }
+
+      return `${digitsOnly}:`
+    }
+
+    return `${digitsOnly.slice(0, 2)}:${digitsOnly.slice(2)}`
+  }
+
   const renderTimeInput = (menuKey, value, setValue) => (
     <div
       className={`time-window-dropdown ${activeTimeMenu === menuKey ? 'time-window-dropdown--open' : ''}`}
@@ -1599,8 +1617,9 @@ export default function App() {
           inputMode="numeric"
           placeholder="HH:MM"
           value={value}
+          maxLength={5}
           onFocus={() => setActiveTimeMenu(menuKey)}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => setValue(formatTimeTextInput(event.target.value, value))}
           className="time-window-input time-window-input--combo"
         />
         <button
@@ -1723,162 +1742,164 @@ export default function App() {
             <div className="sidebar-collapsed-label">Configuration</div>
           ) : (
             <>
-              <div className="sidebar-block">
-                <button
-                  type="button"
-                  className="section-toggle"
-                  onClick={() => toggleSection('timeWindow')}
-                >
-                  <span>Time Window</span>
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.timeWindow)}
-                  </span>
-                </button>
-                {expandedSections.timeWindow && (
-                  <div className="time-window-panel">
-                    <div className="time-window-header">
-                      <span className="time-window-title">Planning Interval</span>
-                      <span className="time-window-meta">Local time</span>
-                    </div>
-                    <div className="time-window-row">
-                      <label className="time-window-field">
-                        <span>Start Date</span>
-                        <input
-                          type="date"
-                          value={planningWindowStartDate}
-                          onChange={(event) => {
-                            setPlanningWindowStartDate(event.target.value)
-                            event.target.blur()
-                          }}
-                          className="time-window-input"
-                        />
-                      </label>
-                      <label className="time-window-field time-window-field--time">
-                        <span>Start Time</span>
-                        {renderTimeInput('start', planningWindowStartTime, setPlanningWindowStartTime)}
-                      </label>
-                    </div>
-                    <div className="time-window-row">
-                      <label className="time-window-field">
-                        <span>End Date</span>
-                        <input
-                          type="date"
-                          value={planningWindowEndDate}
-                          onChange={(event) => {
-                            setPlanningWindowEndDate(event.target.value)
-                            event.target.blur()
-                          }}
-                          className="time-window-input"
-                        />
-                      </label>
-                      <label className="time-window-field time-window-field--time">
-                        <span>End Time</span>
-                        {renderTimeInput('end', planningWindowEndTime, setPlanningWindowEndTime)}
-                      </label>
-                    </div>
-                    <p className="time-window-note">
-                      Extracted data is limited to this interval.
-                    </p>
-                    {planningWindowComplete && !planningWindowValid && (
-                      <p className="time-window-error">
-                        Enter a valid time window with an end time after the start time.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="sidebar-block">
-                <button
-                  type="button"
-                  className="section-toggle"
-                  onClick={() => toggleSection('satellites')}
-                >
-                  <span>Satellites</span>
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.satellites)}
-                  </span>
-                </button>
-                {expandedSections.satellites && (
-                  <div className="checkbox-list">
-                    {satelliteAssets.map((asset) => (
-                      <label
-                        key={asset.name}
-                        className={`checkbox-row ${asset.eligible ? '' : 'checkbox-row--disabled'}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedSatellites.includes(asset.name)}
-                          onChange={() => toggleSatellite(asset.name)}
-                          disabled={!asset.eligible}
-                        />
-                        <span className="asset-name">{asset.name}</span>
-                        {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
-                      </label>
-                    ))}
-                    {satelliteAssets.length === 0 && <p>No satellite assets available.</p>}
-                  </div>
-                )}
-              </div>
-
-              <div className="sidebar-block">
-                <button
-                  type="button"
-                  className="section-toggle"
-                  onClick={() => toggleSection('groundStations')}
-                >
-                  <span>Ground Stations</span>
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.groundStations)}
-                  </span>
-                </button>
-                {expandedSections.groundStations && (
-                  <div className="checkbox-list">
-                    {groundStationAssets.map((asset) => (
-                      <label
-                        key={asset.name}
-                        className={`checkbox-row ${asset.eligible ? '' : 'checkbox-row--disabled'}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedGroundStations.includes(asset.name)}
-                          onChange={() => toggleGroundStation(asset.name)}
-                          disabled={!asset.eligible}
-                        />
-                        <span className="asset-name">{asset.name}</span>
-                        {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
-                      </label>
-                    ))}
-                    {groundStationAssets.length === 0 && <p>No ground-station assets available.</p>}
-                  </div>
-                )}
-              </div>
-
-              <div className="sidebar-block">
-                <button
-                  type="button"
-                  className="section-toggle"
-                  onClick={() => toggleSection('unavailableAssets')}
-                >
-                  <span>Unavailable Assets</span>
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.unavailableAssets)}
-                  </span>
-                </button>
-                {expandedSections.unavailableAssets && (
-                  <div className="checkbox-list">
-                    {unavailableAssets.map((asset) => (
-                      <div
-                        key={asset.name}
-                        className="checkbox-row checkbox-row--disabled checkbox-row--static"
-                      >
-                        <span className="asset-name">{asset.name}</span>
-                        {asset.error && renderAssetWarning(asset.error)}
+              <div className="workspace-sidebar-content">
+                <div className="sidebar-block">
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    onClick={() => toggleSection('timeWindow')}
+                  >
+                    <span>Time Window</span>
+                    <span className="section-toggle-icon" aria-hidden="true">
+                      {renderSectionChevron(expandedSections.timeWindow)}
+                    </span>
+                  </button>
+                  {expandedSections.timeWindow && (
+                    <div className="time-window-panel">
+                      <div className="time-window-header">
+                        <span className="time-window-title">Planning Interval</span>
+                        <span className="time-window-meta">Local time</span>
                       </div>
-                    ))}
-                    {unavailableAssets.length === 0 && <p>No unclassified assets.</p>}
-                  </div>
-                )}
+                      <div className="time-window-row">
+                        <label className="time-window-field">
+                          <span>Start Date</span>
+                          <input
+                            type="date"
+                            value={planningWindowStartDate}
+                            onChange={(event) => {
+                              setPlanningWindowStartDate(event.target.value)
+                              event.target.blur()
+                            }}
+                            className="time-window-input"
+                          />
+                        </label>
+                        <label className="time-window-field time-window-field--time">
+                          <span>Start Time</span>
+                          {renderTimeInput('start', planningWindowStartTime, setPlanningWindowStartTime)}
+                        </label>
+                      </div>
+                      <div className="time-window-row">
+                        <label className="time-window-field">
+                          <span>End Date</span>
+                          <input
+                            type="date"
+                            value={planningWindowEndDate}
+                            onChange={(event) => {
+                              setPlanningWindowEndDate(event.target.value)
+                              event.target.blur()
+                            }}
+                            className="time-window-input"
+                          />
+                        </label>
+                        <label className="time-window-field time-window-field--time">
+                          <span>End Time</span>
+                          {renderTimeInput('end', planningWindowEndTime, setPlanningWindowEndTime)}
+                        </label>
+                      </div>
+                      <p className="time-window-note">
+                        Extracted data is limited to this interval.
+                      </p>
+                      {planningWindowComplete && !planningWindowValid && (
+                        <p className="time-window-error">
+                          Enter a valid time window with an end time after the start time.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="sidebar-block">
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    onClick={() => toggleSection('satellites')}
+                  >
+                    <span>Satellites</span>
+                    <span className="section-toggle-icon" aria-hidden="true">
+                      {renderSectionChevron(expandedSections.satellites)}
+                    </span>
+                  </button>
+                  {expandedSections.satellites && (
+                    <div className="checkbox-list">
+                      {satelliteAssets.map((asset) => (
+                        <label
+                          key={asset.name}
+                          className={`checkbox-row ${asset.eligible ? '' : 'checkbox-row--disabled'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedSatellites.includes(asset.name)}
+                            onChange={() => toggleSatellite(asset.name)}
+                            disabled={!asset.eligible}
+                          />
+                          <span className="asset-name">{asset.name}</span>
+                          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
+                        </label>
+                      ))}
+                      {satelliteAssets.length === 0 && <p>No satellite assets available.</p>}
+                    </div>
+                  )}
+                </div>
+
+                <div className="sidebar-block">
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    onClick={() => toggleSection('groundStations')}
+                  >
+                    <span>Ground Stations</span>
+                    <span className="section-toggle-icon" aria-hidden="true">
+                      {renderSectionChevron(expandedSections.groundStations)}
+                    </span>
+                  </button>
+                  {expandedSections.groundStations && (
+                    <div className="checkbox-list">
+                      {groundStationAssets.map((asset) => (
+                        <label
+                          key={asset.name}
+                          className={`checkbox-row ${asset.eligible ? '' : 'checkbox-row--disabled'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedGroundStations.includes(asset.name)}
+                            onChange={() => toggleGroundStation(asset.name)}
+                            disabled={!asset.eligible}
+                          />
+                          <span className="asset-name">{asset.name}</span>
+                          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
+                        </label>
+                      ))}
+                      {groundStationAssets.length === 0 && <p>No ground-station assets available.</p>}
+                    </div>
+                  )}
+                </div>
+
+                <div className="sidebar-block">
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    onClick={() => toggleSection('unavailableAssets')}
+                  >
+                    <span>Unavailable Assets</span>
+                    <span className="section-toggle-icon" aria-hidden="true">
+                      {renderSectionChevron(expandedSections.unavailableAssets)}
+                    </span>
+                  </button>
+                  {expandedSections.unavailableAssets && (
+                    <div className="checkbox-list">
+                      {unavailableAssets.map((asset) => (
+                        <div
+                          key={asset.name}
+                          className="checkbox-row checkbox-row--disabled checkbox-row--static"
+                        >
+                          <span className="asset-name">{asset.name}</span>
+                          {asset.error && renderAssetWarning(asset.error)}
+                        </div>
+                      ))}
+                      {unavailableAssets.length === 0 && <p>No unclassified assets.</p>}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="sidebar-action-wrapper">
@@ -2441,7 +2462,7 @@ export default function App() {
                         {timelineModel.ticks.map((tick) => (
                           <div
                             key={tick.offsetMinutes}
-                            className="timeline-axis-marker"
+                            className={`timeline-axis-marker ${tick.offsetMinutes % 120 === 0 ? 'timeline-axis-marker--major' : ''}`}
                             style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
                           >
                             <span>{tick.label}</span>
@@ -2468,7 +2489,7 @@ export default function App() {
                             {timelineModel.ticks.map((tick) => (
                               <div
                                 key={`${track.id}-tick-${tick.offsetMinutes}`}
-                                className="timeline-grid-line"
+                                className={`timeline-grid-line ${tick.offsetMinutes % 120 === 0 ? 'timeline-grid-line--major' : ''}`}
                                 style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
                               ></div>
                             ))}
