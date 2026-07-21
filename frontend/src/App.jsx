@@ -4,7 +4,7 @@ const BACKEND_BASE_URL = 'http://localhost:8000'
 const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
 const TIMELINE_ZOOM_LEVELS = [
   { id: 'fit', label: 'Fit', multiplier: 1 },
-  { id: 'detail', label: 'Detail', multiplier: 2.6 },
+  { id: 'detail', label: 'Detail', multiplier: 5.2 },
 ]
 const OVERVIEW_PAGE_SIZE = 10
 const DEMO_REGION_BOUNDS = {
@@ -623,6 +623,38 @@ export default function App() {
       day: '2-digit',
     })} (DOY ${getDayOfYear(date)})`
 
+  const formatPlanningWindow = (startValue, endValue) => {
+    const start = startValue ? new Date(startValue) : null
+    const end = endValue ? new Date(endValue) : null
+
+    if (
+      !start
+      || !end
+      || !Number.isFinite(start.getTime())
+      || !Number.isFinite(end.getTime())
+    ) {
+      return '—'
+    }
+
+    const sameDay = start.toDateString() === end.toDateString()
+
+    if (sameDay) {
+      return `${start.toLocaleDateString([], {
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+      })}, ${start.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      })} - ${end.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      })}`
+    }
+
+    return `${formatTimelineDateTime(startValue)} - ${formatTimelineDateTime(endValue)}`
+  }
+
   const getSelectedTradeOffForGroup = (group) =>
     group.options.find((option) => option.optionId === selectedTradeOffOption)
     ?? group.options.find((option) => option.recommended)
@@ -706,6 +738,11 @@ export default function App() {
   const buildTimelineModel = (rows, groups, currentTimestamp, currentScheduleItems, planningWindow) => {
     const selectedOptions = groups.map((group) => getSelectedTradeOffForGroup(group))
     const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
+    const optionByOverpassId = new Map(
+      groups
+        .flatMap((group) => group.options)
+        .map((option) => [option.overpassId, option]),
+    )
 
     const potentialSourceItems = rows
       .filter((row) => !row.scheduleBlocked)
@@ -721,6 +758,8 @@ export default function App() {
           return null
         }
 
+        const linkedOption = optionByOverpassId.get(row.overpassId)
+
         return {
           id: `potential-${row.overpassId}`,
           label: row.overpassId,
@@ -733,10 +772,10 @@ export default function App() {
           startTimestamp,
           endTimestamp,
           tradeOffId: row.tradeOffId ?? null,
+          tradeOffScore: row.tradeOffScore ?? null,
           tradeOffColorIndex: row.tradeOffColorIndex ?? null,
-          optionId: groups
-            .flatMap((group) => group.options)
-            .find((option) => option.overpassId === row.overpassId)?.optionId ?? null,
+          optionId: linkedOption?.optionId ?? null,
+          recommended: linkedOption?.recommended ?? false,
         }
       })
       .filter(Boolean)
@@ -772,8 +811,10 @@ export default function App() {
           startTimestamp,
           endTimestamp,
           tradeOffId: row.tradeOffId ?? null,
+          tradeOffScore: row.tradeOffScore ?? null,
           tradeOffColorIndex: row.tradeOffColorIndex ?? null,
           optionId: chosenOption?.optionId ?? null,
+          recommended: chosenOption?.recommended ?? false,
         }
       })
       .filter(Boolean)
@@ -801,6 +842,10 @@ export default function App() {
           startTimestamp,
           endTimestamp,
           optionId: null,
+          tradeOffId: null,
+          tradeOffScore: null,
+          tradeOffColorIndex: null,
+          recommended: false,
         }
       })
       .filter(Boolean)
@@ -856,7 +901,7 @@ export default function App() {
         {
           id: 'current',
           label: 'Current SatOS Schedule',
-          copy: 'Existing schedule context imported from SatOS.',
+          copy: 'Activities imported from the selected SatOS schedules.',
           laneCount: currentItems.laneCount,
           items: currentItems.items,
         },
@@ -875,7 +920,7 @@ export default function App() {
           label: 'Proposed Schedule',
           copy: useDemoData
             ? 'Current simulated trade-off selection.'
-            : 'Conflict-free windows plus the currently selected trade-off results.',
+            : 'Current frontend selection of the available trade-off options.',
           demoLabel: useDemoData ? 'Demo' : null,
           laneCount: proposedItems.laneCount,
           items: proposedItems.items,
@@ -1412,7 +1457,6 @@ export default function App() {
         type: 'Satellite',
       })),
   ]
-
   const activeMapAsset =
     visibleMapAssets.find((asset) => asset.id === activeMapAssetId) ?? visibleMapAssets[0] ?? null
 
@@ -1702,7 +1746,10 @@ export default function App() {
                         <input
                           type="date"
                           value={planningWindowStartDate}
-                          onChange={(event) => setPlanningWindowStartDate(event.target.value)}
+                          onChange={(event) => {
+                            setPlanningWindowStartDate(event.target.value)
+                            event.target.blur()
+                          }}
                           className="time-window-input"
                         />
                       </label>
@@ -1717,7 +1764,10 @@ export default function App() {
                         <input
                           type="date"
                           value={planningWindowEndDate}
-                          onChange={(event) => setPlanningWindowEndDate(event.target.value)}
+                          onChange={(event) => {
+                            setPlanningWindowEndDate(event.target.value)
+                            event.target.blur()
+                          }}
                           className="time-window-input"
                         />
                       </label>
@@ -1845,9 +1895,6 @@ export default function App() {
                   </span>
                 )}
               </div>
-              <p className="sidebar-action-note">
-                For the current dummy trade-off view, select at least two ground stations.
-              </p>
             </>
           )}
         </aside>
@@ -1857,6 +1904,7 @@ export default function App() {
             <div className="panel-heading panel-heading--map">
               <div className="panel-heading-title">
                 <h2>Map View</h2>
+                {useDemoData && renderDemoBadge()}
               </div>
               <div className="map-panel-controls">
                 <button
@@ -2028,7 +2076,7 @@ export default function App() {
 
           <section className="panel overview-panel">
             <div className="panel-heading">
-              <div>
+              <div className="panel-heading-title">
                 <h2>Overview</h2>
               </div>
               <div
@@ -2098,52 +2146,55 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    {visibleOverviewRows.map((row) => (
-                      <div
-                        key={row.overpassId}
-                        className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
-                      >
-                        <span className="overview-overpass-cell">
-                          <span>{row.overpassId}</span>
-                          {row.demoGenerated && (
-                            <span
-                              className="overview-row-note overview-row-note--demo"
-                              title="Demo overpass added for the trade-off preview workflow."
-                            >
-                              Demo
-                            </span>
+                    {visibleOverviewRows.map((row) => {
+                      const isRecommendedRow = tradeOffsCalculated
+                        && row.tradeOffId !== '—'
+                        && row.tradeOffScore !== '—'
+                        && tradeOffCards
+                          .flatMap((card) => card.options)
+                          .find((option) => option.overpassId === row.overpassId)?.recommended
+
+                      return (
+                        <div
+                          key={row.overpassId}
+                          className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
+                        >
+                          <span className="overview-overpass-cell">
+                            <span>{row.overpassId}</span>
+                            {isRecommendedRow ? (
+                              <span className="overview-row-note overview-row-note--recommended">
+                                Recommended
+                              </span>
+                            ) : null}
+                            {row.scheduleBlocked && (
+                              <span
+                                className="overview-row-note"
+                                title={getScheduleBlockMessage(row)}
+                              >
+                                Blocked
+                              </span>
+                            )}
+                          </span>
+                          <span>{row.satId}</span>
+                          <span>{row.gsId}</span>
+                          <span>{formatDateTimeCompact(row.startTime)}</span>
+                          <span>{formatDateTimeCompact(row.endTime)}</span>
+                          <span>{row.maxElevation ?? '—'}</span>
+                          <span>{row.duration}</span>
+                          {tradeOffsCalculated && (
+                            row.tradeOffId !== '—'
+                              ? renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)
+                              : <span>—</span>
                           )}
-                          {row.scheduleBlocked && (
-                            <span
-                              className="overview-row-note"
-                              title={getScheduleBlockMessage(row)}
-                            >
-                              Blocked
-                            </span>
-                          )}
-                        </span>
-                        <span>{row.satId}</span>
-                        <span>{row.gsId}</span>
-                        <span>{formatDateTimeCompact(row.startTime)}</span>
-                        <span>{formatDateTimeCompact(row.endTime)}</span>
-                        <span>{row.maxElevation ?? '—'}</span>
-                        <span>{row.duration}</span>
-                        {tradeOffsCalculated && (
-                          row.tradeOffId !== '—'
-                            ? renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)
-                            : <span>—</span>
-                        )}
-                        {tradeOffsCalculated && <span>{row.tradeOffScore}</span>}
-                      </div>
-                    ))}
+                          {tradeOffsCalculated && <span>{row.tradeOffScore}</span>}
+                        </div>
+                      )
+                    })}
                   </>
                 )}
               </div>
               {overviewRows.length > 0 && (
                 <div className="overview-footer">
-                  <p className="overview-note">
-                    Enable Demo mode to preview simulated trade-off values on top of the extracted backend data.
-                  </p>
                   <div className="overview-pagination">
                     <span className="overview-pagination-copy">
                       Showing {overviewPageStart}-{overviewPageEnd} of {overviewRows.length}
@@ -2203,11 +2254,6 @@ export default function App() {
               <h2>Trade-Off</h2>
               {useDemoData && schedulerLaunched && renderDemoBadge()}
             </div>
-            {tradeOffsCalculated && (
-              <p className="tradeoff-summary">
-                {tradeOffCards.length} trade-off group{tradeOffCards.length === 1 ? '' : 's'} identified.
-              </p>
-            )}
             {!tradeOffsCalculated && !useDemoData && (
               <p>Enable Demo mode to use Trade-Off view.</p>
             )}
@@ -2243,9 +2289,6 @@ export default function App() {
                       <div className="tradeoff-card-titleblock">
                         <h3>{renderTradeOffPill(activeTradeOffCard.title, activeTradeOffCard.colorIndex)}</h3>
                         <p className="tradeoff-card-resource">{activeTradeOffCard.resourceLabel}</p>
-                      </div>
-                      <div className="tradeoff-meta">
-                        <span className="tradeoff-score">{activeTradeOffCard.options.length} options</span>
                       </div>
                     </div>
                     <p className="tradeoff-reason">
@@ -2313,11 +2356,15 @@ export default function App() {
               </div>
               {timelineModel && (
                 <div className="timeline-header-meta">
-                  <span className="timeline-meta-pill">
-                    Selected Window {formatTimelineDateTime(activePlanningWindow?.startTime)} - {formatTimelineDateTime(activePlanningWindow?.endTime)}
+                  <span className="timeline-meta-item">
+                    <span className="timeline-meta-label">Planning Window</span>
+                    <span className="timeline-meta-value">
+                      {formatPlanningWindow(activePlanningWindow?.startTime, activePlanningWindow?.endTime)}
+                    </span>
                   </span>
-                  <span className="timeline-meta-pill timeline-meta-pill--muted">
-                    Visible Range {formatTimelineDay(timelineModel.baseDate)}
+                  <span className="timeline-meta-item timeline-meta-item--muted">
+                    <span className="timeline-meta-label">DOY</span>
+                    <span className="timeline-meta-value">{getDayOfYear(timelineModel.baseDate)}</span>
                   </span>
                 </div>
               )}
@@ -2358,9 +2405,11 @@ export default function App() {
                       ))}
                     </div>
                   </div>
-                  <div className="timeline-toolbar-copy">
-                    Current schedule activities and extracted overpasses use backend timestamps. Proposed scheduling reflects the current frontend trade-off selection.
-                  </div>
+                  {!useDemoData && (
+                    <div className="timeline-toolbar-copy">
+                      Current schedule activities and extracted overpasses use backend timestamps. Proposed scheduling remains empty until the backend trade-off workflow is connected.
+                    </div>
+                  )}
                 </div>
 
                 {visibleTimelineTracks.length === 0 ? (
@@ -2453,8 +2502,15 @@ export default function App() {
                                         : 'transparent',
                                     }}
                                     onClick={() => handleTimelineItemClick(item)}
-                                    title={`${item.label}\n${item.detail}\nStart: ${formatTimelineDateTime(item.startTime)}\nEnd: ${formatTimelineDateTime(item.endTime)}\nDuration: ${formatTimelineDuration(item.startTime, item.endTime)}`}
+                                    title={`${item.label}${item.recommended ? '\nRecommended option' : ''}\n${item.detail}\nStart: ${formatTimelineDateTime(item.startTime)}\nEnd: ${formatTimelineDateTime(item.endTime)}\nDuration: ${formatTimelineDuration(item.startTime, item.endTime)}`}
                                   >
+                                    {item.recommended && !tinyBar && (
+                                      <span
+                                        className="timeline-bar-marker"
+                                        aria-hidden="true"
+                                        title="Recommended option"
+                                      ></span>
+                                    )}
                                     <span className="timeline-bar-title">
                                       {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
                                     </span>
@@ -2477,12 +2533,17 @@ export default function App() {
                         <span className="timeline-detail-track">{activeTimelineItem.trackLabel}</span>
                         <h3>{activeTimelineItem.label}</h3>
                       </div>
-                      {activeTimelineItem.tradeOffId && activeTimelineItem.tradeOffId !== '—' && (
-                        renderTradeOffPill(
-                          activeTimelineItem.tradeOffId,
-                          activeTimelineItem.tradeOffColorIndex,
-                        )
-                      )}
+                      <div className="timeline-detail-header-meta">
+                        {activeTimelineItem.recommended && (
+                          <span className="tradeoff-recommended">Recommended</span>
+                        )}
+                        {activeTimelineItem.tradeOffId && activeTimelineItem.tradeOffId !== '—' && (
+                          renderTradeOffPill(
+                            activeTimelineItem.tradeOffId,
+                            activeTimelineItem.tradeOffColorIndex,
+                          )
+                        )}
+                      </div>
                     </div>
                     <p className="timeline-detail-copy">{activeTimelineItem.detail}</p>
                     <dl className="timeline-detail-grid">
@@ -2492,6 +2553,12 @@ export default function App() {
                       <dd>{formatTimelineDateTime(activeTimelineItem.endTime)}</dd>
                       <dt>Duration</dt>
                       <dd>{formatTimelineDuration(activeTimelineItem.startTime, activeTimelineItem.endTime)}</dd>
+                      {activeTimelineItem.tradeOffScore && activeTimelineItem.tradeOffScore !== '—' && (
+                        <>
+                          <dt>Score</dt>
+                          <dd>{activeTimelineItem.tradeOffScore}</dd>
+                        </>
+                      )}
                     </dl>
                   </div>
                 )}
