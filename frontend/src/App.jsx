@@ -1014,6 +1014,10 @@ export default function App() {
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
     setActiveTimelineItemId(null)
+    setConfirmationSuccess(false)
+    setConfirmedScheduleCount(0)
+    setTimelineNow(Date.now())
+    setSidebarCollapsed(true)
 
     const planningWindow = {
       startTime: localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime),
@@ -1066,8 +1070,6 @@ export default function App() {
       )
 
       setOverviewRows(realRows)
-      setTimelineNow(Date.now())
-      setSidebarCollapsed(true)
       setExtractionStatus('Completed')
     } catch (err) {
       console.error(err)
