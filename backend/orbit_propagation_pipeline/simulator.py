@@ -11,7 +11,6 @@ from numpy.typing import NDArray
 from utils.propagation_utils.constants import Constants
 from utils.propagation_utils.kep2rv import kep2rv
 
-
 J2000_UT = datetime(2000, 1, 1, 12, tzinfo=timezone.utc)
 SECONDS_PER_DAY = 86_400.0
 JULIAN_CENTURY_DAYS = 36_525.0

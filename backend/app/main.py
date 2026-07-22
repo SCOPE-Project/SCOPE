@@ -24,7 +24,10 @@ if not load_dotenv(credentials_path):
 # FastAPI App Initialization
 # -----------------------------------
 
-app = FastAPI(title="VLEO SCOPE API")
+app = FastAPI(
+    title="VLEO SCOPE API",
+    swagger_ui_parameters={"syntaxHighlight": False}
+    )
 
 # -----------------------------------
 # Enable CORS
@@ -52,6 +55,11 @@ app.add_middleware(
 
 app.include_router(satos.router)
 app.include_router(tasks.router)
+
+
+@app.get("/status")
+def get_status():
+    return {"status": "ok"}
 
 
 @app.get("/", include_in_schema=False)
