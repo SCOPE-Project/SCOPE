@@ -14,8 +14,8 @@ class Activity:
     uuid: UUID4 | UUID7
     schedule_name: str
     status: int
-    start_event: Optional[ScheduleEventModel]
-    end_event: Optional[ScheduleEventModel]
+    start_event: ScheduleEventModel
+    end_event: ScheduleEventModel
 
 
 @dataclass
