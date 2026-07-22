@@ -10,11 +10,13 @@ PIPELINE_DIRECTORY = Path(__file__).parents[1] / "orbit_propagation_pipeline"
 sys.path.insert(0, str(PIPELINE_DIRECTORY))
 
 from simulator import (  # noqa: E402
+    DEFAULT_CONFIG_PATH,
     J2000_UT,
     SatelliteDefinition,
     generate_satellite_states,
     geographic_longitude_to_raan_deg,
     greenwich_mean_sidereal_time_deg,
+    load_simulation_config,
     seconds_since_j2000,
 )
 
@@ -74,6 +76,17 @@ def test_generate_multiple_epoch_states_keyed_by_name() -> None:
     assert states["satellite-1"].raan_deg == pytest.approx(
         geographic_longitude_to_raan_deg(30.0, epoch)
     )
+
+
+def test_loads_bundled_external_config() -> None:
+    config = load_simulation_config(DEFAULT_CONFIG_PATH)
+
+    assert config.epoch_utc == datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+    assert [satellite.name for satellite in config.satellites] == [
+        "Sat1_Group1",
+        "Sat2_Group1",
+        "Sat3_Group1",
+    ]
 
 
 def test_rejects_naive_datetime() -> None:
