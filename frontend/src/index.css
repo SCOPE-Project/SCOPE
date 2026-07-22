@@ -2586,9 +2586,17 @@ body {
   box-shadow: 0 10px 24px rgba(31, 42, 51, 0.16);
   opacity: 0;
   visibility: hidden;
-  pointer-events: none;
+  pointer-events: auto;
   transition: opacity 0.08s ease;
   z-index: 30;
+  user-select: text;
+  cursor: text;
+}
+
+.timeline-bar-tooltip-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
 }
 
 .timeline-bar:hover,

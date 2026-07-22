@@ -865,7 +865,9 @@ export default function App() {
           label: row.overpassId,
           startTime: row.startTime,
           endTime: row.endTime,
-          detail: chosenOption ? `${row.tradeOffId} selected path` : 'Fixed window',
+          detail: row.tradeOffId && row.tradeOffId !== '—'
+            ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
+            : `${row.satId} → ${row.gsId}`,
           variant: chosenOption
             ? chosenOption.optionId === selectedTradeOffOption
               ? 'selected'
@@ -2635,12 +2637,18 @@ export default function App() {
                                       {!tinyBar && <span className="timeline-bar-copy">{item.detail}</span>}
                                     </span>
                                     <span className="timeline-bar-tooltip" role="tooltip">
+                                      <span
+                                        className="timeline-bar-tooltip-inner"
+                                        onPointerDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => event.stopPropagation()}
+                                      >
                                       <strong>{item.label}</strong>
                                       {item.recommended && <span>Recommended option</span>}
                                       <span>{item.detail}</span>
                                       <span>Start: {formatTimelineDateTime(item.startTime)}</span>
                                       <span>End: {formatTimelineDateTime(item.endTime)}</span>
                                       <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
+                                      </span>
                                     </span>
                                   </button>
                                 )
