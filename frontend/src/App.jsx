@@ -2441,7 +2441,7 @@ export default function App() {
                             key={`${track.id}-row`}
                             className="timeline-track-row"
                             style={{
-                              '--timeline-row-height': `${Math.max(4, (track.laneCount ?? 1) * 2.95 + 0.9)}rem`,
+                              '--timeline-row-height': `${Math.max(4, (track.laneCount ?? 1) * 3.35 + 0.55)}rem`,
                             }}
                           >
                             {timelineModel.ticks.map((tick) => (
@@ -2464,8 +2464,8 @@ export default function App() {
                             {track.items.map((item) => (
                               (() => {
                                 const itemWidthPx = (item.durationMinutes / timelineModel.totalMinutes) * timelineWidthPx
-                                const compactBar = itemWidthPx < 150
-                                const tinyBar = itemWidthPx < 88
+                                const compactBar = itemWidthPx < 120
+                                const tinyBar = itemWidthPx < 72
 
                                 return (
                                   <button
@@ -2475,25 +2475,34 @@ export default function App() {
                                     style={{
                                       left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
                                       width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
-                                      top: `calc(0.65rem + ${(item.laneIndex ?? 0) * 2.95}rem)`,
+                                      top: `calc(0.7rem + ${(item.laneIndex ?? 0) * 3.35}rem)`,
                                       '--tradeoff-accent': item.tradeOffColorIndex !== null
                                         ? getTradeOffAccentColor(item.tradeOffColorIndex)
                                         : 'transparent',
                                     }}
                                     onClick={() => handleTimelineItemClick(item)}
-                                    title={`${item.label}${item.recommended ? '\nRecommended option' : ''}\n${item.detail}\nStart: ${formatTimelineDateTime(item.startTime)}\nEnd: ${formatTimelineDateTime(item.endTime)}\nDuration: ${formatTimelineDuration(item.startTime, item.endTime)}`}
+                                    aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
                                   >
-                                    {item.recommended && !tinyBar && (
-                                      <span
-                                        className="timeline-bar-marker"
-                                        aria-hidden="true"
-                                        title="Recommended option"
-                                      ></span>
-                                    )}
-                                    <span className="timeline-bar-title">
-                                      {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
+                                    <span className="timeline-bar-content">
+                                      {item.recommended && !tinyBar && (
+                                        <span
+                                          className="timeline-bar-marker"
+                                          aria-hidden="true"
+                                        ></span>
+                                      )}
+                                      <span className="timeline-bar-title">
+                                        {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
+                                      </span>
+                                      {!tinyBar && <span className="timeline-bar-copy">{item.detail}</span>}
                                     </span>
-                                    {!compactBar && <span className="timeline-bar-copy">{item.detail}</span>}
+                                    <span className="timeline-bar-tooltip" role="tooltip">
+                                      <strong>{item.label}</strong>
+                                      {item.recommended && <span>Recommended option</span>}
+                                      <span>{item.detail}</span>
+                                      <span>Start: {formatTimelineDateTime(item.startTime)}</span>
+                                      <span>End: {formatTimelineDateTime(item.endTime)}</span>
+                                      <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
+                                    </span>
                                   </button>
                                 )
                               })()
