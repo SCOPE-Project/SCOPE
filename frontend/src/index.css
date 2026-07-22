@@ -887,7 +887,8 @@ body {
   opacity: 0.88;
   color: #b8842c;
   line-height: 0;
-  pointer-events: none;
+  cursor: default;
+  pointer-events: auto;
 }
 
 .checkbox-list .asset-warning {
@@ -903,7 +904,8 @@ body {
 
 .asset-warning-tooltip {
   position: absolute;
-  left: calc(100% + 0.55rem);
+  right: calc(100% + 0.55rem);
+  left: auto;
   top: 50%;
   transform: translateY(-50%);
   min-width: 14rem;
@@ -924,7 +926,7 @@ body {
   z-index: 200;
 }
 
-.checkbox-row--disabled:hover .asset-warning-tooltip,
+.asset-warning:hover .asset-warning-tooltip,
 .checkbox-row--disabled:focus-within .asset-warning-tooltip {
   opacity: 1;
   visibility: visible;

@@ -1505,11 +1505,12 @@ export default function App() {
   )
 
   const renderAssetWarning = (message) => (
-    <span className="asset-warning" aria-hidden="true">
+    <span className="asset-warning" aria-label={message}>
       <svg
         className="asset-warning-icon"
         viewBox="0 0 24 24"
         focusable="false"
+        aria-hidden="true"
       >
         <path
           d="M12 3 1.8 20.5c-.4.7.1 1.5.9 1.5h18.6c.8 0 1.3-.8.9-1.5L12 3Z"
