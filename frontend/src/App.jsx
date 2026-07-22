@@ -37,6 +37,8 @@ export default function App() {
   const [schedulerLaunched, setSchedulerLaunched] = useState(false)
   const [overviewRows, setOverviewRows] = useState([])
   const [extractionStatus, setExtractionStatus] = useState('Not started')
+  const [extractionProgress, setExtractionProgress] = useState(0)
+  const [extractionMessages, setExtractionMessages] = useState([])
   const [calculatingTradeOffs, setCalculatingTradeOffs] = useState(false)
   const [useDemoData, setUseDemoData] = useState(false)
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
@@ -69,10 +71,31 @@ export default function App() {
   useEffect(() => {
     let active = true
     let intervalId = null
+    let checkInFlight = false
+
+    const fetchWithTimeout = async (url, options = {}, timeoutMs = 1500) => {
+      const controller = new AbortController()
+      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+
+      try {
+        return await fetch(url, {
+          ...options,
+          signal: controller.signal,
+        })
+      } finally {
+        window.clearTimeout(timeoutId)
+      }
+    }
 
     const checkConnections = async () => {
+      if (checkInFlight) {
+        return
+      }
+
+      checkInFlight = true
+
       try {
-        const backendResponse = await fetch(`${BACKEND_BASE_URL}/status`, {
+        const backendResponse = await fetchWithTimeout(`${BACKEND_BASE_URL}/status`, {
           cache: 'no-store',
         })
         if (!active) {
@@ -83,9 +106,9 @@ export default function App() {
           setBackendAlive(true)
 
           try {
-            const satosResponse = await fetch(`${BACKEND_BASE_URL}/satos/asset/list`, {
+            const satosResponse = await fetchWithTimeout(`${BACKEND_BASE_URL}/satos/asset/list`, {
               cache: 'no-store',
-            })
+            }, 1500)
             if (active) {
               setSatosAlive(satosResponse.ok)
             }
@@ -103,6 +126,8 @@ export default function App() {
           setBackendAlive(false)
           setSatosAlive(null)
         }
+      } finally {
+        checkInFlight = false
       }
     }
 
@@ -1023,6 +1048,8 @@ export default function App() {
     setSchedulerLaunched(false)
     setOverviewRows([])
     setExtractionStatus('Not started')
+    setExtractionProgress(0)
+    setExtractionMessages([])
     setCalculatingTradeOffs(false)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
@@ -1069,7 +1096,22 @@ export default function App() {
       window.setTimeout(resolve, durationMs)
     })
 
-  const pollTaskResult = async (taskId) => {
+  const formatTaskStatusLabel = (status) => {
+    switch (status) {
+      case 'queued':
+        return 'Queued'
+      case 'processing':
+        return 'Running'
+      case 'completed':
+        return 'Completed'
+      case 'failed':
+        return 'Failed'
+      default:
+        return status ? `${status.charAt(0).toUpperCase()}${status.slice(1)}` : 'Running'
+    }
+  }
+
+  const pollTaskResult = async (taskId, onStatusUpdate) => {
     while (true) {
       const statusResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}`)
       if (!statusResponse.ok) {
@@ -1077,6 +1119,7 @@ export default function App() {
       }
 
       const taskStatus = await statusResponse.json()
+      onStatusUpdate?.(taskStatus)
 
       if (taskStatus.status === 'completed') {
         const resultResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}/result`)
@@ -1145,6 +1188,14 @@ export default function App() {
     setLaunchingScheduler(true)
     setError(null)
     setExtractionStatus('Queued')
+    setExtractionProgress(0)
+    setExtractionMessages([
+      {
+        id: `queued-${Date.now()}`,
+        text: 'Task queued. Waiting for backend processing to start.',
+      },
+    ])
+    setOverviewRows([])
     setSchedulerLaunched(true)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
@@ -1175,10 +1226,29 @@ export default function App() {
         throw new Error(`Scheduler launch failed with status ${response.status}`)
       }
 
-      setExtractionStatus('Running')
-
       const receipt = await response.json()
-      const result = await pollTaskResult(receipt.task_id)
+      const result = await pollTaskResult(receipt.task_id, (taskStatus) => {
+        setExtractionStatus(formatTaskStatusLabel(taskStatus.status))
+        setExtractionProgress(
+          Number.isFinite(taskStatus.progress) ? taskStatus.progress : 0,
+        )
+
+        if (taskStatus.message) {
+          setExtractionMessages((current) => {
+            if (current[current.length - 1]?.text === taskStatus.message) {
+              return current
+            }
+
+            return [
+              ...current,
+              {
+                id: `${taskStatus.status}-${taskStatus.progress ?? 0}-${current.length}`,
+                text: taskStatus.message,
+              },
+            ]
+          })
+        }
+      })
       const scheduleItems = buildCurrentScheduleItems(
         assetSchedules,
         [...selectedSatellites, ...selectedGroundStations],
@@ -1190,6 +1260,7 @@ export default function App() {
 
       setOverviewRows(realRows)
       setExtractionStatus('Completed')
+      setExtractionProgress(100)
     } catch (err) {
       console.error(err)
       setOverviewRows([])
@@ -1525,6 +1596,10 @@ export default function App() {
     assetSchedules,
     [...selectedSatellites, ...selectedGroundStations],
   )
+  const showOverviewProgress =
+    launchingScheduler
+    || extractionStatus === 'Queued'
+    || extractionStatus === 'Running'
   const schedulableOverviewRows = overviewRows.filter((row) => !row.scheduleBlocked)
   const tradeOffDemoAvailable = useDemoData && schedulerLaunched && schedulableOverviewRows.length > 0
   const finalScheduleRows = getFinalScheduleRows(overviewRows, tradeOffCards, tradeOffsCalculated)
@@ -2209,7 +2284,7 @@ export default function App() {
                 className={`overview-inline-status ${
                   extractionStatus === 'Completed'
                     ? 'overview-inline-status--online'
-                    : extractionStatus === 'Running'
+                    : extractionStatus === 'Running' || extractionStatus === 'Queued'
                       ? 'overview-inline-status--checking'
                       : 'overview-inline-status--offline'
                 }`}
@@ -2231,102 +2306,141 @@ export default function App() {
             </div>
 
             <div className="overview-list">
-              <div className="overview-table-scroll">
-                <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                  <span>Overpass ID</span>
-                  <span>Sat ID</span>
-                  <span>GS ID</span>
-                  <span>Start</span>
-                  <span>End</span>
-                  <span>Max Elev.</span>
-                  <span>Duration</span>
-                  {tradeOffsCalculated && (
-                    <span className="overview-header-cell overview-header-cell--tradeoff">
-                      <span>Trade-Off ID</span>
-                      {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
-                    </span>
-                  )}
-                  {tradeOffsCalculated && (
-                    <span className="overview-header-cell overview-header-cell--score">
-                      <span>Score</span>
-                      {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
-                    </span>
+              {showOverviewProgress ? (
+                <div className="overview-progress">
+                  <div className="overview-progress-body">
+                    <div className="overview-progress-heading">
+                      <span className="overview-progress-title">Processing Log</span>
+                      <span className="overview-progress-percent">{extractionProgress}%</span>
+                    </div>
+                    <div className="overview-progress-log" role="log" aria-live="polite">
+                      {extractionMessages.length === 0 ? (
+                        <div className="overview-progress-entry overview-progress-entry--placeholder">
+                          Waiting for backend status updates.
+                        </div>
+                      ) : (
+                        extractionMessages.map((entry) => (
+                          <div key={entry.id} className="overview-progress-entry">
+                            {entry.text}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                  <div className="overview-progress-footer">
+                    <div
+                      className="overview-progress-bar"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={extractionProgress}
+                      aria-label="Overpass extraction progress"
+                    >
+                      <div
+                        className="overview-progress-bar-fill"
+                        style={{ width: `${Math.max(0, Math.min(100, extractionProgress))}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="overview-table-scroll">
+                  <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
+                    <span>Overpass ID</span>
+                    <span>Sat ID</span>
+                    <span>GS ID</span>
+                    <span>Start</span>
+                    <span>End</span>
+                    <span>Max Elev.</span>
+                    <span>Duration</span>
+                    {tradeOffsCalculated && (
+                      <span className="overview-header-cell overview-header-cell--tradeoff">
+                        <span>Trade-Off ID</span>
+                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                      </span>
+                    )}
+                    {tradeOffsCalculated && (
+                      <span className="overview-header-cell overview-header-cell--score">
+                        <span>Score</span>
+                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                      </span>
+                    )}
+                  </div>
+                  {overviewRows.length === 0 ? (
+                    <>
+                      <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
+                        <span>OP-001</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
+                      </div>
+                      <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
+                        <span>OP-002</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {overviewRows.map((row) => {
+                        const isRecommendedRow = tradeOffsCalculated
+                          && row.tradeOffId !== '—'
+                          && row.tradeOffScore !== '—'
+                          && tradeOffCards
+                            .flatMap((card) => card.options)
+                            .find((option) => option.overpassId === row.overpassId)?.recommended
+
+                        return (
+                          <div
+                            key={row.overpassId}
+                            className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
+                          >
+                            <span className="overview-overpass-cell">
+                              <span>{row.overpassId}</span>
+                              {isRecommendedRow ? (
+                                <span className="overview-row-note overview-row-note--recommended">
+                                  Recommended
+                                </span>
+                              ) : null}
+                              {row.scheduleBlocked && (
+                                <span
+                                  className="overview-row-note"
+                                  title={getScheduleBlockMessage(row)}
+                                >
+                                  Blocked
+                                </span>
+                              )}
+                            </span>
+                            <span>{row.satId}</span>
+                            <span>{row.gsId}</span>
+                            <span>{formatDateTimeCompact(row.startTime)}</span>
+                            <span>{formatDateTimeCompact(row.endTime)}</span>
+                            <span>{row.maxElevation ?? '—'}</span>
+                            <span>{row.duration}</span>
+                            {tradeOffsCalculated && (
+                              row.tradeOffId !== '—'
+                                ? <span className="overview-tradeoff-cell">{renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)}</span>
+                                : <span className="overview-tradeoff-cell">—</span>
+                            )}
+                            {tradeOffsCalculated && <span className="overview-score-cell">{row.tradeOffScore}</span>}
+                          </div>
+                        )
+                      })}
+                    </>
                   )}
                 </div>
-                {overviewRows.length === 0 ? (
-                  <>
-                    <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                      <span>OP-001</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      {tradeOffsCalculated && <span>—</span>}
-                      {tradeOffsCalculated && <span>—</span>}
-                    </div>
-                    <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                      <span>OP-002</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      <span>Pending</span>
-                      {tradeOffsCalculated && <span>—</span>}
-                      {tradeOffsCalculated && <span>—</span>}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    {overviewRows.map((row) => {
-                      const isRecommendedRow = tradeOffsCalculated
-                        && row.tradeOffId !== '—'
-                        && row.tradeOffScore !== '—'
-                        && tradeOffCards
-                          .flatMap((card) => card.options)
-                          .find((option) => option.overpassId === row.overpassId)?.recommended
-
-                      return (
-                        <div
-                          key={row.overpassId}
-                          className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
-                        >
-                          <span className="overview-overpass-cell">
-                            <span>{row.overpassId}</span>
-                            {isRecommendedRow ? (
-                              <span className="overview-row-note overview-row-note--recommended">
-                                Recommended
-                              </span>
-                            ) : null}
-                            {row.scheduleBlocked && (
-                              <span
-                                className="overview-row-note"
-                                title={getScheduleBlockMessage(row)}
-                              >
-                                Blocked
-                              </span>
-                            )}
-                          </span>
-                          <span>{row.satId}</span>
-                          <span>{row.gsId}</span>
-                          <span>{formatDateTimeCompact(row.startTime)}</span>
-                          <span>{formatDateTimeCompact(row.endTime)}</span>
-                          <span>{row.maxElevation ?? '—'}</span>
-                          <span>{row.duration}</span>
-                          {tradeOffsCalculated && (
-                            row.tradeOffId !== '—'
-                              ? <span className="overview-tradeoff-cell">{renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)}</span>
-                              : <span className="overview-tradeoff-cell">—</span>
-                          )}
-                          {tradeOffsCalculated && <span className="overview-score-cell">{row.tradeOffScore}</span>}
-                        </div>
-                      )
-                    })}
-                  </>
-                )}
-              </div>
+              )}
             </div>
 
             <div className="panel-action-wrapper">
