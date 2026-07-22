@@ -64,29 +64,87 @@ export default function App() {
   })
 
   useEffect(() => {
+    let active = true
+    let intervalId = null
+
     const checkConnections = async () => {
       try {
         const backendResponse = await fetch(`${BACKEND_BASE_URL}/status`)
+        if (!active) {
+          return
+        }
+
         if (backendResponse.ok) {
           setBackendAlive(true)
 
           try {
             const satosResponse = await fetch(`${BACKEND_BASE_URL}/satos/asset/list`)
-            setSatosAlive(satosResponse.ok)
+            if (active) {
+              setSatosAlive(satosResponse.ok)
+            }
           } catch {
-            setSatosAlive(false)
+            if (active) {
+              setSatosAlive(false)
+            }
           }
         } else {
           setBackendAlive(false)
           setSatosAlive(null)
         }
       } catch {
-        setBackendAlive(false)
-        setSatosAlive(null)
+        if (active) {
+          setBackendAlive(false)
+          setSatosAlive(null)
+        }
       }
     }
+
+    const stopPolling = () => {
+      if (intervalId !== null) {
+        window.clearInterval(intervalId)
+        intervalId = null
+      }
+    }
+
+    const startPolling = () => {
+      if (
+        intervalId !== null
+        || view !== 'landing'
+        || document.visibilityState !== 'visible'
+      ) {
+        return
+      }
+
+      intervalId = window.setInterval(checkConnections, 10000)
+    }
+
     checkConnections()
-  }, [])
+    const handleVisibilityChange = () => {
+      if (view !== 'landing') {
+        stopPolling()
+        return
+      }
+
+      if (document.visibilityState === 'visible') {
+        checkConnections()
+        startPolling()
+      } else {
+        stopPolling()
+      }
+    }
+
+    startPolling()
+
+    window.addEventListener('focus', handleVisibilityChange)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      active = false
+      stopPolling()
+      window.removeEventListener('focus', handleVisibilityChange)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [view])
 
   useEffect(() => {
     if (!schedulerLaunched) {
@@ -2078,10 +2136,18 @@ export default function App() {
                       : 'overview-inline-status--offline'
                 }`}
               >
-                <span className="overview-status-label">Overpass Extraction Status</span>
-                <div className="overview-status-value">
-                  <span className="app-status-dot" aria-hidden="true"></span>
-                  <span className="overview-status-text">{extractionStatus}</span>
+                {schedulerLaunched && (
+                  <div className="overview-count-inline">
+                    <span className="overview-status-label">Overpasses</span>
+                    <span className="overview-count-value">{overviewRows.length}</span>
+                  </div>
+                )}
+                <div className="overview-status-block">
+                  <span className="overview-status-label">Overpass Extraction Status</span>
+                  <div className="overview-status-value">
+                    <span className="app-status-dot" aria-hidden="true"></span>
+                    <span className="overview-status-text">{extractionStatus}</span>
+                  </div>
                 </div>
               </div>
             </div>
