@@ -952,6 +952,14 @@ body {
   padding-right: 0.2rem;
 }
 
+.workspace-panels-split {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  align-items: start;
+}
+
 .panel {
   background: var(--bg-panel-strong);
   border: 1px solid var(--card-border);
@@ -965,6 +973,53 @@ body {
 
 .panel--fullwidth {
   grid-column: 1 / -1;
+}
+
+.panel-resizer {
+  position: relative;
+  width: 0.9rem;
+  min-width: 0.9rem;
+  height: 45rem;
+  min-height: 45rem;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  outline: none;
+}
+
+.panel-resizer-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--line-strong);
+}
+
+.panel-resizer-grip {
+  position: relative;
+  width: 0.42rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at center, rgba(60, 79, 98, 0.55) 0 1.1px, transparent 1.2px) center 0.25rem / 100% 0.45rem repeat-y,
+    #eef2f6;
+  border: 1px solid #d1d9e1;
+  box-shadow: 0 4px 10px rgba(31, 42, 51, 0.08);
+}
+
+.panel-resizer:hover .panel-resizer-grip,
+.panel-resizer:focus-visible .panel-resizer-grip {
+  background:
+    radial-gradient(circle at center, rgba(37, 68, 102, 0.68) 0 1.1px, transparent 1.2px) center 0.25rem / 100% 0.45rem repeat-y,
+    #f5f8fb;
+  border-color: #b9c6d2;
 }
 
 .panel h2 {
@@ -2685,6 +2740,15 @@ body {
     grid-template-columns: 1fr;
     height: auto;
     overflow: visible;
+  }
+
+  .workspace-panels-split {
+    grid-template-columns: 1fr !important;
+    gap: 1.5rem;
+  }
+
+  .panel-resizer {
+    display: none;
   }
 
   .panel-heading {

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 
 const BACKEND_BASE_URL = 'http://localhost:8000'
 const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
@@ -16,6 +16,8 @@ const MAP_TILE_SIZE = 256
 const DEMO_REGION_MAP_ZOOM = 6
 
 export default function App() {
+  const splitPanelsRef = useRef(null)
+  const splitDragCleanupRef = useRef(null)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
   const [loading, setLoading] = useState(false)
@@ -41,6 +43,7 @@ export default function App() {
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
+  const [overviewPanelWidth, setOverviewPanelWidth] = useState(58)
   const [confirmingSchedule, setConfirmingSchedule] = useState(false)
   const [confirmationProgress, setConfirmationProgress] = useState(0)
   const [confirmationStep, setConfirmationStep] = useState('')
@@ -69,7 +72,9 @@ export default function App() {
 
     const checkConnections = async () => {
       try {
-        const backendResponse = await fetch(`${BACKEND_BASE_URL}/status`)
+        const backendResponse = await fetch(`${BACKEND_BASE_URL}/status`, {
+          cache: 'no-store',
+        })
         if (!active) {
           return
         }
@@ -78,7 +83,9 @@ export default function App() {
           setBackendAlive(true)
 
           try {
-            const satosResponse = await fetch(`${BACKEND_BASE_URL}/satos/asset/list`)
+            const satosResponse = await fetch(`${BACKEND_BASE_URL}/satos/asset/list`, {
+              cache: 'no-store',
+            })
             if (active) {
               setSatosAlive(satosResponse.ok)
             }
@@ -115,7 +122,7 @@ export default function App() {
         return
       }
 
-      intervalId = window.setInterval(checkConnections, 10000)
+      intervalId = window.setInterval(checkConnections, 2000)
     }
 
     checkConnections()
@@ -157,6 +164,12 @@ export default function App() {
 
     return () => window.clearInterval(intervalId)
   }, [schedulerLaunched])
+
+  useEffect(() => () => {
+    if (splitDragCleanupRef.current) {
+      splitDragCleanupRef.current()
+    }
+  }, [])
 
   useEffect(() => {
     setConfirmationSuccess(false)
@@ -1560,6 +1573,62 @@ export default function App() {
   const getTradeOffAccentColor = (colorIndex) =>
     TRADE_OFF_ACCENT_COLORS[(colorIndex ?? 0) % TRADE_OFF_ACCENT_COLORS.length]
 
+  const clampOverviewPanelWidth = (value) => Math.min(72, Math.max(38, value))
+
+  const updateOverviewPanelWidthFromClientX = (clientX) => {
+    if (!splitPanelsRef.current) {
+      return
+    }
+
+    const rect = splitPanelsRef.current.getBoundingClientRect()
+    if (rect.width <= 0) {
+      return
+    }
+
+    const relativeX = clientX - rect.left
+    const nextWidth = (relativeX / rect.width) * 100
+    setOverviewPanelWidth(clampOverviewPanelWidth(nextWidth))
+  }
+
+  const handlePanelResizeStart = (event) => {
+    event.preventDefault()
+
+    const handlePointerMove = (moveEvent) => {
+      updateOverviewPanelWidthFromClientX(moveEvent.clientX)
+    }
+
+    const stopResize = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopResize)
+      window.removeEventListener('pointercancel', stopResize)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      splitDragCleanupRef.current = null
+    }
+
+    splitDragCleanupRef.current = stopResize
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopResize)
+    window.addEventListener('pointercancel', stopResize)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    updateOverviewPanelWidthFromClientX(event.clientX)
+  }
+
+  const handlePanelResizeKeyDown = (event) => {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setOverviewPanelWidth((current) => clampOverviewPanelWidth(current - 4))
+    }
+
+    if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      setOverviewPanelWidth((current) => clampOverviewPanelWidth(current + 4))
+    }
+  }
+
   const renderTradeOffPill = (tradeOffId, colorIndex) => (
     <span
       className="tradeoff-id-pill"
@@ -2122,6 +2191,13 @@ export default function App() {
             )}
           </section>
 
+          <div
+            ref={splitPanelsRef}
+            className="workspace-panels-split"
+            style={{
+              gridTemplateColumns: `minmax(0, ${overviewPanelWidth}%) 0.9rem minmax(0, calc(${100 - overviewPanelWidth}% - 0.9rem))`,
+            }}
+          >
           <section className="panel overview-panel">
             <div className="panel-heading">
               <div className="panel-heading-title">
@@ -2275,6 +2351,19 @@ export default function App() {
             </div>
           </section>
 
+          <div
+            className="panel-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize overview and trade-off panels"
+            tabIndex={0}
+            onPointerDown={handlePanelResizeStart}
+            onKeyDown={handlePanelResizeKeyDown}
+          >
+            <span className="panel-resizer-line" aria-hidden="true"></span>
+            <span className="panel-resizer-grip" aria-hidden="true"></span>
+          </div>
+
           <section className="panel tradeoff-panel">
             <div className="panel-heading-title">
               <h2>Trade-Off</h2>
@@ -2376,6 +2465,7 @@ export default function App() {
               </div>
             )}
           </section>
+          </div>
 
           <section className="panel panel--fullwidth timeline-panel">
             <div className="panel-heading panel-heading--timeline">
