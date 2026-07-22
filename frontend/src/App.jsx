@@ -41,7 +41,6 @@ export default function App() {
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
-  const [activeTimelineItemId, setActiveTimelineItemId] = useState(null)
   const [confirmingSchedule, setConfirmingSchedule] = useState(false)
   const [confirmationProgress, setConfirmationProgress] = useState(0)
   const [confirmationStep, setConfirmationStep] = useState('')
@@ -154,7 +153,6 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
-    setActiveTimelineItemId(null)
     setConfirmingSchedule(false)
     setConfirmationProgress(0)
     setConfirmationStep('')
@@ -957,7 +955,6 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
-    setActiveTimelineItemId(null)
     setActiveMapAssetId(null)
     setActivePlanningWindow(null)
     setTimelineNow(Date.now())
@@ -1080,7 +1077,6 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
-    setActiveTimelineItemId(null)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
     setTimelineNow(Date.now())
@@ -1160,7 +1156,6 @@ export default function App() {
     setTradeOffCards(groups)
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(groups[0]?.options.find((option) => option.recommended)?.optionId ?? null)
-    setActiveTimelineItemId(null)
     setTradeOffsCalculated(true)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
@@ -1478,17 +1473,7 @@ export default function App() {
     ? Math.round(timelineModel.widthPx * timelineZoomMultiplier)
     : 0
   const visibleTimelineTracks = timelineModel?.tracks.filter((track) => timelineLayers[track.id]) ?? []
-  const timelineItemsFlat = timelineModel
-    ? timelineModel.tracks.flatMap((track) =>
-        track.items.map((item) => ({
-          ...item,
-          trackLabel: track.label,
-        }))
-      )
-    : []
   const activeTradeOffCard = tradeOffCards[activeTradeOffCardIndex] ?? null
-  const activeTimelineItem =
-    timelineItemsFlat.find((item) => item.id === activeTimelineItemId) ?? null
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-label={message}>
       <svg
@@ -1533,8 +1518,6 @@ export default function App() {
   }
 
   const handleTimelineItemClick = (item) => {
-    setActiveTimelineItemId(item.id)
-
     if (item.optionId) {
       handleSelectTradeOffOption(item.optionId)
     }
@@ -2511,43 +2494,6 @@ export default function App() {
                         </Fragment>
                       ))}
                     </div>
-                  </div>
-                )}
-
-                {activeTimelineItem && (
-                  <div className="timeline-detail-card">
-                    <div className="timeline-detail-header">
-                      <div className="timeline-detail-titleblock">
-                        <span className="timeline-detail-track">{activeTimelineItem.trackLabel}</span>
-                        <h3>{activeTimelineItem.label}</h3>
-                      </div>
-                      <div className="timeline-detail-header-meta">
-                        {activeTimelineItem.recommended && (
-                          <span className="tradeoff-recommended">Recommended</span>
-                        )}
-                        {activeTimelineItem.tradeOffId && activeTimelineItem.tradeOffId !== '—' && (
-                          renderTradeOffPill(
-                            activeTimelineItem.tradeOffId,
-                            activeTimelineItem.tradeOffColorIndex,
-                          )
-                        )}
-                      </div>
-                    </div>
-                    <p className="timeline-detail-copy">{activeTimelineItem.detail}</p>
-                    <dl className="timeline-detail-grid">
-                      <dt>Start</dt>
-                      <dd>{formatTimelineDateTime(activeTimelineItem.startTime)}</dd>
-                      <dt>End</dt>
-                      <dd>{formatTimelineDateTime(activeTimelineItem.endTime)}</dd>
-                      <dt>Duration</dt>
-                      <dd>{formatTimelineDuration(activeTimelineItem.startTime, activeTimelineItem.endTime)}</dd>
-                      {activeTimelineItem.tradeOffScore && activeTimelineItem.tradeOffScore !== '—' && (
-                        <>
-                          <dt>Score</dt>
-                          <dd>{activeTimelineItem.tradeOffScore}</dd>
-                        </>
-                      )}
-                    </dl>
                   </div>
                 )}
 
