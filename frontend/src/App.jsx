@@ -8,10 +8,10 @@ const TIMELINE_ZOOM_LEVELS = [
 ]
 const OVERVIEW_PAGE_SIZE = 10
 const DEMO_REGION_BOUNDS = {
-  minLatitude: 76.8,
-  maxLatitude: 81.4,
-  minLongitude: 10.5,
-  maxLongitude: 28.5,
+  minLatitude: 60.947647,
+  maxLatitude: 81.270510,
+  minLongitude: -44.748194,
+  maxLongitude: 79.120215,
 }
 const MAP_TILE_SIZE = 256
 const DEMO_REGION_MAP_ZOOM = 6

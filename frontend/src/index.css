@@ -504,9 +504,8 @@ body {
   position: relative;
   min-height: 0;
   height: 100%;
-  overflow: hidden;
-  overflow-x: hidden;
-  z-index: 3;
+  overflow: visible;
+  z-index: 10;
 }
 
 .workspace-sidebar--collapsed {
@@ -528,9 +527,11 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: visible;
   padding-right: 0.4rem;
   margin-right: -1.3rem;
+  position: relative;
+  z-index: 11;
 }
 
 .workspace-sidebar h2 {
@@ -842,6 +843,11 @@ body {
   width: 100%;
 }
 
+.checkbox-row--disabled:hover,
+.checkbox-row--disabled:focus-within {
+  z-index: 20;
+}
+
 .checkbox-row input {
   accent-color: var(--accent-primary);
   margin-right: 0.1rem;
@@ -915,7 +921,7 @@ body {
   pointer-events: none;
   transition: opacity 0.15s ease;
   text-align: left;
-  z-index: 50;
+  z-index: 200;
 }
 
 .checkbox-row--disabled:hover .asset-warning-tooltip,
