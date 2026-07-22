@@ -2296,7 +2296,7 @@ export default function App() {
                   </div>
                 )}
                 <div className="overview-status-block">
-                  <span className="overview-status-label">Overpass Extraction Status</span>
+                  <span className="overview-status-label">Status</span>
                   <div className="overview-status-value">
                     <span className="app-status-dot" aria-hidden="true"></span>
                     <span className="overview-status-text">{extractionStatus}</span>
