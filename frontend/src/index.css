@@ -1088,24 +1088,22 @@ body {
 .overview-list {
   --overview-header-height: 3.1rem;
   --overview-row-height: 2.7rem;
-  --overview-footer-height: 3.4rem;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-card);
   overflow: hidden;
   margin-bottom: 1rem;
   background: var(--bg-panel-strong);
-  flex: 0 0 auto;
-  height: calc(var(--overview-header-height) + (10 * var(--overview-row-height)) + var(--overview-footer-height));
-  min-height: calc(var(--overview-header-height) + (10 * var(--overview-row-height)) + var(--overview-footer-height));
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
 .overview-table-scroll {
   overflow-x: auto;
-  overflow-y: hidden;
-  flex: 0 0 auto;
-  height: calc(var(--overview-header-height) + (10 * var(--overview-row-height)));
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .overview-list-grid {
@@ -1128,6 +1126,9 @@ body {
 }
 
 .overview-list-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   background: var(--accent-primary);
   color: #f7fbff;
   font-size: 0.71rem;
@@ -1261,71 +1262,6 @@ body {
   justify-content: flex-start;
   text-align: left;
   padding-left: 0.12rem;
-}
-
-.overview-footer {
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 1rem;
-  padding: 0.72rem 1rem 0.82rem;
-  border-top: 1px solid var(--line-soft);
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.overview-pagination {
-  position: relative;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-}
-
-.overview-pagination-copy,
-.overview-pagination-page {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-.overview-pagination-copy {
-  position: absolute;
-  right: 1rem;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.overview-pagination-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0 auto;
-}
-
-.overview-pagination-button {
-  width: 2rem;
-  min-width: 2rem;
-  flex: 0 0 auto;
-  height: 2rem;
-  padding: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: 0.18rem;
-  background: var(--bg-panel-strong);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 0.92rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.overview-pagination-button:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-.overview-pagination-button:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 .panel-action {

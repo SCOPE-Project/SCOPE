@@ -6,7 +6,6 @@ const TIMELINE_ZOOM_LEVELS = [
   { id: 'fit', label: 'Fit', multiplier: 1 },
   { id: 'detail', label: 'Detail', multiplier: 5.2 },
 ]
-const OVERVIEW_PAGE_SIZE = 10
 const DEMO_REGION_BOUNDS = {
   minLatitude: 60.947647,
   maxLatitude: 81.270510,
@@ -57,7 +56,6 @@ export default function App() {
     potential: true,
     proposed: true,
   })
-  const [overviewPage, setOverviewPage] = useState(0)
   const [expandedSections, setExpandedSections] = useState({
     timeWindow: true,
     satellites: true,
@@ -102,10 +100,6 @@ export default function App() {
 
     return () => window.clearInterval(intervalId)
   }, [schedulerLaunched])
-
-  useEffect(() => {
-    setOverviewPage(0)
-  }, [overviewRows, tradeOffsCalculated])
 
   useEffect(() => {
     setConfirmationSuccess(false)
@@ -973,7 +967,6 @@ export default function App() {
       potential: true,
       proposed: true,
     })
-    setOverviewPage(0)
     setExpandedSections({
       timeWindow: true,
       satellites: true,
@@ -1496,14 +1489,6 @@ export default function App() {
   const activeTradeOffCard = tradeOffCards[activeTradeOffCardIndex] ?? null
   const activeTimelineItem =
     timelineItemsFlat.find((item) => item.id === activeTimelineItemId) ?? null
-  const overviewTotalPages = Math.max(1, Math.ceil(overviewRows.length / OVERVIEW_PAGE_SIZE))
-  const overviewPageStart = overviewRows.length === 0 ? 0 : overviewPage * OVERVIEW_PAGE_SIZE + 1
-  const overviewPageEnd = Math.min((overviewPage + 1) * OVERVIEW_PAGE_SIZE, overviewRows.length)
-  const visibleOverviewRows = overviewRows.slice(
-    overviewPage * OVERVIEW_PAGE_SIZE,
-    overviewPage * OVERVIEW_PAGE_SIZE + OVERVIEW_PAGE_SIZE,
-  )
-
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-label={message}>
       <svg
@@ -2168,7 +2153,7 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    {visibleOverviewRows.map((row) => {
+                    {overviewRows.map((row) => {
                       const isRecommendedRow = tradeOffsCalculated
                         && row.tradeOffId !== '—'
                         && row.tradeOffScore !== '—'
@@ -2215,38 +2200,6 @@ export default function App() {
                   </>
                 )}
               </div>
-              {overviewRows.length > 0 && (
-                <div className="overview-footer">
-                  <div className="overview-pagination">
-                    <span className="overview-pagination-copy">
-                      Showing {overviewPageStart}-{overviewPageEnd} of {overviewRows.length}
-                    </span>
-                    <div className="overview-pagination-actions">
-                      <button
-                        type="button"
-                        className="overview-pagination-button"
-                        disabled={overviewPage === 0}
-                        onClick={() => setOverviewPage((current) => Math.max(0, current - 1))}
-                        aria-label="Previous overview page"
-                      >
-                        ‹
-                      </button>
-                      <span className="overview-pagination-page">
-                        {overviewPage + 1} / {overviewTotalPages}
-                      </span>
-                      <button
-                        type="button"
-                        className="overview-pagination-button"
-                        disabled={overviewPage >= overviewTotalPages - 1}
-                        onClick={() => setOverviewPage((current) => Math.min(overviewTotalPages - 1, current + 1))}
-                        aria-label="Next overview page"
-                      >
-                        ›
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
 
             <div className="panel-action-wrapper">
