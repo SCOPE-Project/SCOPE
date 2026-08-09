@@ -4,12 +4,20 @@ venv setup for python backend development.
 
 **Prerequisite:** Ensure Python (v3.13.1) is installed natively on your Windows machine. You can verify your installation by running `py -0` in your terminal, check that Python 3.13 is included in the list.
 
-Follow these steps in the terminal (Windows)
+Follow these steps in the terminal 
+(Windows)
 ```bash
 cd backend
 py -3.13 -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+```
+(MacOS)
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
 ```
 With the inclusion of `.vscode\settings.json`, the python workspace folder and python interpreter should automatically be set in VSCode.
 
