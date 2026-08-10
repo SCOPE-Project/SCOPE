@@ -1,20 +1,36 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Component, lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { interpolateTrackPosition } from './components/mapGeometry.js'
 
 const BACKEND_BASE_URL = 'http://localhost:8000'
+const MissionMap = lazy(() => import('./components/MissionMap.jsx'))
 const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
 const TIMELINE_ZOOM_LEVELS = [
   { id: 'fit', label: 'Fit', multiplier: 1 },
   { id: 'detail', label: 'Detail', multiplier: 5.2 },
 ]
-const DEMO_REGION_BOUNDS = {
-  minLatitude: 60.947647,
-  maxLatitude: 81.270510,
-  minLongitude: -44.748194,
-  maxLongitude: 79.120215,
-}
-const MAP_TILE_SIZE = 256
-const DEMO_REGION_MAP_ZOOM = 6
 const DEFAULT_PLANNING_TIME_MODE = 'utc'
+
+class MapErrorBoundary extends Component {
+  state = { error: null }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="mission-map-shell">
+          <div className="mission-map-state mission-map-state--error" role="alert">
+            Map could not be initialized: {this.state.error.message}
+          </div>
+        </div>
+      )
+    }
+
+    return this.props.children
+  }
+}
 
 const padDateTimePart = (value) => String(value).padStart(2, '0')
 
@@ -62,6 +78,11 @@ const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
 export default function App() {
   const splitPanelsRef = useRef(null)
   const splitDragCleanupRef = useRef(null)
+  const timelineScrollRef = useRef(null)
+  const timelineScrollFrameRef = useRef(null)
+  const timelineScrollRafRef = useRef(null)
+  const timelineLayoutKeyRef = useRef('')
+  const timelineProgrammaticScrollRef = useRef(false)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
   const [loading, setLoading] = useState(false)
@@ -85,6 +106,7 @@ export default function App() {
   const [launchingScheduler, setLaunchingScheduler] = useState(false)
   const [schedulerLaunched, setSchedulerLaunched] = useState(false)
   const [overviewRows, setOverviewRows] = useState([])
+  const [satelliteTracks, setSatelliteTracks] = useState({})
   const [extractionStatus, setExtractionStatus] = useState('Not started')
   const [extractionProgress, setExtractionProgress] = useState(0)
   const [extractionMessages, setExtractionMessages] = useState([])
@@ -103,6 +125,8 @@ export default function App() {
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
   const [timelineNow, setTimelineNow] = useState(() => Date.now())
+  const [timelinePlayheadTime, setTimelinePlayheadTime] = useState(() => Date.now())
+  const [timelineLive, setTimelineLive] = useState(true)
   const [timelineZoomLevel, setTimelineZoomLevel] = useState('detail')
   const [timelineLayers, setTimelineLayers] = useState({
     current: true,
@@ -237,7 +261,7 @@ export default function App() {
 
     const intervalId = window.setInterval(() => {
       setTimelineNow(Date.now())
-    }, 60000)
+    }, 1000)
 
     return () => window.clearInterval(intervalId)
   }, [schedulerLaunched])
@@ -245,6 +269,9 @@ export default function App() {
   useEffect(() => () => {
     if (splitDragCleanupRef.current) {
       splitDragCleanupRef.current()
+    }
+    if (timelineScrollRafRef.current !== null) {
+      window.cancelAnimationFrame(timelineScrollRafRef.current)
     }
   }, [])
 
@@ -753,6 +780,28 @@ export default function App() {
     })
   }
 
+  const formatTimelinePlayheadDateTime = (
+    value,
+    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
+  ) => {
+    const parsed = new Date(value)
+    if (!Number.isFinite(parsed.getTime())) {
+      return '—'
+    }
+
+    const formatted = parsed.toLocaleString([], {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      ...getTimeZoneFormatOptions(timeMode),
+    })
+
+    return `${formatted} ${timeMode === 'local' ? 'Local' : 'UTC'}`
+  }
+
   const formatTimelineDuration = (startValue, endValue) => {
     const startTimestamp = toTimestamp(startValue)
     const endTimestamp = toTimestamp(endValue)
@@ -1030,15 +1079,22 @@ export default function App() {
       ...potentialSourceItems,
       ...proposedSourceItems,
     ]
+    const planningStartTimestamp = toTimestamp(planningWindow?.startTime)
+    const planningEndTimestamp = toTimestamp(planningWindow?.endTime)
 
-    if (allTimestampItems.length === 0) {
+    if (
+      allTimestampItems.length === 0
+      && (planningStartTimestamp === null || planningEndTimestamp === null)
+    ) {
       return null
     }
 
-    const planningStartTimestamp = toTimestamp(planningWindow?.startTime)
-    const planningEndTimestamp = toTimestamp(planningWindow?.endTime)
-    const minTimestamp = Math.min(...allTimestampItems.map((item) => item.startTimestamp))
-    const maxTimestamp = Math.max(...allTimestampItems.map((item) => item.endTimestamp))
+    const minTimestamp = allTimestampItems.length > 0
+      ? Math.min(...allTimestampItems.map((item) => item.startTimestamp))
+      : planningStartTimestamp
+    const maxTimestamp = allTimestampItems.length > 0
+      ? Math.max(...allTimestampItems.map((item) => item.endTimestamp))
+      : planningEndTimestamp
     const baseTimestamp = planningStartTimestamp ?? (minTimestamp - 30 * 60000)
     const endTimestamp = planningEndTimestamp ?? (maxTimestamp + 30 * 60000)
     const totalMinutes = Math.max(60, Math.ceil((endTimestamp - baseTimestamp) / 60000))
@@ -1139,6 +1195,7 @@ export default function App() {
     setLaunchingScheduler(false)
     setSchedulerLaunched(false)
     setOverviewRows([])
+    setSatelliteTracks({})
     setExtractionStatus('Not started')
     setExtractionProgress(0)
     setExtractionMessages([])
@@ -1150,6 +1207,8 @@ export default function App() {
     setActiveMapAssetId(null)
     setActivePlanningWindow(null)
     setTimelineNow(Date.now())
+    setTimelinePlayheadTime(Date.now())
+    setTimelineLive(true)
     setTimelineZoomLevel('detail')
     setTimelineLayers({
       current: true,
@@ -1375,6 +1434,7 @@ export default function App() {
       },
     ])
     setOverviewRows([])
+    setSatelliteTracks({})
     setSchedulerLaunched(true)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
@@ -1382,7 +1442,10 @@ export default function App() {
     setSelectedTradeOffOption(null)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
-    setTimelineNow(Date.now())
+    const schedulerLaunchTime = timelineNow
+    setTimelineNow(schedulerLaunchTime)
+    setTimelinePlayheadTime(schedulerLaunchTime)
+    setTimelineLive(true)
     setSidebarCollapsed(true)
 
     setActivePlanningWindow(planningWindow)
@@ -1437,12 +1500,14 @@ export default function App() {
         scheduleItems,
       )
 
+      setSatelliteTracks(result?.payload?.global_tracks ?? {})
       setOverviewRows(realRows)
       setExtractionStatus('Completed')
       setExtractionProgress(100)
     } catch (err) {
       console.error(err)
       setOverviewRows([])
+      setSatelliteTracks({})
       setActivePlanningWindow(null)
       setSchedulerLaunched(false)
       setSidebarCollapsed(false)
@@ -1615,88 +1680,37 @@ export default function App() {
     return null
   }
 
-  const projectToMap = (latitude, longitude) => ({
-    left: ((longitude + 180) / 360) * 100,
-    top: ((90 - latitude) / 180) * 100,
-  })
-
-  const projectToMercator = (latitude, longitude, zoom) => {
-    const clampedLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude))
-    const latitudeRadians = (clampedLatitude * Math.PI) / 180
-    const scale = MAP_TILE_SIZE * 2 ** zoom
-
-    return {
-      x: ((longitude + 180) / 360) * scale,
-      y:
-        (0.5
-          - Math.log((1 + Math.sin(latitudeRadians)) / (1 - Math.sin(latitudeRadians))) / (4 * Math.PI))
-        * scale,
+  const planningWindowStartTimestamp = toTimestamp(activePlanningWindow?.startTime)
+  const planningWindowEndTimestamp = toTimestamp(activePlanningWindow?.endTime)
+  const clampToPlanningWindow = (timestamp) => {
+    if (
+      planningWindowStartTimestamp === null
+      || planningWindowEndTimestamp === null
+    ) {
+      return timestamp
     }
-  }
 
-  const buildDemoRegionMapModel = (assets) => {
-    const topLeft = projectToMercator(
-      DEMO_REGION_BOUNDS.maxLatitude,
-      DEMO_REGION_BOUNDS.minLongitude,
-      DEMO_REGION_MAP_ZOOM,
+    return Math.max(
+      planningWindowStartTimestamp,
+      Math.min(planningWindowEndTimestamp, timestamp),
     )
-    const bottomRight = projectToMercator(
-      DEMO_REGION_BOUNDS.minLatitude,
-      DEMO_REGION_BOUNDS.maxLongitude,
-      DEMO_REGION_MAP_ZOOM,
-    )
-
-    const minTileX = Math.floor(topLeft.x / MAP_TILE_SIZE)
-    const maxTileX = Math.floor(bottomRight.x / MAP_TILE_SIZE)
-    const minTileY = Math.floor(topLeft.y / MAP_TILE_SIZE)
-    const maxTileY = Math.floor(bottomRight.y / MAP_TILE_SIZE)
-
-    const tileColumnCount = maxTileX - minTileX + 1
-    const tileRowCount = maxTileY - minTileY + 1
-    const originX = minTileX * MAP_TILE_SIZE
-    const originY = minTileY * MAP_TILE_SIZE
-    const widthPx = tileColumnCount * MAP_TILE_SIZE
-    const heightPx = tileRowCount * MAP_TILE_SIZE
-
-    const tiles = []
-    for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
-      for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
-        tiles.push({
-          key: `${tileX}-${tileY}`,
-          x: tileX,
-          y: tileY,
-          url: `https://tile.openstreetmap.org/${DEMO_REGION_MAP_ZOOM}/${tileX}/${tileY}.png`,
-          left: ((tileX - minTileX) / tileColumnCount) * 100,
-          top: ((tileY - minTileY) / tileRowCount) * 100,
-          width: 100 / tileColumnCount,
-          height: 100 / tileRowCount,
-        })
-      }
-    }
-
-    const markerPositions = assets.map((asset) => {
-      const point = projectToMercator(asset.latitude, asset.longitude, DEMO_REGION_MAP_ZOOM)
-
-      return {
-        id: asset.id,
-        left: ((point.x - originX) / widthPx) * 100,
-        top: ((point.y - originY) / heightPx) * 100,
-      }
-    })
-
-    return {
-      tiles,
-      markerPositions,
-      tileColumnCount,
-      tileRowCount,
-      aspectRatio: `${tileColumnCount} / ${tileRowCount}`,
-    }
   }
+  const timelinePlayheadTimestamp = clampToPlanningWindow(
+    timelineLive ? timelineNow : timelinePlayheadTime,
+  )
+
+  const getSatelliteTrackCoordinates = (assetName) => (
+    interpolateTrackPosition(satelliteTracks[assetName], timelinePlayheadTimestamp)
+  )
 
   const formatCoordinate = (value, positiveLabel, negativeLabel) => {
     const direction = value >= 0 ? positiveLabel : negativeLabel
     return `${Math.abs(value).toFixed(2)}° ${direction}`
   }
+
+  const formatAltitude = (value) => (
+    Number.isFinite(value) ? `${(value / 1000).toFixed(1)} km` : '—'
+  )
 
   const selectedGroundStationAssets = groundStationAssets.filter((asset) =>
     selectedGroundStations.includes(asset.name)
@@ -1719,13 +1733,14 @@ export default function App() {
           name: asset.name,
           type: 'Ground Station',
           markerType: 'ground-station',
+          minLinkElevation: asset.details?.min_link_elevation,
           ...coordinates,
         }
       })
       .filter(Boolean),
     ...selectedSatelliteAssets
       .map((asset) => {
-        const coordinates = getAssetCoordinates(asset)
+        const coordinates = getSatelliteTrackCoordinates(asset.name)
         if (!coordinates) {
           return null
         }
@@ -1741,31 +1756,18 @@ export default function App() {
       .filter(Boolean),
   ]
 
-  const demoRegionalMapAssets = selectedMapAssets.filter(
-    (asset) =>
-      asset.markerType === 'ground-station'
-      && asset.latitude >= DEMO_REGION_BOUNDS.minLatitude
-      && asset.latitude <= DEMO_REGION_BOUNDS.maxLatitude
-      && asset.longitude >= DEMO_REGION_BOUNDS.minLongitude
-      && asset.longitude <= DEMO_REGION_BOUNDS.maxLongitude,
-  )
-
-  const showDemoRegionalMap = useDemoData && demoRegionalMapAssets.length > 0
-  const demoRegionMapModel = showDemoRegionalMap
-    ? buildDemoRegionMapModel(demoRegionalMapAssets)
-    : null
-  const demoRegionMarkerPositions = new Map(
-    (demoRegionMapModel?.markerPositions ?? []).map((marker) => [marker.id, marker]),
-  )
-  const visibleMapAssets = showDemoRegionalMap ? demoRegionalMapAssets : selectedMapAssets
+  const visibleMapAssets = selectedMapAssets
 
   const selectedAssetsWithoutLocation = [
     ...selectedSatelliteAssets
-      .filter((asset) => !getAssetCoordinates(asset))
+      .filter((asset) => !getSatelliteTrackCoordinates(asset.name))
       .map((asset) => ({
         id: `selected-satellite-${asset.name}`,
         name: asset.name,
         type: 'Satellite',
+        locationMessage: schedulerLaunched
+          ? 'No propagated position is available at the selected time.'
+          : 'Satellite position becomes available after propagation.',
       })),
   ]
   const activeMapAsset =
@@ -1800,6 +1802,209 @@ export default function App() {
     ? Math.round(timelineModel.widthPx * timelineZoomMultiplier)
     : 0
   const visibleTimelineTracks = timelineModel?.tracks.filter((track) => timelineLayers[track.id]) ?? []
+  const timelineBaseTimestamp = timelineModel?.baseDate.getTime() ?? null
+  const timelineDurationMs = timelineModel ? timelineModel.totalMinutes * 60000 : 0
+
+  const getTimelineScrollLeftForTimestamp = (timestamp) => {
+    if (timelineBaseTimestamp === null || timelineDurationMs <= 0 || timelineWidthPx <= 0) {
+      return 0
+    }
+
+    const ratio = Math.max(
+      0,
+      Math.min(1, (timestamp - timelineBaseTimestamp) / timelineDurationMs),
+    )
+    return ratio * timelineWidthPx
+  }
+
+  const scrollTimelineToTimestamp = (timestamp, behavior = 'auto') => {
+    timelineProgrammaticScrollRef.current = true
+    timelineScrollRef.current?.scrollTo({
+      left: getTimelineScrollLeftForTimestamp(timestamp),
+      behavior,
+    })
+    window.requestAnimationFrame(() => {
+      timelineProgrammaticScrollRef.current = false
+    })
+  }
+
+  const handleTimelineScroll = () => {
+    if (timelineProgrammaticScrollRef.current) {
+      return
+    }
+
+    if (timelineScrollRafRef.current !== null) {
+      window.cancelAnimationFrame(timelineScrollRafRef.current)
+    }
+
+    timelineScrollRafRef.current = window.requestAnimationFrame(() => {
+      timelineScrollRafRef.current = null
+      const scrollContainer = timelineScrollRef.current
+      if (
+        !scrollContainer
+        || timelineBaseTimestamp === null
+        || timelineDurationMs <= 0
+        || timelineWidthPx <= 0
+      ) {
+        return
+      }
+
+      const ratio = Math.max(0, Math.min(1, scrollContainer.scrollLeft / timelineWidthPx))
+      setTimelinePlayheadTime(timelineBaseTimestamp + (ratio * timelineDurationMs))
+    })
+  }
+
+  const pauseTimelineLiveMode = (event) => {
+    if (!event?.target?.closest?.('button')) {
+      setTimelineLive(false)
+    }
+  }
+
+  const handleTimelineBackgroundClick = (event) => {
+    if (event.target.closest('button')) {
+      return
+    }
+
+    const scrollContainer = timelineScrollRef.current
+    if (!scrollContainer) {
+      return
+    }
+
+    const rect = scrollContainer.getBoundingClientRect()
+    if (event.clientY >= rect.bottom - 18) {
+      return
+    }
+
+    setTimelineLive(false)
+    scrollContainer.scrollTo({
+      left: scrollContainer.scrollLeft + event.clientX - rect.left - (rect.width / 2),
+      behavior: 'smooth',
+    })
+  }
+
+  const handleTimelineKeyDown = (event) => {
+    if (
+      event.target.closest('button')
+      || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
+    ) {
+      return
+    }
+
+    event.preventDefault()
+    const direction = event.key === 'ArrowLeft' ? -1 : 1
+    const stepMilliseconds = event.shiftKey ? 60000 : 10000
+    const nextTimestamp = clampToPlanningWindow(
+      timelinePlayheadTimestamp + (direction * stepMilliseconds),
+    )
+    setTimelineLive(false)
+    setTimelinePlayheadTime(nextTimestamp)
+    scrollTimelineToTimestamp(nextTimestamp)
+  }
+
+  const handleTimelineNow = () => {
+    setTimelinePlayheadTime(clampToPlanningWindow(timelineNow))
+    setTimelineLive(true)
+    scrollTimelineToTimestamp(clampToPlanningWindow(timelineNow), 'smooth')
+  }
+
+  const isTimelineItemAtPlayhead = (item) => {
+    const startTimestamp = toTimestamp(item.startTime)
+    const endTimestamp = toTimestamp(item.endTime)
+    return (
+      startTimestamp !== null
+      && endTimestamp !== null
+      && timelinePlayheadTimestamp >= startTimestamp
+      && timelinePlayheadTimestamp <= endTimestamp
+    )
+  }
+
+  useEffect(() => {
+    if (
+      !timelineLive
+      || !expandedSections.timeline
+      || timelineBaseTimestamp === null
+      || timelineDurationMs <= 0
+      || visibleTimelineTracks.length === 0
+    ) {
+      return undefined
+    }
+
+    const animationFrameId = window.requestAnimationFrame(() => {
+      const scrollContainer = timelineScrollRef.current
+      if (!scrollContainer || timelineWidthPx <= 0) {
+        return
+      }
+
+      const ratio = Math.max(
+        0,
+        Math.min(
+          1,
+          (timelinePlayheadTimestamp - timelineBaseTimestamp) / timelineDurationMs,
+        ),
+      )
+      scrollContainer.scrollTo({ left: ratio * timelineWidthPx, behavior: 'auto' })
+    })
+
+    return () => window.cancelAnimationFrame(animationFrameId)
+  }, [
+    expandedSections.timeline,
+    timelineBaseTimestamp,
+    timelineDurationMs,
+    timelineLive,
+    timelinePlayheadTimestamp,
+    timelineWidthPx,
+    visibleTimelineTracks.length,
+  ])
+
+  useEffect(() => {
+    const layoutKey = [
+      expandedSections.timeline,
+      timelineWidthPx,
+      visibleTimelineTracks.length,
+    ].join('|')
+
+    if (layoutKey === timelineLayoutKeyRef.current) {
+      return undefined
+    }
+    timelineLayoutKeyRef.current = layoutKey
+
+    if (
+      !expandedSections.timeline
+      || timelineBaseTimestamp === null
+      || timelineDurationMs <= 0
+      || visibleTimelineTracks.length === 0
+    ) {
+      return undefined
+    }
+
+    const animationFrameId = window.requestAnimationFrame(() => {
+      const ratio = Math.max(
+        0,
+        Math.min(
+          1,
+          (timelinePlayheadTimestamp - timelineBaseTimestamp) / timelineDurationMs,
+        ),
+      )
+      timelineProgrammaticScrollRef.current = true
+      timelineScrollRef.current?.scrollTo({
+        left: ratio * timelineWidthPx,
+        behavior: 'auto',
+      })
+      window.requestAnimationFrame(() => {
+        timelineProgrammaticScrollRef.current = false
+      })
+    })
+
+    return () => window.cancelAnimationFrame(animationFrameId)
+  }, [
+    expandedSections.timeline,
+    timelineBaseTimestamp,
+    timelineDurationMs,
+    timelinePlayheadTimestamp,
+    timelineWidthPx,
+    visibleTimelineTracks.length,
+  ])
+
   const activeTradeOffCard = tradeOffCards[activeTradeOffCardIndex] ?? null
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-label={message}>
@@ -2357,181 +2562,6 @@ export default function App() {
         </aside>
 
         <main className="workspace-main">
-          <section className="panel panel--fullwidth map-panel">
-            <div className="panel-heading panel-heading--map">
-              <div className="panel-heading-title">
-                <h2>Map View</h2>
-                {useDemoData && renderDemoBadge()}
-              </div>
-              <div className="map-panel-controls">
-                <button
-                  type="button"
-                  className="map-panel-toggle"
-                  onClick={() => toggleSection('mapView')}
-                  aria-expanded={expandedSections.mapView}
-                  aria-controls="map-panel-content"
-                  aria-label={expandedSections.mapView ? 'Collapse map view' : 'Expand map view'}
-                >
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.mapView)}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {expandedSections.mapView && (
-              <div id="map-panel-content" className="map-layout">
-                <div className="map-canvas-shell">
-                  <div
-                    className={`map-canvas ${showDemoRegionalMap ? 'map-canvas--regional' : ''}`}
-                    aria-label="Selected asset map view"
-                    style={
-                      showDemoRegionalMap && demoRegionMapModel
-                        ? {
-                            height: '520px',
-                          }
-                        : undefined
-                    }
-                  >
-                    {showDemoRegionalMap && demoRegionMapModel && (
-                      <div
-                        className="map-region-art map-region-art--cropped"
-                        style={{ '--map-region-aspect-ratio': demoRegionMapModel.aspectRatio }}
-                        aria-hidden="true"
-                      >
-                        {demoRegionMapModel.tiles.map((tile) => (
-                          <img
-                            key={tile.key}
-                            className="map-region-tile"
-                            src={tile.url}
-                            alt=""
-                            loading="lazy"
-                            referrerPolicy="no-referrer"
-                            style={{
-                              left: `${tile.left}%`,
-                              top: `${tile.top}%`,
-                              width: `${tile.width}%`,
-                              height: `${tile.height}%`,
-                            }}
-                          />
-                        ))}
-                        {visibleMapAssets.map((asset) => {
-                          const markerPosition = demoRegionMarkerPositions.get(asset.id)
-
-                          return (
-                            <button
-                              key={asset.id}
-                              type="button"
-                              className={`map-marker map-marker--${asset.markerType} ${
-                                activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
-                              }`}
-                              style={{
-                                left: `${markerPosition.left}%`,
-                                top: `${markerPosition.top}%`,
-                              }}
-                              onClick={() => setActiveMapAssetId(asset.id)}
-                              aria-label={`${asset.name} on map`}
-                            >
-                              <span className="map-marker-label">{asset.name}</span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                    )}
-                    {visibleMapAssets.length === 0 && (
-                      <div className="map-empty-state">
-                        {showDemoRegionalMap
-                          ? 'Select one of the demo ground stations to place it on the regional map.'
-                          : 'Select a ground station to place it on the map.'}
-                      </div>
-                    )}
-
-                    {!showDemoRegionalMap && visibleMapAssets.map((asset) => {
-                      const markerPosition = projectToMap(asset.latitude, asset.longitude)
-
-                      return (
-                        <button
-                          key={asset.id}
-                          type="button"
-                          className={`map-marker map-marker--${asset.markerType} ${
-                            activeMapAsset?.id === asset.id ? 'map-marker--active' : ''
-                          }`}
-                          style={{
-                            left: `${markerPosition.left}%`,
-                            top: `${markerPosition.top}%`,
-                          }}
-                          onClick={() => setActiveMapAssetId(asset.id)}
-                          aria-label={`${asset.name} on map`}
-                        >
-                          <span className="map-marker-label">{asset.name}</span>
-                        </button>
-                      )
-                    })}
-                    {showDemoRegionalMap && (
-                      <div className="map-attribution">
-                        Map data © OpenStreetMap contributors
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <aside className="map-sidebar">
-                  <div className="map-sidebar-section">
-                    <h3>Visible Assets</h3>
-                    {visibleMapAssets.length > 0 ? (
-                      <div className="map-asset-card-list">
-                        {visibleMapAssets.map((asset) => (
-                          <button
-                            key={asset.id}
-                            type="button"
-                            className={`map-asset-card ${
-                              activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
-                            }`}
-                            onClick={() => setActiveMapAssetId(asset.id)}
-                          >
-                            <div className="map-asset-card-header">
-                              <span className={`map-asset-dot map-asset-dot--${asset.markerType}`}></span>
-                              <span className="map-asset-card-name">{asset.name.toUpperCase()}</span>
-                            </div>
-                            <div className="map-asset-card-type">{asset.type}</div>
-                            <dl className="map-asset-card-grid">
-                              <dt>Latitude</dt>
-                              <dd>{formatCoordinate(asset.latitude, 'N', 'S')}</dd>
-                              <dt>Longitude</dt>
-                              <dd>{formatCoordinate(asset.longitude, 'E', 'W')}</dd>
-                            </dl>
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <p>No selected assets with usable map coordinates yet.</p>
-                    )}
-                  </div>
-
-                  {selectedAssetsWithoutLocation.length > 0 && (
-                    <div className="map-sidebar-section">
-                      <h3>Selected Without Location</h3>
-                      <div className="map-missing-location-list">
-                        {selectedAssetsWithoutLocation.map((asset) => (
-                          <div key={asset.id} className="map-missing-location-card">
-                            <span className="map-missing-location-name">{asset.name.toUpperCase()}</span>
-                            <span className="map-missing-location-type">{asset.type}</span>
-                            <span className="map-missing-location-copy">Location data not available.</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </aside>
-              </div>
-            )}
-            {expandedSections.mapView && showDemoRegionalMap && (
-              <p className="map-panel-note">
-                Static demo map. Ground-station markers use real coordinates within this regional excerpt.
-              </p>
-            )}
-          </section>
-
           <div
             ref={splitPanelsRef}
             className="workspace-panels-split"
@@ -2883,7 +2913,122 @@ export default function App() {
           </section>
           </div>
 
-          <section className={`panel panel--fullwidth timeline-panel ${expandedSections.timeline ? '' : 'panel--collapsed'}`}>
+          <div className="planning-views-row">
+          <section className="panel map-panel">
+            <div className="panel-heading panel-heading--map">
+              <div className="panel-heading-title">
+                <h2>Map View</h2>
+                {useDemoData && renderDemoBadge()}
+              </div>
+              <div className="map-panel-controls">
+                <button
+                  type="button"
+                  className="map-panel-toggle"
+                  onClick={() => toggleSection('mapView')}
+                  aria-expanded={expandedSections.mapView}
+                  aria-controls="map-panel-content"
+                  aria-label={expandedSections.mapView ? 'Collapse map view' : 'Expand map view'}
+                >
+                  <span className="section-toggle-icon" aria-hidden="true">
+                    {renderSectionChevron(expandedSections.mapView)}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {expandedSections.mapView && (
+              <div id="map-panel-content" className="map-layout">
+                <div className="map-canvas-shell">
+                  <MapErrorBoundary>
+                    <Suspense
+                      fallback={(
+                        <div className="mission-map-shell">
+                          <div className="mission-map-state" role="status">Loading map...</div>
+                        </div>
+                      )}
+                    >
+                      <MissionMap
+                        assets={visibleMapAssets}
+                        satelliteTracks={satelliteTracks}
+                        activeAssetId={activeMapAsset?.id ?? null}
+                        onSelectAsset={setActiveMapAssetId}
+                        timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
+                      />
+                    </Suspense>
+                  </MapErrorBoundary>
+                </div>
+
+                <aside className="map-sidebar">
+                  <div className="map-sidebar-section">
+                    <h3>Visible Assets</h3>
+                    {visibleMapAssets.length > 0 ? (
+                      <div className="map-asset-card-list">
+                        {visibleMapAssets.map((asset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            className={`map-asset-card ${
+                              activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
+                            }`}
+                            onClick={() => setActiveMapAssetId(asset.id)}
+                          >
+                            <div className="map-asset-card-header">
+                              <span className={`map-asset-dot map-asset-dot--${asset.markerType}`}></span>
+                              <span className="map-asset-card-name">{asset.name.toUpperCase()}</span>
+                            </div>
+                            <div className="map-asset-card-type">{asset.type}</div>
+                            <dl className="map-asset-card-grid">
+                              <dt>Latitude</dt>
+                              <dd>{formatCoordinate(asset.latitude, 'N', 'S')}</dd>
+                              <dt>Longitude</dt>
+                              <dd>{formatCoordinate(asset.longitude, 'E', 'W')}</dd>
+                              {asset.markerType === 'ground-station' && (
+                                <>
+                                  <dt>Min. Elevation</dt>
+                                  <dd>
+                                    {Number.isFinite(asset.minLinkElevation)
+                                      ? `${asset.minLinkElevation.toFixed(1)}°`
+                                      : '—'}
+                                  </dd>
+                                </>
+                              )}
+                              {asset.markerType === 'satellite' && (
+                                <>
+                                  <dt>Altitude</dt>
+                                  <dd>{formatAltitude(asset.altitude)}</dd>
+                                  <dt>Track Time</dt>
+                                  <dd>{formatTimelinePlayheadDateTime(asset.timestamp)}</dd>
+                                </>
+                              )}
+                            </dl>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p>No selected assets with usable map coordinates yet.</p>
+                    )}
+                  </div>
+
+                  {selectedAssetsWithoutLocation.length > 0 && (
+                    <div className="map-sidebar-section">
+                      <h3>Selected Without Location</h3>
+                      <div className="map-missing-location-list">
+                        {selectedAssetsWithoutLocation.map((asset) => (
+                          <div key={asset.id} className="map-missing-location-card">
+                            <span className="map-missing-location-name">{asset.name.toUpperCase()}</span>
+                            <span className="map-missing-location-type">{asset.type}</span>
+                            <span className="map-missing-location-copy">{asset.locationMessage}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </aside>
+              </div>
+            )}
+          </section>
+
+          <section className={`panel timeline-panel ${expandedSections.timeline ? '' : 'panel--collapsed'}`}>
             <div className={`panel-heading panel-heading--timeline ${expandedSections.timeline ? '' : 'panel-heading--collapsed'}`}>
               <div className="panel-heading-title">
                 <h2>Timeline</h2>
@@ -2961,6 +3106,14 @@ export default function App() {
                           {level.label}
                         </button>
                       ))}
+                      <button
+                        type="button"
+                        className={`timeline-toggle ${timelineLive ? 'timeline-toggle--active' : ''}`}
+                        onClick={handleTimelineNow}
+                        aria-pressed={timelineLive}
+                      >
+                        Now
+                      </button>
                     </div>
                   </div>
                   {!useDemoData && (
@@ -2973,12 +3126,51 @@ export default function App() {
                 {visibleTimelineTracks.length === 0 ? (
                   <p className="timeline-empty-copy">Enable at least one timeline layer to display the schedule view.</p>
                 ) : (
-                  <div className="timeline-scroll">
-                    <div
-                      className="timeline-grid"
-                      style={{ gridTemplateColumns: `11rem ${timelineWidthPx}px` }}
-                    >
-                      <div className="timeline-label-cell timeline-label-cell--blank"></div>
+                  <div className="timeline-layout">
+                    <div className="timeline-label-column">
+                      <div className="timeline-label-cell timeline-label-cell--day"></div>
+                      <div className="timeline-label-cell timeline-label-cell--axis"></div>
+                      {visibleTimelineTracks.map((track) => (
+                        <div
+                          key={`${track.id}-label`}
+                          className="timeline-label-cell"
+                          style={{
+                            '--timeline-row-height': `${Math.max(3.2, (track.laneCount ?? 1) * 2.68 + 0.44)}rem`,
+                          }}
+                        >
+                          <span className="timeline-track-name">
+                            {track.label}
+                            {track.demoLabel && <span className="timeline-track-demo">{track.demoLabel}</span>}
+                          </span>
+                          <span className="timeline-track-copy">{track.copy}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div ref={timelineScrollFrameRef} className="timeline-scroll-frame">
+                      <div className="timeline-playhead" aria-hidden="true">
+                        <span className="timeline-playhead-label">
+                          {timelineLive && <span className="timeline-playhead-live">Live</span>}
+                          {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
+                        </span>
+                      </div>
+                      <div
+                        ref={timelineScrollRef}
+                        className="timeline-scroll"
+                        tabIndex="0"
+                        role="region"
+                        aria-label="Interactive planning timeline"
+                        onScroll={handleTimelineScroll}
+                        onWheel={pauseTimelineLiveMode}
+                        onPointerDown={pauseTimelineLiveMode}
+                        onTouchStart={pauseTimelineLiveMode}
+                        onKeyDown={handleTimelineKeyDown}
+                        onClick={handleTimelineBackgroundClick}
+                      >
+                        <div
+                          className="timeline-time-canvas"
+                          style={{ width: `${timelineWidthPx}px` }}
+                        >
                       <div className="timeline-day-row">
                         {timelineModel.dayBands.map((band, index) => (
                           <div
@@ -2994,7 +3186,6 @@ export default function App() {
                         ))}
                       </div>
 
-                      <div className="timeline-label-cell timeline-label-cell--blank"></div>
                       <div className="timeline-axis-row">
                         {timelineModel.ticks.map((tick) => (
                           <div
@@ -3007,20 +3198,12 @@ export default function App() {
                         ))}
                       </div>
 
-                      {visibleTimelineTracks.map((track) => (
-                        <Fragment key={track.id}>
-                          <div key={`${track.id}-label`} className="timeline-label-cell">
-                            <span className="timeline-track-name">
-                              {track.label}
-                              {track.demoLabel && <span className="timeline-track-demo">{track.demoLabel}</span>}
-                            </span>
-                            <span className="timeline-track-copy">{track.copy}</span>
-                          </div>
+                      {visibleTimelineTracks.map((track, trackIndex) => (
                           <div
                             key={`${track.id}-row`}
                             className="timeline-track-row"
                             style={{
-                              '--timeline-row-height': `${Math.max(4, (track.laneCount ?? 1) * 3.35 + 0.55)}rem`,
+                              '--timeline-row-height': `${Math.max(3.2, (track.laneCount ?? 1) * 2.68 + 0.44)}rem`,
                             }}
                           >
                             {timelineModel.ticks.map((tick) => (
@@ -3036,7 +3219,7 @@ export default function App() {
                                 className="timeline-now-line"
                                 style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
                               >
-                                <span className="timeline-now-badge">Now</span>
+                                {trackIndex === 0 && <span className="timeline-now-badge">Now</span>}
                               </div>
                             )}
 
@@ -3050,11 +3233,11 @@ export default function App() {
                                   <button
                                     key={item.id}
                                     type="button"
-                                    className={`timeline-bar timeline-bar--${item.variant} ${item.tradeOffColorIndex !== null ? 'timeline-bar--tradeoff' : ''} ${compactBar ? 'timeline-bar--compact' : ''} ${tinyBar ? 'timeline-bar--tiny' : ''}`}
+                                    className={`timeline-bar timeline-bar--${item.variant} ${item.tradeOffColorIndex !== null ? 'timeline-bar--tradeoff' : ''} ${compactBar ? 'timeline-bar--compact' : ''} ${tinyBar ? 'timeline-bar--tiny' : ''} ${isTimelineItemAtPlayhead(item) ? 'timeline-bar--playhead-active' : ''}`}
                                     style={{
                                       left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
                                       width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
-                                      top: `calc(0.7rem + ${(item.laneIndex ?? 0) * 3.35}rem)`,
+                                      top: `calc(0.56rem + ${(item.laneIndex ?? 0) * 2.68}rem)`,
                                       '--tradeoff-accent': item.tradeOffColorIndex !== null
                                         ? getTradeOffAccentColor(item.tradeOffColorIndex)
                                         : 'transparent',
@@ -3093,8 +3276,9 @@ export default function App() {
                               })()
                             ))}
                           </div>
-                        </Fragment>
                       ))}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -3152,6 +3336,7 @@ export default function App() {
               </div>
             )}
           </section>
+          </div>
         </main>
       </div>
   )
