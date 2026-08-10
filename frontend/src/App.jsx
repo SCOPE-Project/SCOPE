@@ -14,6 +14,50 @@ const DEMO_REGION_BOUNDS = {
 }
 const MAP_TILE_SIZE = 256
 const DEMO_REGION_MAP_ZOOM = 6
+const DEFAULT_PLANNING_TIME_MODE = 'utc'
+
+const padDateTimePart = (value) => String(value).padStart(2, '0')
+
+const formatPlanningDateFields = (date, timeMode) => {
+  const useUtc = timeMode === 'utc'
+  const year = useUtc ? date.getUTCFullYear() : date.getFullYear()
+  const month = (useUtc ? date.getUTCMonth() : date.getMonth()) + 1
+  const day = useUtc ? date.getUTCDate() : date.getDate()
+  const hours = useUtc ? date.getUTCHours() : date.getHours()
+  const minutes = useUtc ? date.getUTCMinutes() : date.getMinutes()
+
+  return {
+    date: `${year}-${padDateTimePart(month)}-${padDateTimePart(day)}`,
+    time: `${padDateTimePart(hours)}:${padDateTimePart(minutes)}`,
+  }
+}
+
+const parsePlanningDateFields = (dateValue, timeValue, timeMode) => {
+  if (!dateValue || !/^\d{2}:\d{2}$/.test(timeValue)) {
+    return null
+  }
+
+  const suffix = timeMode === 'utc' ? 'Z' : ''
+  const parsed = new Date(`${dateValue}T${timeValue}:00${suffix}`)
+  return Number.isFinite(parsed.getTime()) ? parsed : null
+}
+
+const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start = new Date()) => {
+  const end = new Date(start.getTime() + 60 * 60000)
+  const startFields = formatPlanningDateFields(start, timeMode)
+  const endFields = formatPlanningDateFields(end, timeMode)
+
+  return {
+    startDate: startFields.date,
+    startTime: startFields.time,
+    endDate: endFields.date,
+    endTime: endFields.time,
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+  }
+}
+
+const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
 
 export default function App() {
   const splitPanelsRef = useRef(null)
@@ -27,10 +71,15 @@ export default function App() {
   const [view, setView] = useState('landing')
   const [selectedSatellites, setSelectedSatellites] = useState([])
   const [selectedGroundStations, setSelectedGroundStations] = useState([])
-  const [planningWindowStartDate, setPlanningWindowStartDate] = useState('')
-  const [planningWindowStartTime, setPlanningWindowStartTime] = useState('00:00')
-  const [planningWindowEndDate, setPlanningWindowEndDate] = useState('')
-  const [planningWindowEndTime, setPlanningWindowEndTime] = useState('23:59')
+  const [planningTimeMode, setPlanningTimeMode] = useState(DEFAULT_PLANNING_TIME_MODE)
+  const [planningWindowStartDate, setPlanningWindowStartDate] = useState(DEFAULT_PLANNING_WINDOW_PRESET.startDate)
+  const [planningWindowStartTime, setPlanningWindowStartTime] = useState(DEFAULT_PLANNING_WINDOW_PRESET.startTime)
+  const [planningWindowEndDate, setPlanningWindowEndDate] = useState(DEFAULT_PLANNING_WINDOW_PRESET.endDate)
+  const [planningWindowEndTime, setPlanningWindowEndTime] = useState(DEFAULT_PLANNING_WINDOW_PRESET.endTime)
+  const [planningWindowResetPreset, setPlanningWindowResetPreset] = useState({
+    startIso: DEFAULT_PLANNING_WINDOW_PRESET.startIso,
+    endIso: DEFAULT_PLANNING_WINDOW_PRESET.endIso,
+  })
   const [activeTimeMenu, setActiveTimeMenu] = useState(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [launchingScheduler, setLaunchingScheduler] = useState(false)
@@ -66,6 +115,9 @@ export default function App() {
     groundStations: true,
     unavailableAssets: false,
     mapView: false,
+    overview: true,
+    tradeOff: true,
+    timeline: true,
   })
 
   useEffect(() => {
@@ -520,7 +572,13 @@ export default function App() {
     return `${Math.round(seconds / 60)} min`
   }
 
-  const formatDateTimeCompact = (value) => {
+  const getTimeZoneFormatOptions = (timeMode) =>
+    timeMode === 'utc' ? { timeZone: 'UTC' } : {}
+
+  const formatDateTimeCompact = (
+    value,
+    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
+  ) => {
     if (!value) {
       return '—'
     }
@@ -535,6 +593,7 @@ export default function App() {
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
+      ...getTimeZoneFormatOptions(timeMode),
     })
   }
 
@@ -649,10 +708,14 @@ export default function App() {
       }
     })
 
-  const getDayOfYear = (date) => {
-    const start = new Date(date.getFullYear(), 0, 0)
-    const diff = date - start
-    return Math.floor(diff / 86400000)
+  const getDayOfYear = (date, timeMode = DEFAULT_PLANNING_TIME_MODE) => {
+    const useUtc = timeMode === 'utc'
+    const year = useUtc ? date.getUTCFullYear() : date.getFullYear()
+    const month = useUtc ? date.getUTCMonth() : date.getMonth()
+    const day = useUtc ? date.getUTCDate() : date.getDate()
+    const start = Date.UTC(year, 0, 0)
+    const current = Date.UTC(year, month, day)
+    return Math.floor((current - start) / 86400000)
   }
 
   const parseDurationMinutes = (value) => {
@@ -660,10 +723,17 @@ export default function App() {
     return Number.isFinite(parsed) ? parsed : 30
   }
 
-  const formatTimelineHour = (date) =>
-    date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const formatTimelineHour = (date, timeMode) =>
+    date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      ...getTimeZoneFormatOptions(timeMode),
+    })
 
-  const formatTimelineDateTime = (value) => {
+  const formatTimelineDateTime = (
+    value,
+    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
+  ) => {
     if (!value) {
       return '—'
     }
@@ -679,6 +749,7 @@ export default function App() {
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
+      ...getTimeZoneFormatOptions(timeMode),
     })
   }
 
@@ -704,14 +775,15 @@ export default function App() {
     return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`
   }
 
-  const formatTimelineDay = (date) =>
+  const formatTimelineDay = (date, timeMode) =>
     `${date.toLocaleDateString([], {
       year: 'numeric',
       month: 'long',
       day: '2-digit',
-    })} (DOY ${getDayOfYear(date)})`
+      ...getTimeZoneFormatOptions(timeMode),
+    })} (DOY ${getDayOfYear(date, timeMode)})`
 
-  const formatPlanningWindow = (startValue, endValue) => {
+  const formatPlanningWindow = (startValue, endValue, timeMode = DEFAULT_PLANNING_TIME_MODE) => {
     const start = startValue ? new Date(startValue) : null
     const end = endValue ? new Date(endValue) : null
 
@@ -724,23 +796,27 @@ export default function App() {
       return '—'
     }
 
-    const sameDay = start.toDateString() === end.toDateString()
+    const sameDay = formatPlanningDateFields(start, timeMode).date
+      === formatPlanningDateFields(end, timeMode).date
 
     if (sameDay) {
       return `${start.toLocaleDateString([], {
         year: 'numeric',
         month: 'short',
         day: '2-digit',
+        ...getTimeZoneFormatOptions(timeMode),
       })}, ${start.toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',
+        ...getTimeZoneFormatOptions(timeMode),
       })} - ${end.toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',
+        ...getTimeZoneFormatOptions(timeMode),
       })}`
     }
 
-    return `${formatTimelineDateTime(startValue)} - ${formatTimelineDateTime(endValue)}`
+    return `${formatTimelineDateTime(startValue, timeMode)} - ${formatTimelineDateTime(endValue, timeMode)}`
   }
 
   const getSelectedTradeOffForGroup = (group) =>
@@ -792,14 +868,22 @@ export default function App() {
     }
   }
 
-  const buildDayBands = (baseDate, totalMinutes) => {
+  const buildDayBands = (baseDate, totalMinutes, timeMode) => {
     const bands = []
     let cursor = new Date(baseDate)
-    cursor.setHours(0, 0, 0, 0)
+    if (timeMode === 'utc') {
+      cursor.setUTCHours(0, 0, 0, 0)
+    } else {
+      cursor.setHours(0, 0, 0, 0)
+    }
 
     while (bands.length === 0 || cursor < new Date(baseDate.getTime() + totalMinutes * 60000)) {
       const nextDay = new Date(cursor)
-      nextDay.setDate(cursor.getDate() + 1)
+      if (timeMode === 'utc') {
+        nextDay.setUTCDate(cursor.getUTCDate() + 1)
+      } else {
+        nextDay.setDate(cursor.getDate() + 1)
+      }
 
       const startMinutes = Math.max(0, (cursor.getTime() - baseDate.getTime()) / 60000)
       const endMinutes = Math.min(totalMinutes, (nextDay.getTime() - baseDate.getTime()) / 60000)
@@ -808,7 +892,7 @@ export default function App() {
         bands.push({
           startMinutes,
           widthMinutes: endMinutes - startMinutes,
-          label: formatTimelineDay(cursor),
+          label: formatTimelineDay(cursor, timeMode),
           alt: bands.length % 2 === 1,
         })
       }
@@ -824,6 +908,7 @@ export default function App() {
   }
 
   const buildTimelineModel = (rows, groups, currentTimestamp, currentScheduleItems, planningWindow) => {
+    const timeMode = planningWindow?.timeMode ?? DEFAULT_PLANNING_TIME_MODE
     const selectedOptions = groups.map((group) => getSelectedTradeOffForGroup(group))
     const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
     const optionByOverpassId = new Map(
@@ -975,7 +1060,7 @@ export default function App() {
       return {
         offsetMinutes,
         date: tickDate,
-        label: formatTimelineHour(tickDate),
+        label: formatTimelineHour(tickDate, timeMode),
       }
     }).filter((tick) => tick.offsetMinutes <= totalMinutes)
 
@@ -985,7 +1070,7 @@ export default function App() {
       totalMinutes,
       widthPx: Math.max(980, totalMinutes * 2.2),
       ticks,
-      dayBands: buildDayBands(baseDate, totalMinutes),
+      dayBands: buildDayBands(baseDate, totalMinutes, timeMode),
       nowOffsetMinutes: (currentTimestamp - baseDate.getTime()) / 60000,
       tracks: [
         {
@@ -1036,12 +1121,19 @@ export default function App() {
   }
 
   const resetWorkspaceState = () => {
+    const planningWindowPreset = buildPlanningWindowPreset()
+
     setSelectedSatellites([])
     setSelectedGroundStations([])
-    setPlanningWindowStartDate('')
-    setPlanningWindowStartTime('00:00')
-    setPlanningWindowEndDate('')
-    setPlanningWindowEndTime('23:59')
+    setPlanningTimeMode(DEFAULT_PLANNING_TIME_MODE)
+    setPlanningWindowStartDate(planningWindowPreset.startDate)
+    setPlanningWindowStartTime(planningWindowPreset.startTime)
+    setPlanningWindowEndDate(planningWindowPreset.endDate)
+    setPlanningWindowEndTime(planningWindowPreset.endTime)
+    setPlanningWindowResetPreset({
+      startIso: planningWindowPreset.startIso,
+      endIso: planningWindowPreset.endIso,
+    })
     setActiveTimeMenu(null)
     setSidebarCollapsed(false)
     setLaunchingScheduler(false)
@@ -1070,6 +1162,9 @@ export default function App() {
       groundStations: true,
       unavailableAssets: false,
       mapView: false,
+      overview: true,
+      tradeOff: true,
+      timeline: true,
     })
     setConfirmingSchedule(false)
     setConfirmationProgress(0)
@@ -1078,17 +1173,100 @@ export default function App() {
     setConfirmedScheduleCount(0)
   }
 
-  const localDateAndTimeToIso = (dateValue, timeValue) => {
-    if (!dateValue || !timeValue) {
-      return null
+  const planningDateAndTimeToIso = (dateValue, timeValue, timeMode = planningTimeMode) =>
+    parsePlanningDateFields(dateValue, timeValue, timeMode)?.toISOString() ?? null
+
+  const setPlanningStartFromDate = (date) => {
+    const fields = formatPlanningDateFields(date, planningTimeMode)
+    setPlanningWindowStartDate(fields.date)
+    setPlanningWindowStartTime(fields.time)
+  }
+
+  const setPlanningEndFromDate = (date) => {
+    const fields = formatPlanningDateFields(date, planningTimeMode)
+    setPlanningWindowEndDate(fields.date)
+    setPlanningWindowEndTime(fields.time)
+  }
+
+  const handlePlanningTimeModeChange = (nextMode) => {
+    if (nextMode === planningTimeMode) {
+      return
     }
 
-    const combined = new Date(`${dateValue}T${timeValue}`)
-    if (!Number.isFinite(combined.getTime())) {
-      return null
+    const start = parsePlanningDateFields(
+      planningWindowStartDate,
+      planningWindowStartTime,
+      planningTimeMode,
+    )
+    const end = parsePlanningDateFields(
+      planningWindowEndDate,
+      planningWindowEndTime,
+      planningTimeMode,
+    )
+
+    setPlanningTimeMode(nextMode)
+
+    if (start) {
+      const startFields = formatPlanningDateFields(start, nextMode)
+      setPlanningWindowStartDate(startFields.date)
+      setPlanningWindowStartTime(startFields.time)
     }
 
-    return combined.toISOString()
+    if (end) {
+      const endFields = formatPlanningDateFields(end, nextMode)
+      setPlanningWindowEndDate(endFields.date)
+      setPlanningWindowEndTime(endFields.time)
+    }
+  }
+
+  const handleSetCurrentPlanningTime = (target) => {
+    const now = new Date()
+
+    if (target === 'end') {
+      setPlanningEndFromDate(now)
+      return
+    }
+
+    const currentEnd = parsePlanningDateFields(
+      planningWindowEndDate,
+      planningWindowEndTime,
+      planningTimeMode,
+    )
+
+    setPlanningStartFromDate(now)
+
+    if (!currentEnd || currentEnd <= now) {
+      setPlanningEndFromDate(new Date(now.getTime() + 60 * 60000))
+    }
+  }
+
+  const handleShiftPlanningTime = (target, offsetMinutes) => {
+    const isStart = target === 'start'
+    const current = parsePlanningDateFields(
+      isStart ? planningWindowStartDate : planningWindowEndDate,
+      isStart ? planningWindowStartTime : planningWindowEndTime,
+      planningTimeMode,
+    ) ?? new Date()
+    const shifted = new Date(current.getTime() + offsetMinutes * 60000)
+
+    if (isStart) {
+      setPlanningStartFromDate(shifted)
+    } else {
+      setPlanningEndFromDate(shifted)
+    }
+  }
+
+  const handleResetPlanningTime = (target) => {
+    const presetValue = target === 'start'
+      ? planningWindowResetPreset.startIso
+      : planningWindowResetPreset.endIso
+    const presetDate = new Date(presetValue)
+
+    if (target === 'start') {
+      setPlanningStartFromDate(presetDate)
+    } else {
+      setPlanningEndFromDate(presetDate)
+    }
   }
 
   const wait = (durationMs) =>
@@ -1171,8 +1349,9 @@ export default function App() {
     if (!launchRequirementsMet) return
 
     const planningWindow = {
-      startTime: localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime),
-      endTime: localDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime),
+      startTime: planningDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime),
+      endTime: planningDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime),
+      timeMode: planningTimeMode,
     }
 
     if (!planningWindow.startTime || !planningWindow.endTime) {
@@ -1409,9 +1588,9 @@ export default function App() {
     && planningWindowEndTime !== ''
   const planningWindowValid =
     planningWindowComplete
-    && localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime)
-    && localDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)
-    && new Date(localDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)) > new Date(localDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime))
+    && planningDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime)
+    && planningDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)
+    && new Date(planningDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)) > new Date(planningDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime))
   const launchRequirementsMet =
     planningWindowValid
     && selectedSatellites.length >= 1
@@ -1830,6 +2009,69 @@ export default function App() {
     </div>
   )
 
+  const renderPlanningTimeActions = (target) => {
+    const targetLabel = target === 'start' ? 'Start' : 'End'
+
+    return (
+      <div className="time-window-quick-actions" role="group" aria-label={`${targetLabel} time presets`}>
+        <div className="time-window-quick-primary">
+          <button
+            type="button"
+            className="time-window-quick-button time-window-quick-button--current"
+            onClick={() => handleSetCurrentPlanningTime(target)}
+          >
+            Set current time
+          </button>
+          <button
+            type="button"
+            className="time-window-quick-button time-window-quick-button--reset"
+            onClick={() => handleResetPlanningTime(target)}
+          >
+            Reset
+          </button>
+        </div>
+        <div className="time-window-adjustment-row">
+          <span className="time-window-adjustment-label">Hours</span>
+          <div className="time-window-stepper" role="group" aria-label={`${targetLabel} hour adjustments`}>
+            <button
+              type="button"
+              className="time-window-quick-button"
+              onClick={() => handleShiftPlanningTime(target, -60)}
+            >
+              -1h
+            </button>
+            <button
+              type="button"
+              className="time-window-quick-button"
+              onClick={() => handleShiftPlanningTime(target, 60)}
+            >
+              +1h
+            </button>
+          </div>
+        </div>
+        <div className="time-window-adjustment-row">
+          <span className="time-window-adjustment-label">Days</span>
+          <div className="time-window-stepper" role="group" aria-label={`${targetLabel} day adjustments`}>
+            <button
+              type="button"
+              className="time-window-quick-button"
+              onClick={() => handleShiftPlanningTime(target, -24 * 60)}
+            >
+              -1 day
+            </button>
+            <button
+              type="button"
+              className="time-window-quick-button"
+              onClick={() => handleShiftPlanningTime(target, 24 * 60)}
+            >
+              +1 day
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (view === 'landing') {
     return (
       <div className="app-shell">
@@ -1931,7 +2173,24 @@ export default function App() {
                     <div className="time-window-panel">
                       <div className="time-window-header">
                         <span className="time-window-title">Planning Interval</span>
-                        <span className="time-window-meta">Local time</span>
+                        <div className="time-window-zone-toggle" role="group" aria-label="Planning interval time zone">
+                          <button
+                            type="button"
+                            className={`time-window-zone-button ${planningTimeMode === 'utc' ? 'time-window-zone-button--active' : ''}`}
+                            onClick={() => handlePlanningTimeModeChange('utc')}
+                            aria-pressed={planningTimeMode === 'utc'}
+                          >
+                            UTC
+                          </button>
+                          <button
+                            type="button"
+                            className={`time-window-zone-button ${planningTimeMode === 'local' ? 'time-window-zone-button--active' : ''}`}
+                            onClick={() => handlePlanningTimeModeChange('local')}
+                            aria-pressed={planningTimeMode === 'local'}
+                          >
+                            Local
+                          </button>
+                        </div>
                       </div>
                       <div className="time-window-row">
                         <label className="time-window-field">
@@ -1951,6 +2210,7 @@ export default function App() {
                           {renderTimeInput('start', planningWindowStartTime, setPlanningWindowStartTime)}
                         </label>
                       </div>
+                      {renderPlanningTimeActions('start')}
                       <div className="time-window-row">
                         <label className="time-window-field">
                           <span>End Date</span>
@@ -1969,14 +2229,17 @@ export default function App() {
                           {renderTimeInput('end', planningWindowEndTime, setPlanningWindowEndTime)}
                         </label>
                       </div>
-                      <p className="time-window-note">
-                        Extracted data is limited to this interval.
-                      </p>
+                      {renderPlanningTimeActions('end')}
                       {planningWindowComplete && !planningWindowValid && (
                         <p className="time-window-error">
                           Enter a valid time window with an end time after the start time.
                         </p>
                       )}
+                      <p className="time-window-note">
+                        {planningTimeMode === 'utc'
+                          ? 'Using UTC standard time. Propagation is limited to this interval.'
+                          : 'Using local time. Propagation is limited to this interval.'}
+                      </p>
                     </div>
                   )}
                 </div>
@@ -2106,6 +2369,7 @@ export default function App() {
                   className="map-panel-toggle"
                   onClick={() => toggleSection('mapView')}
                   aria-expanded={expandedSections.mapView}
+                  aria-controls="map-panel-content"
                   aria-label={expandedSections.mapView ? 'Collapse map view' : 'Expand map view'}
                 >
                   <span className="section-toggle-icon" aria-hidden="true">
@@ -2116,7 +2380,7 @@ export default function App() {
             </div>
 
             {expandedSections.mapView && (
-              <div className="map-layout">
+              <div id="map-panel-content" className="map-layout">
                 <div className="map-canvas-shell">
                   <div
                     className={`map-canvas ${showDemoRegionalMap ? 'map-canvas--regional' : ''}`}
@@ -2275,37 +2539,53 @@ export default function App() {
               gridTemplateColumns: `minmax(0, ${overviewPanelWidth}%) 0.9rem minmax(0, calc(${100 - overviewPanelWidth}% - 0.9rem))`,
             }}
           >
-          <section className="panel overview-panel">
-            <div className="panel-heading">
+          <section className={`panel overview-panel ${expandedSections.overview ? '' : 'panel--collapsed'}`}>
+            <div className={`panel-heading ${expandedSections.overview ? '' : 'panel-heading--collapsed'}`}>
               <div className="panel-heading-title">
                 <h2>Overview</h2>
               </div>
-              <div
-                className={`overview-inline-status ${
-                  extractionStatus === 'Completed'
-                    ? 'overview-inline-status--online'
-                    : extractionStatus === 'Running' || extractionStatus === 'Queued'
-                      ? 'overview-inline-status--checking'
-                      : 'overview-inline-status--offline'
-                }`}
-              >
-                {schedulerLaunched && (
-                  <div className="overview-count-inline">
-                    <span className="overview-status-label">Overpasses</span>
-                    <span className="overview-count-value">{overviewRows.length}</span>
-                  </div>
-                )}
-                <div className="overview-status-block">
-                  <span className="overview-status-label">Status</span>
-                  <div className="overview-status-value">
-                    <span className="app-status-dot" aria-hidden="true"></span>
-                    <span className="overview-status-text">{extractionStatus}</span>
+              <div className="panel-heading-actions">
+                <div
+                  className={`overview-inline-status ${
+                    extractionStatus === 'Completed'
+                      ? 'overview-inline-status--online'
+                      : extractionStatus === 'Running' || extractionStatus === 'Queued'
+                        ? 'overview-inline-status--checking'
+                        : 'overview-inline-status--offline'
+                  }`}
+                >
+                  {schedulerLaunched && (
+                    <div className="overview-count-inline">
+                      <span className="overview-status-label">Overpasses</span>
+                      <span className="overview-count-value">{overviewRows.length}</span>
+                    </div>
+                  )}
+                  <div className="overview-status-block">
+                    <span className="overview-status-label">Status</span>
+                    <div className="overview-status-value">
+                      <span className="app-status-dot" aria-hidden="true"></span>
+                      <span className="overview-status-text">{extractionStatus}</span>
+                    </div>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  className="panel-collapse-toggle"
+                  onClick={() => toggleSection('overview')}
+                  aria-expanded={expandedSections.overview}
+                  aria-controls="overview-panel-content"
+                  aria-label={expandedSections.overview ? 'Collapse overview view' : 'Expand overview view'}
+                >
+                  <span className="section-toggle-icon" aria-hidden="true">
+                    {renderSectionChevron(expandedSections.overview)}
+                  </span>
+                </button>
               </div>
             </div>
 
-            <div className="overview-list">
+            {expandedSections.overview && (
+              <div id="overview-panel-content" className="panel-collapsible-content">
+              <div className="overview-list">
               {showOverviewProgress ? (
                 <div className="overview-progress">
                   <div className="overview-progress-body">
@@ -2441,34 +2721,36 @@ export default function App() {
                   )}
                 </div>
               )}
-            </div>
+              </div>
 
-            <div className="panel-action-wrapper">
-              <button
-                className="panel-action"
-                disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffDemoAvailable}
-                onClick={handleCalculateTradeOffs}
-              >
-                {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
-              </button>
-              {!calculatingTradeOffs && (
-                <span className="panel-action-tooltip">
-                  {!schedulerLaunched
-                    ? 'Launch Communication Scheduler first and wait for extraction to complete.'
-                    : !useDemoData
-                      ? 'Trade-off calculation is not connected for real-data mode yet. Enable demo data to preview this workflow.'
-                      : !tradeOffDemoAvailable
-                        ? overviewRows.length > 0
-                          ? 'All extracted overpasses are blocked by existing scheduled activities with higher priority.'
-                          : 'Launch the scheduler first so extracted overpasses are available for the simulated trade-off step.'
-                        : 'Calculate the simulated trade-off groups for the currently visible extracted overpasses.'}
-                </span>
-              )}
-            </div>
+              <div className="panel-action-wrapper">
+                <button
+                  className="panel-action"
+                  disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffDemoAvailable}
+                  onClick={handleCalculateTradeOffs}
+                >
+                  {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
+                </button>
+                {!calculatingTradeOffs && (
+                  <span className="panel-action-tooltip">
+                    {!schedulerLaunched
+                      ? 'Launch Communication Scheduler first and wait for extraction to complete.'
+                      : !useDemoData
+                        ? 'Trade-off calculation is not connected for real-data mode yet. Enable demo data to preview this workflow.'
+                        : !tradeOffDemoAvailable
+                          ? overviewRows.length > 0
+                            ? 'All extracted overpasses are blocked by existing scheduled activities with higher priority.'
+                            : 'Launch the scheduler first so extracted overpasses are available for the simulated trade-off step.'
+                          : 'Calculate the simulated trade-off groups for the currently visible extracted overpasses.'}
+                  </span>
+                )}
+              </div>
+              </div>
+            )}
           </section>
 
           <div
-            className="panel-resizer"
+            className={`panel-resizer ${!expandedSections.overview && !expandedSections.tradeOff ? 'panel-resizer--collapsed' : ''}`}
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize overview and trade-off panels"
@@ -2480,19 +2762,35 @@ export default function App() {
             <span className="panel-resizer-grip" aria-hidden="true"></span>
           </div>
 
-          <section className="panel tradeoff-panel">
-            <div className="panel-heading-title">
-              <h2>Trade-Off</h2>
-              {useDemoData && schedulerLaunched && renderDemoBadge()}
+          <section className={`panel tradeoff-panel ${expandedSections.tradeOff ? '' : 'panel--collapsed'}`}>
+            <div className={`panel-heading ${expandedSections.tradeOff ? '' : 'panel-heading--collapsed'}`}>
+              <div className="panel-heading-title">
+                <h2>Trade-Off</h2>
+                {useDemoData && schedulerLaunched && renderDemoBadge()}
+              </div>
+              <button
+                type="button"
+                className="panel-collapse-toggle"
+                onClick={() => toggleSection('tradeOff')}
+                aria-expanded={expandedSections.tradeOff}
+                aria-controls="tradeoff-panel-content"
+                aria-label={expandedSections.tradeOff ? 'Collapse trade-off view' : 'Expand trade-off view'}
+              >
+                <span className="section-toggle-icon" aria-hidden="true">
+                  {renderSectionChevron(expandedSections.tradeOff)}
+                </span>
+              </button>
             </div>
-            {!tradeOffsCalculated && !useDemoData && (
-              <p>Enable Demo mode to use Trade-Off view.</p>
-            )}
-            {tradeOffsCalculated && tradeOffCards.length === 0 && (
-              <p>No trade-off groups were identified for the current selection.</p>
-            )}
-            {tradeOffsCalculated && tradeOffCards.length > 0 && (
-              <div className="tradeoff-card-list">
+            {expandedSections.tradeOff && (
+              <div id="tradeoff-panel-content" className="panel-collapsible-content">
+                {!tradeOffsCalculated && !useDemoData && (
+                  <p>Enable Demo mode to use Trade-Off view.</p>
+                )}
+                {tradeOffsCalculated && tradeOffCards.length === 0 && (
+                  <p>No trade-off groups were identified for the current selection.</p>
+                )}
+                {tradeOffsCalculated && tradeOffCards.length > 0 && (
+                  <div className="tradeoff-card-list">
                 {tradeOffCards.length > 1 && (
                   <div className="tradeoff-browser">
                     <div className="tradeoff-browser-tabs">
@@ -2578,40 +2876,66 @@ export default function App() {
                     </button>
                   </div>
                 )}
+                  </div>
+                )}
               </div>
             )}
           </section>
           </div>
 
-          <section className="panel panel--fullwidth timeline-panel">
-            <div className="panel-heading panel-heading--timeline">
+          <section className={`panel panel--fullwidth timeline-panel ${expandedSections.timeline ? '' : 'panel--collapsed'}`}>
+            <div className={`panel-heading panel-heading--timeline ${expandedSections.timeline ? '' : 'panel-heading--collapsed'}`}>
               <div className="panel-heading-title">
                 <h2>Timeline</h2>
               </div>
-              {timelineModel && (
-                <div className="timeline-header-meta">
-                  <span className="timeline-meta-item">
-                    <span className="timeline-meta-label">Planning Window</span>
-                    <span className="timeline-meta-value">
-                      {formatPlanningWindow(activePlanningWindow?.startTime, activePlanningWindow?.endTime)}
+              <div className="panel-heading-actions">
+                {timelineModel && (
+                  <div className="timeline-header-meta">
+                    <span className="timeline-meta-item">
+                      <span className="timeline-meta-label">
+                        Planning Window ({activePlanningWindow?.timeMode === 'local' ? 'Local' : 'UTC'})
+                      </span>
+                      <span className="timeline-meta-value">
+                        {formatPlanningWindow(
+                          activePlanningWindow?.startTime,
+                          activePlanningWindow?.endTime,
+                          activePlanningWindow?.timeMode,
+                        )}
+                      </span>
                     </span>
+                    <span className="timeline-meta-item timeline-meta-item--muted">
+                      <span className="timeline-meta-label">DOY</span>
+                      <span className="timeline-meta-value">
+                        {getDayOfYear(timelineModel.baseDate, activePlanningWindow?.timeMode)}
+                      </span>
+                    </span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="panel-collapse-toggle"
+                  onClick={() => toggleSection('timeline')}
+                  aria-expanded={expandedSections.timeline}
+                  aria-controls="timeline-panel-content"
+                  aria-label={expandedSections.timeline ? 'Collapse timeline view' : 'Expand timeline view'}
+                >
+                  <span className="section-toggle-icon" aria-hidden="true">
+                    {renderSectionChevron(expandedSections.timeline)}
                   </span>
-                  <span className="timeline-meta-item timeline-meta-item--muted">
-                    <span className="timeline-meta-label">DOY</span>
-                    <span className="timeline-meta-value">{getDayOfYear(timelineModel.baseDate)}</span>
-                  </span>
-                </div>
-              )}
+                </button>
+              </div>
             </div>
 
-            {!schedulerLaunched && (
-              <p className="timeline-empty-copy">
-                Launch Communication Scheduler to initialize the planning timeline.
-              </p>
-            )}
+            {expandedSections.timeline && (
+              <div id="timeline-panel-content" className="panel-collapsible-content">
+                {!schedulerLaunched && (
+                  <p className="timeline-empty-copy">
+                    Launch Communication Scheduler to initialize the planning timeline.
+                  </p>
+                )}
 
-            {schedulerLaunched && timelineModel && (
-              <>
+                {schedulerLaunched && timelineModel && (
+                  <>
                 <div className="timeline-toolbar">
                   <div className="timeline-toolbar-groups">
                     <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
@@ -2823,7 +3147,9 @@ export default function App() {
                     </div>
                   </div>
                 )}
-              </>
+                  </>
+                )}
+              </div>
             )}
           </section>
         </main>
