@@ -6,6 +6,7 @@ import {
   calculateElevationFootprintAngle,
   clipPolylineToLatitudeRange,
   interpolateTrackPosition,
+  normalizeSignedLongitude,
   splitCoordinatesAtAntimeridian,
   splitTrackAtAntimeridian,
 } from './mapGeometry.js'
@@ -40,6 +41,26 @@ describe('splitTrackAtAntimeridian', () => {
     expect(segments).toHaveLength(2)
     expect(segments[0].at(-1)).toEqual([-180, 15])
     expect(segments[1][0]).toEqual([180, 15])
+  })
+
+  it('wraps unbounded east longitudes before splitting the track', () => {
+    const segments = splitTrackAtAntimeridian([
+      { longitude_deg: 179, latitude_deg: 10 },
+      { longitude_deg: 181, latitude_deg: 12 },
+    ])
+
+    expect(segments).toEqual([
+      [[179, 10], [180, 11]],
+      [[-180, 11], [-179, 12]],
+    ])
+  })
+})
+
+describe('normalizeSignedLongitude', () => {
+  it('wraps longitudes into a single visible world', () => {
+    expect(normalizeSignedLongitude(181)).toBe(-179)
+    expect(normalizeSignedLongitude(-181)).toBe(179)
+    expect(normalizeSignedLongitude(180)).toBe(-180)
   })
 })
 
@@ -130,6 +151,19 @@ describe('interpolateTrackPosition', () => {
   it('returns no stale position outside the propagated interval', () => {
     expect(interpolateTrackPosition(track, Date.parse('2026-08-10T11:59:59.000Z'))).toBeNull()
     expect(interpolateTrackPosition(track, Date.parse('2026-08-10T12:01:01.000Z'))).toBeNull()
+  })
+
+  it('wraps an exact propagated point beyond 180 degrees', () => {
+    const position = interpolateTrackPosition([
+      {
+        timestamp: '2026-08-10T12:00:00.000Z',
+        latitude_deg: 5,
+        longitude_deg: 181,
+        altitude_m: 300000,
+      },
+    ], Date.parse('2026-08-10T12:00:00.000Z'))
+
+    expect(position.longitude).toBe(-179)
   })
 })
 

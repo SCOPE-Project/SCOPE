@@ -6,6 +6,7 @@ import {
   buildGeodesicCircle,
   calculateElevationFootprintAngle,
   clipPolylineToLatitudeRange,
+  normalizeSignedLongitude,
   splitCoordinatesAtAntimeridian,
   splitTrackAtAntimeridian,
 } from './mapGeometry.js'
@@ -46,14 +47,14 @@ const fitMapToAssets = (map, assets, animate = true) => {
 
   if (assets.length === 1) {
     map.easeTo({
-      center: [assets[0].longitude, assets[0].latitude],
+      center: [normalizeSignedLongitude(assets[0].longitude), assets[0].latitude],
       zoom: assets[0].markerType === 'ground-station' ? 4 : 2.8,
       duration: animate ? 600 : 0,
     })
     return
   }
 
-  const longitudes = assets.map((asset) => asset.longitude)
+  const longitudes = assets.map((asset) => normalizeSignedLongitude(asset.longitude))
   const minLongitude = Math.min(...longitudes)
   const maxLongitude = Math.max(...longitudes)
   const latitudes = assets.map((asset) => asset.latitude)
@@ -215,15 +216,7 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
   longitudeValues.forEach((longitude) => {
     const start = map.project([longitude, minimumLatitude])
     const end = map.project([longitude, maximumLatitude])
-    appendPath(
-      fragment,
-      'mission-map-coordinate-grid-line',
-      [start, end],
-      {
-        'data-coordinate-axis': 'longitude',
-        'data-coordinate-degrees': longitude,
-      },
-    )
+    appendPath(fragment, 'mission-map-coordinate-grid-line', [start, end])
     const x = map.project([longitude, 0]).x
     if (x > 34 && x < width - 34) {
       const label = formatGridCoordinate(longitude, 'E', 'W')
@@ -235,15 +228,7 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
   latitudeValues.forEach((latitude) => {
     const start = map.project([minimumLongitude, latitude])
     const end = map.project([maximumLongitude, latitude])
-    appendPath(
-      fragment,
-      'mission-map-coordinate-grid-line',
-      [start, end],
-      {
-        'data-coordinate-axis': 'latitude',
-        'data-coordinate-degrees': latitude,
-      },
-    )
+    appendPath(fragment, 'mission-map-coordinate-grid-line', [start, end])
     const y = map.project([0, latitude]).y
     if (y > 22 && y < height - 22) {
       const label = formatGridCoordinate(latitude, 'N', 'S')
@@ -251,6 +236,7 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
       appendGridLabel(fragment, label, width - 5, y + 3, 'end', 'latitude', 'end')
     }
   })
+
   const selectedSatelliteNames = assets
     .filter((asset) => asset.markerType === 'satellite')
     .map((asset) => asset.name)
@@ -281,10 +267,6 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
           footprintAngle,
         )
 
-        if (ring.length === 0) {
-          return
-        }
-
         splitCoordinatesAtAntimeridian(ring)
           .flatMap((segment) => clipPolylineToLatitudeRange(
             segment,
@@ -296,11 +278,6 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
               fragment,
               'mission-map-elevation-footprint',
               segment.map((coordinate) => map.project(coordinate)),
-              {
-                'data-ground-station': groundStation.name,
-                'data-minimum-elevation': groundStation.minLinkElevation,
-                'data-reference-satellite': referenceSatellite.name,
-              },
             )
           })
       })
@@ -319,7 +296,6 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
         fragment,
         'mission-map-track-path mission-map-orbit-path',
         segment.map((coordinate) => map.project(coordinate)),
-        { 'data-satellite': satelliteName },
       )
     })
   })
@@ -424,7 +400,7 @@ const syncAssetMarkers = (
         offset: 15,
       })
       const marker = new maplibregl.Marker({ element, anchor: 'center' })
-        .setLngLat([asset.longitude, asset.latitude])
+        .setLngLat([normalizeSignedLongitude(asset.longitude), asset.latitude])
         .addTo(map)
       markerRecord = { asset, element, marker, popup, popupContent, timeMode }
       const showPopup = () => {
@@ -448,9 +424,10 @@ const syncAssetMarkers = (
 
     markerRecord.asset = asset
     markerRecord.timeMode = timeMode
-    markerRecord.marker.setLngLat([asset.longitude, asset.latitude])
+    const markerLongitude = normalizeSignedLongitude(asset.longitude)
+    markerRecord.marker.setLngLat([markerLongitude, asset.latitude])
     if (markerRecord.popup.isOpen()) {
-      markerRecord.popup.setLngLat([asset.longitude, asset.latitude])
+      markerRecord.popup.setLngLat([markerLongitude, asset.latitude])
       syncAssetPopupContent(markerRecord.popupContent, asset, timeMode)
     }
     markerRecord.element.classList.add('maplibregl-marker', 'mission-map-marker')
@@ -478,14 +455,14 @@ export default function MissionMap({
   const coordinateReadoutRef = useRef(null)
   const mapRef = useRef(null)
   const mapReadyRef = useRef(false)
-  const mapDragActiveRef = useRef(false)
+  const overlayInteractionSnapshotRef = useRef(null)
+  const renderOverlayRef = useRef(null)
   const markersRef = useRef(new Map())
   const assetsRef = useRef(assets)
   const satelliteTracksRef = useRef(satelliteTracks)
   const activeAssetIdRef = useRef(activeAssetId)
   const timeModeRef = useRef(timeMode)
   const onSelectAssetRef = useRef(onSelectAsset)
-  const previousAssetIdsRef = useRef('')
   const [mapStatus, setMapStatus] = useState('loading')
 
   useEffect(() => {
@@ -507,7 +484,7 @@ export default function MissionMap({
       center: [0, 0],
       zoom: -0.5,
       minZoom: MIN_MAP_ZOOM,
-      renderWorldCopies: true,
+      renderWorldCopies: false,
       dragRotate: false,
       pitchWithRotate: false,
       touchPitch: false,
@@ -516,33 +493,79 @@ export default function MissionMap({
     })
     const markers = markersRef.current
     const renderTracks = () => {
-      if (mapDragActiveRef.current) {
-        return
+      const overlayData = overlayInteractionSnapshotRef.current ?? {
+        assets: assetsRef.current,
+        satelliteTracks: satelliteTracksRef.current,
+        activeAssetId: activeAssetIdRef.current,
       }
 
       renderMapOverlays(
         map,
         trackOverlayRef.current,
-        assetsRef.current,
-        satelliteTracksRef.current,
-        activeAssetIdRef.current,
+        overlayData.assets,
+        overlayData.satelliteTracks,
+        overlayData.activeAssetId,
       )
     }
+    let overlayRenderFrame = null
+    const scheduleTrackRender = () => {
+      if (overlayRenderFrame !== null) {
+        return
+      }
+
+      overlayRenderFrame = window.requestAnimationFrame(() => {
+        overlayRenderFrame = null
+        renderTracks()
+      })
+    }
+    let primaryPointerDown = false
+    const handlePrimaryPointerDown = (event) => {
+      if (event.button !== 0) {
+        return
+      }
+
+      primaryPointerDown = true
+      overlayInteractionSnapshotRef.current = {
+        assets: assetsRef.current,
+        satelliteTracks: satelliteTracksRef.current,
+        activeAssetId: activeAssetIdRef.current,
+      }
+    }
+    const handlePrimaryPointerRelease = () => {
+      if (!primaryPointerDown) {
+        return
+      }
+
+      primaryPointerDown = false
+      window.requestAnimationFrame(() => {
+        if (!map.isMoving()) {
+          overlayInteractionSnapshotRef.current = null
+          scheduleTrackRender()
+        }
+      })
+    }
+    const handleMapMoveEnd = () => {
+      if (primaryPointerDown) {
+        return
+      }
+
+      overlayInteractionSnapshotRef.current = null
+      scheduleTrackRender()
+    }
+    const mapCanvasContainer = map.getCanvasContainer()
+    renderOverlayRef.current = scheduleTrackRender
 
     mapRef.current = map
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
     map.addControl(new maplibregl.FullscreenControl(), 'top-right')
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 110 }), 'bottom-right')
     map.addControl(new MaptoolkitLogoControl({ position: 'bottom-left' }))
-    map.on('move', renderTracks)
-    map.on('resize', renderTracks)
-    map.on('dragstart', () => {
-      mapDragActiveRef.current = true
-    })
-    map.on('dragend', () => {
-      mapDragActiveRef.current = false
-      renderTracks()
-    })
+    mapCanvasContainer.addEventListener('pointerdown', handlePrimaryPointerDown)
+    window.addEventListener('pointerup', handlePrimaryPointerRelease, true)
+    window.addEventListener('pointercancel', handlePrimaryPointerRelease, true)
+    map.on('move', scheduleTrackRender)
+    map.on('moveend', handleMapMoveEnd)
+    map.on('resize', scheduleTrackRender)
 
     map.once('style.load', () => {
       mapReadyRef.current = true
@@ -554,9 +577,8 @@ export default function MissionMap({
         onSelectAssetRef,
         timeModeRef.current,
       )
-      renderTracks()
-      fitMapToAssets(map, assetsRef.current, false)
-      previousAssetIdsRef.current = assetsRef.current.map((asset) => asset.id).sort().join('|')
+      scheduleTrackRender()
+      fitMapToGlobe(map, false)
       setMapStatus('ready')
     })
 
@@ -581,12 +603,19 @@ export default function MissionMap({
     })
 
     return () => {
+      mapCanvasContainer.removeEventListener('pointerdown', handlePrimaryPointerDown)
+      window.removeEventListener('pointerup', handlePrimaryPointerRelease, true)
+      window.removeEventListener('pointercancel', handlePrimaryPointerRelease, true)
+      if (overlayRenderFrame !== null) {
+        window.cancelAnimationFrame(overlayRenderFrame)
+      }
+      renderOverlayRef.current = null
       markers.forEach(({ marker, popup }) => {
         popup.remove()
         marker.remove()
       })
       markers.clear()
-      mapDragActiveRef.current = false
+      overlayInteractionSnapshotRef.current = null
       mapReadyRef.current = false
       map.remove()
       mapRef.current = null
@@ -607,21 +636,7 @@ export default function MissionMap({
       onSelectAssetRef,
       timeMode,
     )
-    if (!mapDragActiveRef.current) {
-      renderMapOverlays(
-        map,
-        trackOverlayRef.current,
-        assets,
-        satelliteTracks,
-        activeAssetId,
-      )
-    }
-
-    const assetIds = assets.map((asset) => asset.id).sort().join('|')
-    if (assetIds !== previousAssetIdsRef.current) {
-      fitMapToAssets(map, assets)
-      previousAssetIdsRef.current = assetIds
-    }
+    renderOverlayRef.current?.()
   }, [activeAssetId, assets, satelliteTracks, timeMode])
 
   const handleFitSelectedAssets = () => {

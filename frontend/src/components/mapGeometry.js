@@ -1,3 +1,7 @@
+export const normalizeSignedLongitude = (longitude) => (
+  ((longitude + 180) % 360 + 360) % 360 - 180
+)
+
 export const splitCoordinatesAtAntimeridian = (coordinates) => {
   if (coordinates.length < 2) {
     return []
@@ -41,7 +45,7 @@ export const splitTrackAtAntimeridian = (points) => (
         Number.isFinite(point?.longitude_deg)
         && Number.isFinite(point?.latitude_deg)
       ))
-      .map((point) => [point.longitude_deg, point.latitude_deg]),
+      .map((point) => [normalizeSignedLongitude(point.longitude_deg), point.latitude_deg]),
   )
 )
 
@@ -177,10 +181,6 @@ export const buildCoordinateGrid = (
   return { type: 'FeatureCollection', features }
 }
 
-const normalizeSignedLongitude = (longitude) => (
-  ((longitude + 180) % 360 + 360) % 360 - 180
-)
-
 export const interpolateTrackPosition = (trackPoints, targetTimestamp) => {
   if (!Number.isFinite(targetTimestamp)) {
     return null
@@ -207,7 +207,7 @@ export const interpolateTrackPosition = (trackPoints, targetTimestamp) => {
   if (exactPoint) {
     return {
       latitude: exactPoint.latitude_deg,
-      longitude: exactPoint.longitude_deg,
+      longitude: normalizeSignedLongitude(exactPoint.longitude_deg),
       altitude: exactPoint.altitude_m,
       timestamp: new Date(targetTimestamp).toISOString(),
     }
