@@ -382,6 +382,16 @@ body {
   box-shadow: none;
 }
 
+.btn-terminate {
+  background: #b3261e;
+  border-color: #b3261e;
+}
+
+.btn-terminate:hover {
+  background: #8f1d17;
+  border-color: #8f1d17;
+}
+
 .results-hint {
   color: var(--text-secondary);
   text-align: center;
@@ -573,6 +583,13 @@ body {
   stroke-linejoin: miter;
 }
 
+.sidebar-collapsed-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+}
+
 .sidebar-collapsed-label {
   color: var(--text-secondary);
   font-size: 0.78rem;
@@ -581,8 +598,39 @@ body {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
   margin-top: 0.5rem;
-  margin-left: auto;
-  margin-right: auto;
+}
+
+.sidebar-collapsed-terminate {
+  writing-mode: horizontal-tb;
+  flex: 0 0 auto;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid #b3261e;
+  background: #b3261e;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.sidebar-collapsed-terminate:hover {
+  background: #8f1d17;
+  border-color: #8f1d17;
+}
+
+.sidebar-collapsed-terminate-icon {
+  width: 0.65rem;
+  height: 0.65rem;
+  display: block;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-block {
@@ -684,6 +732,44 @@ body {
   color: var(--text-muted);
 }
 
+.time-window-zone-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.22rem;
+  background: #eef2f6;
+}
+
+.time-window-zone-button {
+  min-width: 2.85rem;
+  padding: 0.28rem 0.48rem;
+  border: 0;
+  border-radius: 0.16rem;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.time-window-zone-button:hover {
+  color: var(--text-primary);
+}
+
+.time-window-zone-button--active {
+  background: var(--bg-panel-strong);
+  color: var(--accent-primary);
+  box-shadow: 0 1px 3px rgba(31, 42, 51, 0.12);
+}
+
+.time-window-zone-button:focus-visible,
+.time-window-quick-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
 .time-window-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 8.25rem;
@@ -700,6 +786,78 @@ body {
 
 .time-window-field--time {
   min-width: 0;
+}
+
+.time-window-quick-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: -0.48rem;
+}
+
+.time-window-quick-primary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem;
+}
+
+.time-window-adjustment-row {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.time-window-adjustment-label {
+  font-size: 0.67rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.time-window-stepper {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.time-window-quick-button {
+  padding: 0.25rem 0.38rem;
+  border: 1px solid #c8d3dd;
+  border-radius: 0.18rem;
+  background: #f7f9fb;
+  color: var(--accent-primary);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.time-window-quick-button--current {
+  width: 100%;
+}
+
+.time-window-stepper .time-window-quick-button {
+  width: 100%;
+  border-radius: 0;
+}
+
+.time-window-stepper .time-window-quick-button:first-child {
+  border-radius: 0.18rem 0 0 0.18rem;
+}
+
+.time-window-stepper .time-window-quick-button:last-child {
+  margin-left: -1px;
+  border-radius: 0 0.18rem 0.18rem 0;
+}
+
+.time-window-quick-button:hover {
+  border-color: #97b4d3;
+  background: #eaf1f8;
+}
+
+.time-window-quick-button--reset {
+  color: var(--text-secondary);
 }
 
 .time-window-dropdown {
@@ -826,10 +984,14 @@ body {
   color: var(--text-muted);
 }
 
-.time-window-error {
+.sidebar-block .time-window-error {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d7b27a;
+  border-radius: 0.18rem;
+  background: #fff7ea;
   font-size: 0.78rem;
   line-height: 1.4;
-  color: var(--error-text);
+  color: #7a4b00;
 }
 
 .checkbox-row {
@@ -942,7 +1104,7 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1.9fr) minmax(220px, 0.55fr);
   grid-auto-rows: max-content;
-  gap: 1.5rem;
+  gap: 1.2rem;
   min-height: 0;
   height: 100%;
   overflow-y: auto;
@@ -964,8 +1126,8 @@ body {
   background: var(--bg-panel-strong);
   border: 1px solid var(--card-border);
   border-radius: var(--radius-card);
-  padding: 1.5rem;
-  min-height: 220px;
+  padding: 1.2rem;
+  min-height: 176px;
   min-width: 0;
   align-self: start;
   box-shadow: 0 6px 16px rgba(31, 42, 51, 0.05);
@@ -975,12 +1137,26 @@ body {
   grid-column: 1 / -1;
 }
 
+.planning-views-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.9rem;
+  align-items: start;
+  min-width: 0;
+}
+
+.planning-views-row > .panel {
+  width: 100%;
+  min-width: 0;
+}
+
 .panel-resizer {
   position: relative;
   width: 0.9rem;
   min-width: 0.9rem;
-  height: 45rem;
-  min-height: 45rem;
+  height: var(--top-panels-height, 36rem);
+  min-height: var(--top-panels-height, 36rem);
   align-self: stretch;
   display: flex;
   align-items: center;
@@ -990,6 +1166,11 @@ body {
   border: 0;
   padding: 0;
   outline: none;
+}
+
+.panel-resizer--collapsed {
+  height: auto;
+  min-height: 0;
 }
 
 .panel-resizer-line {
@@ -1022,9 +1203,100 @@ body {
   border-color: #b9c6d2;
 }
 
+/* Horizontal variant: the draggable divider between the Map View and
+   Timeline panels, which are stacked rather than side-by-side, so it
+   resizes height instead of width. */
+.panel-resizer--horizontal {
+  grid-column: 1 / -1;
+  width: auto;
+  min-width: 0;
+  height: 0.9rem;
+  min-height: 0.9rem;
+  align-self: stretch;
+  cursor: row-resize;
+}
+
+.panel-resizer-line--horizontal {
+  top: 50%;
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.panel-resizer-grip--horizontal {
+  width: 2.25rem;
+  height: 0.42rem;
+  background:
+    radial-gradient(circle at center, rgba(60, 79, 98, 0.55) 0 1.1px, transparent 1.2px) 0.25rem center / 0.45rem 100% repeat-x,
+    #eef2f6;
+}
+
+.panel-resizer:hover .panel-resizer-grip--horizontal,
+.panel-resizer:focus-visible .panel-resizer-grip--horizontal {
+  background:
+    radial-gradient(circle at center, rgba(37, 68, 102, 0.68) 0 1.1px, transparent 1.2px) 0.25rem center / 0.45rem 100% repeat-x,
+    #f5f8fb;
+}
+
+/* Drag-to-reorder handle shown in every panel's heading. */
+.panel-heading-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.panel-drag-handle {
+  flex: 0 0 auto;
+  width: 1.7rem;
+  height: 1.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
+  cursor: grab;
+}
+
+.panel-drag-handle:hover {
+  background: var(--bg-hover);
+}
+
+.panel-drag-handle:active {
+  cursor: grabbing;
+}
+
+.panel-drag-handle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.panel-drag-handle-icon {
+  width: 0.8rem;
+  height: 0.8rem;
+  background:
+    radial-gradient(circle at center, rgba(60, 79, 98, 0.75) 0 1.1px, transparent 1.2px) 0 0 / 0.4rem 0.4rem repeat;
+}
+
+/* Drag state feedback: the panel being dragged fades slightly, and the
+   panel currently under the pointer is highlighted as the drop target. */
+.panel--dragging {
+  opacity: 0.45;
+}
+
+.panel--drag-over {
+  outline: 2px dashed var(--accent-primary);
+  outline-offset: 2px;
+}
+
 .panel h2 {
-  font-size: 1.05rem;
-  margin-bottom: 0.75rem;
+  font-size: 1rem;
+  margin-bottom: 0.6rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -1038,12 +1310,33 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1.25rem;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+  cursor: grab;
+}
+
+.panel-heading:active {
+  cursor: grabbing;
+}
+
+.panel-heading--collapsed {
+  margin-bottom: 0;
+}
+
+.panel-heading .panel-heading-title h2 {
+  margin-bottom: 0;
+}
+
+.panel-heading-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  min-width: 0;
 }
 
 .panel-heading--map {
-  margin-bottom: 1rem;
+  margin-bottom: 0.8rem;
 }
 
 .panel-heading-title {
@@ -1141,10 +1434,28 @@ body {
 .overview-panel,
 .tradeoff-panel {
   min-width: 0;
-  height: 45rem;
-  min-height: 45rem;
+  height: var(--top-panels-height, 36rem);
+  min-height: var(--top-panels-height, 36rem);
   display: flex;
   flex-direction: column;
+}
+
+.overview-panel.panel--collapsed,
+.tradeoff-panel.panel--collapsed {
+  height: auto;
+  min-height: 0;
+}
+
+.overview-panel > .panel-collapsible-content,
+.tradeoff-panel > .panel-collapsible-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.panel-collapsible-content {
+  min-width: 0;
 }
 
 .overview-label {
@@ -1162,12 +1473,12 @@ body {
 }
 
 .overview-list {
-  --overview-header-height: 3.1rem;
-  --overview-row-height: 2.7rem;
+  --overview-header-height: 2.5rem;
+  --overview-row-height: 2.2rem;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-card);
   overflow: hidden;
-  margin-bottom: 1rem;
+  margin-bottom: 0.8rem;
   background: var(--bg-panel-strong);
   flex: 1 1 auto;
   min-height: 0;
@@ -1424,7 +1735,7 @@ body {
   background: #f2f4f6;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-btn);
-  padding: 0.85rem 1.1rem;
+  padding: 0.68rem 0.88rem;
   cursor: not-allowed;
   width: 100%;
 }
@@ -1480,7 +1791,7 @@ body {
 .tradeoff-card-list {
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  gap: 0.72rem;
   min-height: 0;
   flex: 1 1 auto;
 }
@@ -1488,7 +1799,7 @@ body {
 .tradeoff-browser {
   display: flex;
   flex-direction: column;
-  gap: 0.7rem;
+  gap: 0.56rem;
 }
 
 .tradeoff-browser-nav {
@@ -1536,15 +1847,15 @@ body {
 
 .tradeoff-browser-tabs {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.4rem;
   overflow-x: auto;
   padding-bottom: 0.1rem;
 }
 
 .tradeoff-browser-tab {
   flex: 0 0 auto;
-  min-width: 4.4rem;
-  padding: 0.38rem 0.55rem;
+  min-width: 3.75rem;
+  padding: 0.3rem 0.44rem;
   border: 1px solid color-mix(in srgb, var(--tradeoff-accent) 38%, white);
   border-radius: 0.18rem;
   background: color-mix(in srgb, var(--tradeoff-accent) 9%, white);
@@ -1566,8 +1877,8 @@ body {
   container-type: inline-size;
 }
 
-.tradeoff-panel .panel-heading-title {
-  margin-bottom: 0.8rem;
+.tradeoff-panel > .panel-heading .panel-heading-title {
+  margin-bottom: 0;
 }
 
 .tradeoff-summary {
@@ -1743,6 +2054,7 @@ body {
 
 .map-panel {
   min-height: 0;
+  container-type: inline-size;
 }
 
 .map-panel-copy {
@@ -1757,9 +2069,10 @@ body {
   gap: 0.75rem;
 }
 
-.map-panel-toggle {
-  width: 2rem;
-  height: 2rem;
+.map-panel-toggle,
+.panel-collapse-toggle {
+  width: 1.7rem;
+  height: 1.7rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1770,8 +2083,15 @@ body {
   cursor: pointer;
 }
 
-.map-panel-toggle:hover {
+.map-panel-toggle:hover,
+.panel-collapse-toggle:hover {
   background: var(--bg-hover);
+}
+
+.map-panel-toggle:focus-visible,
+.panel-collapse-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  outline-offset: 2px;
 }
 
 .map-summary {
@@ -1801,152 +2121,485 @@ body {
 
 .map-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(260px, 0.9fr);
-  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 35%);
+  gap: 0.75rem;
   align-items: start;
+}
+
+@container (max-width: 620px) {
+  .map-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .map-sidebar {
+    max-height: 12rem;
+    overflow-y: auto;
+  }
 }
 
 .map-canvas-shell {
   min-width: 0;
 }
 
-.map-canvas {
+.mission-map-shell {
   position: relative;
-  min-height: 300px;
+  height: 462px;
+  min-height: 48px;
   border: 1px solid var(--line-soft);
   border-radius: 0.22rem;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 20% 35%, rgba(70, 112, 84, 0.28) 0, rgba(70, 112, 84, 0.28) 8%, transparent 9%),
-    radial-gradient(circle at 32% 58%, rgba(70, 112, 84, 0.22) 0, rgba(70, 112, 84, 0.22) 10%, transparent 11%),
-    radial-gradient(circle at 55% 33%, rgba(70, 112, 84, 0.24) 0, rgba(70, 112, 84, 0.24) 12%, transparent 13%),
-    radial-gradient(circle at 72% 60%, rgba(70, 112, 84, 0.2) 0, rgba(70, 112, 84, 0.2) 14%, transparent 15%),
-    linear-gradient(180deg, #dceaf4 0%, #c7dcea 100%);
+  background: #dceaf4;
 }
 
-.map-canvas--regional {
-  min-height: 0;
-  background: #d9e7f2;
-}
-
-.map-canvas::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(0, 57, 117, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 57, 117, 0.08) 1px, transparent 1px);
-  background-size: calc(100% / 6) calc(100% / 4);
-  pointer-events: none;
-}
-
-.map-canvas--regional::before,
-.map-canvas--regional::after {
+/* The actual height comes from the heightPx prop (an inline style, set by
+   whichever panel layout is hosting the map — e.g. the draggable divider
+   between Map View and Timeline). Below a height threshold the component
+   also adds --compact, since the overlays below (legend, fit-to-selection
+   buttons, scale bar, grid labels) don't have room to render without
+   overlapping in a strip that thin. The zoom/fullscreen controls stay so a
+   person can still expand the map to inspect it in full via the browser
+   Fullscreen API, exempted below via :not(:fullscreen). */
+.mission-map-shell--compact:not(:fullscreen) .mission-map-wheel-hint,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-fit-controls,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-legend,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-scale-bar,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-attribution,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-coordinate-label,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-coordinate-tick {
   display: none;
 }
 
-.map-canvas::after {
+.mission-map-shell--compact:not(:fullscreen) .mission-map-navigation-controls {
+  top: 50%;
+  right: 0.4rem;
+  transform: translateY(-50%);
+  flex-direction: row;
+}
+
+.mission-map-shell--compact:not(:fullscreen) .mission-map-nav-control {
+  width: 1.4rem;
+  height: 1.4rem;
+  font-size: 0.7rem;
+}
+
+.mission-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.mission-map-canvas {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.mission-map-world-outline {
+  fill: #d9e2d2;
+  stroke: #8fa085;
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+  fill-rule: evenodd;
+}
+
+.mission-map-track-path {
+  fill: none;
+  stroke: #1f5f99;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.78;
+  vector-effect: non-scaling-stroke;
+}
+
+.mission-map-orbit-path--active {
+  stroke: #144a80;
+  stroke-width: 3.2;
+  opacity: 1;
+  filter: drop-shadow(0 0 4px rgba(20, 74, 128, 0.65));
+}
+
+.mission-map-coordinate-grid-line {
+  fill: none;
+  stroke: #526f89;
+  stroke-width: 0.9;
+  stroke-dasharray: 3 4;
+  opacity: 0.42;
+  vector-effect: non-scaling-stroke;
+}
+
+.mission-map-coordinate-tick {
+  stroke: #334e68;
+  stroke-width: 1;
+  opacity: 0.82;
+  vector-effect: non-scaling-stroke;
+}
+
+.mission-map-coordinate-label {
+  fill: #263f53;
+  stroke: rgba(255, 255, 255, 0.96);
+  stroke-width: 3px;
+  paint-order: stroke fill;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.mission-map-elevation-footprint {
+  fill: none;
+  stroke: #b9571f;
+  stroke-width: 2.2;
+  stroke-dasharray: 7 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.mission-map-elevation-footprint--active {
+  stroke: #e07a2c;
+  stroke-width: 3.4;
+  opacity: 1;
+  filter: drop-shadow(0 0 4px rgba(224, 122, 44, 0.65));
+}
+
+.mission-map-satellite-footprint {
+  fill: none;
+  stroke: var(--accent-primary);
+  stroke-width: 2.2;
+  stroke-dasharray: 1.5 4.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.mission-map-satellite-footprint--active {
+  stroke-width: 3.4;
+  opacity: 1;
+  filter: drop-shadow(0 0 4px rgba(51, 122, 224, 0.65));
+}
+
+.mission-map-marker {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mission-map-marker::before {
   content: "";
   position: absolute;
-  inset: 50% 0 auto 0;
-  border-top: 1px solid rgba(0, 57, 117, 0.12);
-  pointer-events: none;
-}
-
-.map-empty-state {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  text-align: center;
-  color: var(--text-secondary);
-  font-size: 0.92rem;
-}
-
-.map-region-art {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-}
-
-.map-region-art--cropped {
-  width: 112%;
-  aspect-ratio: var(--map-region-aspect-ratio);
-  transform: translate(-50%, -50%);
-}
-
-.map-region-tile {
-  position: absolute;
-  display: block;
-  object-fit: fill;
-  pointer-events: none;
-}
-
-.map-attribution {
-  position: absolute;
-  right: 0.6rem;
-  bottom: 0.55rem;
-  z-index: 4;
-  padding: 0.18rem 0.42rem;
-  border-radius: 0.16rem;
-  background: rgba(255, 255, 255, 0.88);
-  color: #34506f;
-  font-size: 0.65rem;
-  line-height: 1.2;
-}
-
-.map-marker {
-  position: absolute;
-  width: 0.95rem;
-  height: 0.95rem;
-  margin-left: -0.475rem;
-  margin-top: -0.475rem;
+  inset: 0.19rem;
   border: 2px solid #fff;
-  box-shadow: 0 0 0 1px rgba(31, 42, 51, 0.15), 0 4px 10px rgba(31, 42, 51, 0.15);
-  cursor: pointer;
-  z-index: 2;
-}
-
-.map-marker--ground-station {
-  border-radius: 999px;
   background: #d16a2d;
+  box-shadow: 0 0 0 1px rgba(31, 42, 51, 0.2), 0 3px 8px rgba(31, 42, 51, 0.28);
 }
 
-.map-marker--satellite {
-  border-radius: 0.12rem;
-  background: var(--accent-primary);
+.mission-map-marker--ground-station::before {
+  border-radius: 999px;
+}
+
+.mission-map-marker--satellite::before {
+  border-radius: 0.1rem;
+  background: #003975;
   transform: rotate(45deg);
 }
 
-.map-marker--active {
-  z-index: 3;
-  box-shadow: 0 0 0 2px rgba(0, 57, 117, 0.18), 0 0 0 4px rgba(255, 255, 255, 0.92), 0 6px 12px rgba(31, 42, 51, 0.18);
+.mission-map-marker--active::before {
+  box-shadow:
+    0 0 0 2px rgba(0, 57, 117, 0.26),
+    0 0 0 4px rgba(255, 255, 255, 0.9),
+    0 4px 10px rgba(31, 42, 51, 0.3);
 }
 
-.map-marker-label {
+.mission-map-marker-label {
   position: absolute;
   left: 50%;
-  bottom: calc(100% + 0.45rem);
+  bottom: calc(100% + 0.38rem);
   transform: translateX(-50%);
-  padding: 0.25rem 0.45rem;
-  border: 1px solid rgba(31, 42, 51, 0.12);
+  padding: 0.22rem 0.42rem;
+  border: 1px solid rgba(31, 42, 51, 0.14);
   border-radius: 0.18rem;
   background: rgba(255, 255, 255, 0.96);
   color: var(--text-primary);
-  font-size: 0.72rem;
+  box-shadow: 0 2px 7px rgba(31, 42, 51, 0.14);
+  font-size: 0.7rem;
+  font-weight: 650;
   white-space: nowrap;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.15s ease;
 }
 
-.map-marker:hover .map-marker-label,
-.map-marker--active .map-marker-label {
+.mission-map-marker--active .mission-map-marker-label {
   opacity: 1;
   visibility: visible;
+}
+
+.mission-map-asset-popup {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: 0;
+  min-width: 12.5rem;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid rgba(31, 42, 51, 0.16);
+  border-radius: 0.2rem;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 3px 12px rgba(31, 42, 51, 0.2);
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+}
+
+.mission-map-asset-popup--below {
+  transform: translate(-50%, 0);
+}
+
+.mission-map-popup-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.mission-map-popup-name {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.mission-map-popup-type {
+  margin-top: 0.08rem;
+  color: var(--text-secondary);
+  font-size: 0.69rem;
+}
+
+.mission-map-popup-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.55rem;
+  margin: 0.42rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.25;
+}
+
+.mission-map-popup-grid dt,
+.mission-map-popup-grid dd {
+  margin: 0;
+}
+
+.mission-map-popup-grid dd {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Shown briefly whenever a plain (non-modifier) wheel gesture passes over
+   the map, since that scroll is now left to the page rather than zooming
+   the map -- this tells the person how to zoom with the wheel instead. */
+.mission-map-wheel-hint {
+  position: absolute;
+  z-index: 4;
+  bottom: 0.65rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(0.3rem);
+  padding: 0.38rem 0.7rem;
+  border-radius: 0.2rem;
+  background: rgba(31, 42, 51, 0.85);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.28);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.mission-map-wheel-hint--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.mission-map-fit-controls {
+  position: absolute;
+  z-index: 4;
+  top: 0.65rem;
+  left: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.mission-map-fit-control {
+  min-height: 2rem;
+  padding: 0.38rem 0.65rem;
+  border: 1px solid rgba(31, 42, 51, 0.2);
+  border-radius: 0.2rem;
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--text-primary);
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.18);
+  font-size: 0.75rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.mission-map-fit-control:hover:not(:disabled) {
+  background: #f4f7fa;
+}
+
+.mission-map-fit-control:disabled {
+  color: #8b98a4;
+  cursor: not-allowed;
+}
+
+.mission-map-legend {
+  position: absolute;
+  z-index: 4;
+  top: 5.45rem;
+  left: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  max-width: min(17rem, calc(100% - 6rem));
+  padding: 0.45rem 0.55rem;
+  border: 1px solid rgba(31, 42, 51, 0.16);
+  border-radius: 0.2rem;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text-secondary);
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.14);
+  font-size: 0.68rem;
+  line-height: 1.2;
+  pointer-events: none;
+}
+
+.mission-map-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.mission-map-legend-line {
+  width: 1.5rem;
+  border-top: 2px solid #1f5f99;
+}
+
+.mission-map-legend-circle {
+  width: 1.05rem;
+  height: 0.72rem;
+  border: 1.5px dashed #b9571f;
+  border-radius: 50%;
+  background: rgba(209, 106, 45, 0.1);
+}
+
+.mission-map-legend-circle--satellite {
+  border-color: var(--accent-primary);
+  border-style: dotted;
+  background: rgba(0, 57, 117, 0.1);
+}
+
+.mission-map-state {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: calc(100% - 2rem);
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgba(31, 42, 51, 0.16);
+  border-radius: 0.22rem;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text-primary);
+  box-shadow: 0 2px 8px rgba(31, 42, 51, 0.12);
+  font-size: 0.82rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+.mission-map-state--error {
+  border-color: #d8a55d;
+  background: #fff7e8;
+  color: #7b4a00;
+}
+
+.mission-map-navigation-controls {
+  position: absolute;
+  z-index: 4;
+  top: 0.65rem;
+  right: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(31, 42, 51, 0.2);
+  border-radius: 0.2rem;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.18);
+}
+
+.mission-map-nav-control {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(31, 42, 51, 0.14);
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-weight: 650;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mission-map-nav-control:last-child {
+  border-bottom: 0;
+}
+
+.mission-map-nav-control:hover:not(:disabled) {
+  background: #f4f7fa;
+}
+
+.mission-map-nav-control:disabled {
+  color: #8b98a4;
+  cursor: not-allowed;
+}
+
+.mission-map-scale-bar {
+  position: absolute;
+  z-index: 4;
+  right: 0.65rem;
+  bottom: 0.6rem;
+  padding: 0.08rem 0.35rem;
+  border: 1.5px solid #334e68;
+  border-top: 0;
+  color: #263f53;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 0.64rem;
+  font-weight: 650;
+  text-align: center;
+  pointer-events: none;
+}
+
+.mission-map-attribution {
+  position: absolute;
+  z-index: 4;
+  left: 0.5rem;
+  bottom: 0.3rem;
+  color: #334e68;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 0 0.25rem;
+  font-size: 0.62rem;
+  pointer-events: none;
 }
 
 .map-sidebar {
@@ -1954,13 +2607,15 @@ body {
   flex-direction: column;
   gap: 0.9rem;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .map-sidebar-section {
   border: 1px solid var(--line-soft);
   border-radius: 0.22rem;
   background: var(--bg-panel);
-  padding: 0.85rem 0.9rem;
+  padding: 0.7rem 0.72rem;
 }
 
 .map-sidebar-section h3,
@@ -1970,6 +2625,95 @@ body {
   letter-spacing: 0.06em;
   margin-bottom: 0.55rem;
   color: var(--text-secondary);
+}
+
+.map-layer-toggle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.map-layer-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.map-layer-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.map-layer-toggle-swatch {
+  width: 0.95rem;
+  height: 0.65rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.map-layer-toggle-swatch--ground-station {
+  border: 1.5px dashed #b9571f;
+  background: rgba(209, 106, 45, 0.1);
+}
+
+.map-layer-toggle-swatch--satellite {
+  border: 1.5px dotted var(--accent-primary);
+  background: rgba(0, 57, 117, 0.1);
+}
+
+.map-layer-toggle-swatch--ground-track {
+  border-radius: 2px;
+  border: none;
+  background: #1f5f99;
+  height: 0.2rem;
+  align-self: center;
+}
+
+.map-layer-window-field {
+  margin-top: 0.2rem;
+}
+
+.map-layer-controls-wrapper {
+  position: relative;
+}
+
+.map-layer-controls-wrapper--disabled .map-layer-toggle-list {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.map-layer-controls-tooltip {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 0.55rem);
+  transform: translateX(-50%);
+  min-width: 16rem;
+  max-width: min(100%, 22rem);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d7b27a;
+  border-radius: 0.18rem;
+  background: #fff7ea;
+  color: #7a4b00;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 18px rgba(31, 42, 51, 0.12);
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 20;
+}
+
+.map-layer-controls-wrapper:hover .map-layer-controls-tooltip {
+  opacity: 1;
+  visibility: visible;
 }
 
 .map-asset-card-list,
@@ -1982,7 +2726,7 @@ body {
 .map-asset-card {
   width: 100%;
   display: block;
-  padding: 0.7rem 0.75rem;
+  padding: 0.58rem 0.62rem;
   border: 1px solid var(--line-soft);
   border-radius: 0.18rem;
   background: #f7f9fb;
@@ -2007,7 +2751,7 @@ body {
   display: flex;
   align-items: center;
   gap: 0.55rem;
-  margin-bottom: 0.55rem;
+  margin-bottom: 0.4rem;
 }
 
 .map-asset-dot {
@@ -2046,8 +2790,8 @@ body {
 .map-asset-card-grid {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.18rem 0.55rem;
-  font-size: 0.78rem;
+  gap: 0.16rem 0.42rem;
+  font-size: 0.74rem;
 }
 
 .map-asset-card-grid dt {
@@ -2133,6 +2877,15 @@ body {
 
 .timeline-panel {
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.timeline-panel > .panel-collapsible-content {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .panel-heading--timeline {
@@ -2182,21 +2935,21 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.8rem;
   flex-wrap: wrap;
-  margin-bottom: 0.9rem;
+  margin-bottom: 0.72rem;
 }
 
 .timeline-toolbar-groups {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 0.44rem;
 }
 
 .timeline-toggle-group {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.36rem;
   flex-wrap: wrap;
 }
 
@@ -2205,7 +2958,7 @@ body {
   border-radius: 0.18rem;
   background: #f4f6f8;
   color: var(--text-secondary);
-  padding: 0.35rem 0.6rem;
+  padding: 0.28rem 0.48rem;
   font: inherit;
   font-size: 0.78rem;
   font-weight: 600;
@@ -2223,20 +2976,114 @@ body {
   color: #fff;
 }
 
+/* Zoom level ("Fit"/"Detail") reads as one segmented control, distinct
+   from the standalone "Now" button next to it — the same visual pattern
+   already used to set the Play button apart from the speed-preset pill. */
+.timeline-zoom-control {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  overflow: hidden;
+}
+
+.timeline-zoom-option {
+  border: none;
+  border-right: 1px solid var(--line-strong);
+  background: #f4f6f8;
+  color: var(--text-secondary);
+  padding: 0.28rem 0.48rem;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.timeline-zoom-option:last-child {
+  border-right: none;
+}
+
+.timeline-zoom-option:hover {
+  background: #ebf1f8;
+  color: var(--text-primary);
+}
+
+.timeline-zoom-option--active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+
+.timeline-play-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.timeline-play-icon {
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+/* Playback speed "Regler": a compact segmented control of discrete speed
+   presets (1x/2x/4x/.../16x) rather than a free-form slider, since play
+   speed only ever takes these fixed steps. */
+.timeline-speed-control {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: #f4f6f8;
+  padding: 0.14rem;
+  gap: 0.1rem;
+}
+
+.timeline-speed-option {
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0.2rem 0.5rem;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.timeline-speed-option:hover {
+  color: var(--text-primary);
+}
+
+.timeline-speed-option--active {
+  background: var(--accent-primary);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(31, 42, 51, 0.28);
+}
+
 .timeline-toolbar-copy,
 .timeline-empty-copy {
   font-size: 0.82rem;
   color: var(--text-secondary);
 }
 
+.timeline-toolbar-copy {
+  flex: 1 1 24rem;
+  min-width: 0;
+  max-width: 44rem;
+  overflow-wrap: anywhere;
+}
+
 .timeline-confirmation {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.8rem;
   flex-wrap: wrap;
-  margin-top: 1rem;
-  padding-top: 0.95rem;
+  margin-top: 0.8rem;
+  padding-top: 0.76rem;
   border-top: 1px solid var(--line-soft);
 }
 
@@ -2343,9 +3190,174 @@ body {
 }
 
 .timeline-scroll {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 0.25rem;
+  scroll-behavior: auto;
+  outline: none;
+}
+
+.timeline-scroll:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(185, 87, 31, 0.34);
+}
+
+.timeline-layout {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.timeline-label-column {
+  min-width: 0;
+  padding-top: 1.9rem;
+  border-right: 1px solid var(--line-soft);
+  background: var(--bg-panel);
+  z-index: 12;
+}
+
+.timeline-scroll-frame {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding-top: 1.9rem;
+  overflow: hidden;
+  contain: inline-size;
+}
+
+.timeline-time-canvas {
+  position: relative;
+  box-sizing: content-box;
+  padding-inline: 50%;
+  background: #f1f4f7;
+}
+
+/* Shown briefly whenever a plain (non-modifier) wheel gesture passes over
+   the timeline, mirroring .mission-map-wheel-hint -- scrolling still just
+   pans the timeline, so this tells the person how to zoom with the wheel
+   instead. */
+.timeline-wheel-hint {
+  position: absolute;
+  z-index: 17;
+  top: 0.15rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(-0.3rem);
+  padding: 0.38rem 0.7rem;
+  border-radius: 0.2rem;
+  background: rgba(31, 42, 51, 0.85);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.28);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.timeline-wheel-hint--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/*
+ * The playhead slider is deliberately separate from `.timeline-scroll`
+ * below it: it always spans the full planning window (never zoomed or
+ * panned), and its thumb is the ONLY way to change the current time shown
+ * on the map. Scrolling or clicking the timeline underneath must never
+ * move it -- see handleTimelinePlayheadPointerDown/Move/Up in App.jsx.
+ */
+.timeline-playhead-slider {
+  position: absolute;
+  z-index: 16;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1.9rem;
+}
+
+.timeline-playhead-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0.2rem;
+  width: 1.1rem;
+  transform: translateX(-50%);
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.timeline-playhead-thumb:active {
+  cursor: grabbing;
+}
+
+.timeline-playhead-handle {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: #b9571f;
+  border: 2px solid #fff8f1;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.35);
+}
+
+.timeline-playhead-thumb:focus-visible .timeline-playhead-handle {
+  box-shadow: 0 0 0 3px rgba(185, 87, 31, 0.35);
+}
+
+.timeline-playhead-label {
+  position: absolute;
+  top: 0.05rem;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  transform: translateX(-50%);
+  padding: 0.24rem 0.42rem;
+  border: 1px solid #b9571f;
+  border-radius: 0.2rem;
+  background: #fff8f1;
+  color: #7a3b18;
+  box-shadow: 0 2px 7px rgba(31, 42, 51, 0.14);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  /* Draggable, like the rest of the thumb: this label is a DOM child of
+     .timeline-playhead-thumb, so pointer events on it bubble up to that
+     div's onPointerDown/Move/Up handlers even though it visually overflows
+     the thumb's own narrow hit box. */
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.timeline-playhead-thumb:active .timeline-playhead-label {
+  cursor: grabbing;
+}
+
+.timeline-playhead-live {
+  padding: 0.1rem 0.3rem;
+  border-radius: 999px;
+  background: #b9571f;
+  color: #fff;
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .timeline-detail-card {
@@ -2437,13 +3449,28 @@ body {
   flex-direction: column;
   justify-content: center;
   gap: 0.15rem;
-  padding: 0.7rem 0.85rem 0.7rem 0;
+  padding: 0.56rem 0.68rem 0.56rem 0;
   border-top: 1px solid var(--line-soft);
+  min-height: var(--timeline-row-height, 3.2rem);
 }
 
-.timeline-label-cell--blank {
-  border-top: none;
-  padding-bottom: 0.35rem;
+.timeline-label-cell--day,
+.timeline-label-cell--axis {
+  min-height: 0;
+  padding: 0;
+  border-top: 0;
+}
+
+.timeline-label-cell--day {
+  height: 1.35rem;
+  border-bottom: 1px solid var(--line-soft);
+  background: #f6f8fb;
+}
+
+.timeline-label-cell--axis {
+  height: 1.6rem;
+  border-bottom: 1px solid var(--line-soft);
+  background: #fbfcfd;
 }
 
 .timeline-track-name {
@@ -2485,7 +3512,7 @@ body {
 }
 
 .timeline-day-row {
-  height: 1.65rem;
+  height: 1.35rem;
   border-bottom: 1px solid var(--line-soft);
   background: #f6f8fb;
 }
@@ -2511,7 +3538,7 @@ body {
 }
 
 .timeline-axis-row {
-  height: 2rem;
+  height: 1.6rem;
   border-bottom: 1px solid var(--line-soft);
   background: #fbfcfd;
 }
@@ -2529,7 +3556,7 @@ body {
 
 .timeline-axis-marker span {
   position: absolute;
-  top: 0.45rem;
+  top: 0.32rem;
   left: 0.35rem;
   font-size: 0.74rem;
   color: var(--text-muted);
@@ -2537,9 +3564,16 @@ body {
 }
 
 .timeline-track-row {
-  min-height: var(--timeline-row-height, 4rem);
+  min-height: var(--timeline-row-height, 3.2rem);
   border-top: 1px solid var(--line-soft);
   background: #fcfdfe;
+}
+
+.planning-views-row .timeline-label-cell:not(.timeline-label-cell--day):not(.timeline-label-cell--axis),
+.planning-views-row .timeline-track-row {
+  box-sizing: border-box;
+  height: max(var(--timeline-row-height, 3.2rem), 6.5rem);
+  min-height: max(var(--timeline-row-height, 3.2rem), 6.5rem);
 }
 
 .timeline-grid-line {
@@ -2566,6 +3600,12 @@ body {
 
 .timeline-now-badge {
   position: absolute;
+  /* The "Now" badge lives inside .timeline-day-row's own now-line copy
+     (each of .timeline-day-row/.timeline-axis-row/.timeline-track-row
+     renders its own now-line/marker-line so the dashed line stays
+     visually continuous across all three -- see the comment above the
+     day-row's now-line JSX), so this offset is just a small inset from
+     that row's own top edge. */
   top: 0.35rem;
   left: 0.35rem;
   padding: 0.14rem 0.35rem;
@@ -2577,17 +3617,44 @@ body {
   white-space: nowrap;
 }
 
+/* Marker showing where the playhead slider's current time falls within the
+   (possibly scrolled/zoomed) timeline content below. Draggable, like the
+   slider thumb above: the element itself is a wider (10px) invisible hit
+   target centered on the visible dashed line (drawn via ::after) so a thin
+   line is still easy to grab -- see handleTimelineMarkerLinePointerDown. */
+.timeline-playhead-marker-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  margin-left: -5px;
+  z-index: 4;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.timeline-playhead-marker-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 0;
+  border-left: 2px dashed #b9571f;
+  pointer-events: none;
+}
+
 .timeline-bar {
   position: absolute;
-  top: 0.7rem;
+  top: 0.56rem;
   min-width: 2.4rem;
-  height: 2.9rem;
+  height: 2.32rem;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: flex-start;
   gap: 0.12rem;
-  padding: 0.34rem 0.45rem;
+  padding: 0.27rem 0.36rem;
   border-radius: 0.2rem;
   border: 1px solid transparent;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
@@ -2680,6 +3747,15 @@ body {
   z-index: 6;
 }
 
+.timeline-bar--playhead-active {
+  border-color: #b9571f;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 0 0 2px rgba(185, 87, 31, 0.24),
+    0 4px 10px rgba(31, 42, 51, 0.12);
+  z-index: 5;
+}
+
 .timeline-bar:hover .timeline-bar-tooltip,
 .timeline-bar:focus-visible .timeline-bar-tooltip {
   opacity: 1;
@@ -2730,6 +3806,10 @@ body {
 
 .panel--fullwidth:last-child {
   min-height: 260px;
+}
+
+.panel--fullwidth:last-child.panel--collapsed {
+  min-height: 0;
 }
 
 .workspace-lock-overlay {
@@ -2843,6 +3923,10 @@ body {
     grid-column: auto;
   }
 
+  .planning-views-row {
+    gap: 0.8rem;
+  }
+
   .overview-summary {
     grid-template-columns: 1fr;
   }
@@ -2876,8 +3960,8 @@ body {
     flex-direction: column;
   }
 
-  .timeline-grid {
-    grid-template-columns: 8.5rem auto !important;
+  .timeline-layout {
+    grid-template-columns: 8.5rem minmax(0, 1fr);
   }
 
   .timeline-label-cell {
@@ -2987,6 +4071,10 @@ body {
     padding: 1rem;
   }
 
+  .planning-views-row {
+    grid-template-columns: 1fr;
+  }
+
   .panel h2 {
     font-size: 0.96rem;
   }
@@ -2999,12 +4087,13 @@ body {
     min-width: 1040px;
   }
 
-  .map-canvas {
-    min-height: 240px;
+  .mission-map-shell {
+    height: 396px;
+    min-height: 308px;
   }
 
-  .timeline-grid {
-    grid-template-columns: 7.4rem auto !important;
+  .timeline-layout {
+    grid-template-columns: 7.4rem minmax(0, 1fr);
   }
 
   .timeline-day-band {
