@@ -308,6 +308,31 @@ export const interpolateTrackPosition = (trackPoints, targetTimestamp) => {
   }
 }
 
+// Clips a propagated ground track down to the points that fall within
+// +/- (windowHours / 2) hours of a center timestamp, so the map can draw a
+// short "current pass" window around the satellite's live position instead
+// of the entire multi-orbit track. Falls back to returning the full track
+// unfiltered when the center timestamp doesn't parse or windowing is
+// disabled (non-finite/non-positive windowHours), so callers can pass this
+// straight through without an extra branch.
+export const clipTrackToTimeWindow = (trackPoints, centerTimestampIso, windowHours) => {
+  const points = trackPoints ?? []
+  const centerTimestampMs = Date.parse(centerTimestampIso)
+
+  if (!Number.isFinite(centerTimestampMs) || !Number.isFinite(windowHours) || windowHours <= 0) {
+    return points
+  }
+
+  const halfWindowMs = (windowHours / 2) * 60 * 60 * 1000
+  const rangeStartMs = centerTimestampMs - halfWindowMs
+  const rangeEndMs = centerTimestampMs + halfWindowMs
+
+  return points.filter((point) => {
+    const timestampMs = Date.parse(point?.timestamp)
+    return Number.isFinite(timestampMs) && timestampMs >= rangeStartMs && timestampMs <= rangeEndMs
+  })
+}
+
 export const calculateElevationFootprintAngle = (
   altitudeMeters,
   minimumElevationDegrees,

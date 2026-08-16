@@ -382,6 +382,16 @@ body {
   box-shadow: none;
 }
 
+.btn-terminate {
+  background: #b3261e;
+  border-color: #b3261e;
+}
+
+.btn-terminate:hover {
+  background: #8f1d17;
+  border-color: #8f1d17;
+}
+
 .results-hint {
   color: var(--text-secondary);
   text-align: center;
@@ -573,6 +583,13 @@ body {
   stroke-linejoin: miter;
 }
 
+.sidebar-collapsed-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+}
+
 .sidebar-collapsed-label {
   color: var(--text-secondary);
   font-size: 0.78rem;
@@ -581,8 +598,29 @@ body {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
   margin-top: 0.5rem;
-  margin-left: auto;
-  margin-right: auto;
+}
+
+.sidebar-collapsed-terminate {
+  writing-mode: horizontal-tb;
+  flex: 0 0 auto;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  border: 1px solid #b3261e;
+  background: #b3261e;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.sidebar-collapsed-terminate:hover {
+  background: #8f1d17;
+  border-color: #8f1d17;
 }
 
 .sidebar-block {
@@ -2169,6 +2207,13 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
+.mission-map-orbit-path--active {
+  stroke: #144a80;
+  stroke-width: 3.2;
+  opacity: 1;
+  filter: drop-shadow(0 0 4px rgba(20, 74, 128, 0.65));
+}
+
 .mission-map-coordinate-grid-line {
   fill: none;
   stroke: #526f89;
@@ -2206,6 +2251,13 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
+.mission-map-elevation-footprint--active {
+  stroke: #e07a2c;
+  stroke-width: 3.4;
+  opacity: 1;
+  filter: drop-shadow(0 0 4px rgba(224, 122, 44, 0.65));
+}
+
 .mission-map-satellite-footprint {
   fill: none;
   stroke: var(--accent-primary);
@@ -2214,6 +2266,12 @@ body {
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
+}
+
+.mission-map-satellite-footprint--active {
+  stroke-width: 3.4;
+  opacity: 1;
+  filter: drop-shadow(0 0 4px rgba(51, 122, 224, 0.65));
 }
 
 .mission-map-marker {
@@ -2597,6 +2655,55 @@ body {
 .map-layer-toggle-swatch--satellite {
   border: 1.5px dotted var(--accent-primary);
   background: rgba(0, 57, 117, 0.1);
+}
+
+.map-layer-toggle-swatch--ground-track {
+  border-radius: 2px;
+  border: none;
+  background: #1f5f99;
+  height: 0.2rem;
+  align-self: center;
+}
+
+.map-layer-window-field {
+  margin-top: 0.2rem;
+}
+
+.map-layer-controls-wrapper {
+  position: relative;
+}
+
+.map-layer-controls-wrapper--disabled .map-layer-toggle-list {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.map-layer-controls-tooltip {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 0.55rem);
+  transform: translateX(-50%);
+  min-width: 16rem;
+  max-width: min(100%, 22rem);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d7b27a;
+  border-radius: 0.18rem;
+  background: #fff7ea;
+  color: #7a4b00;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 18px rgba(31, 42, 51, 0.12);
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 20;
+}
+
+.map-layer-controls-wrapper:hover .map-layer-controls-tooltip {
+  opacity: 1;
+  visibility: visible;
 }
 
 .map-asset-card-list,
@@ -3123,6 +3230,35 @@ body {
   background: #f1f4f7;
 }
 
+/* Shown briefly whenever a plain (non-modifier) wheel gesture passes over
+   the timeline, mirroring .mission-map-wheel-hint -- scrolling still just
+   pans the timeline, so this tells the person how to zoom with the wheel
+   instead. */
+.timeline-wheel-hint {
+  position: absolute;
+  z-index: 17;
+  top: 0.15rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(-0.3rem);
+  padding: 0.38rem 0.7rem;
+  border-radius: 0.2rem;
+  background: rgba(31, 42, 51, 0.85);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.28);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.timeline-wheel-hint--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 /*
  * The playhead slider is deliberately separate from `.timeline-scroll`
  * below it: it always spans the full planning window (never zoomed or
@@ -3192,7 +3328,16 @@ body {
   font-weight: 700;
   line-height: 1.2;
   white-space: nowrap;
-  pointer-events: none;
+  /* Draggable, like the rest of the thumb: this label is a DOM child of
+     .timeline-playhead-thumb, so pointer events on it bubble up to that
+     div's onPointerDown/Move/Up handlers even though it visually overflows
+     the thumb's own narrow hit box. */
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.timeline-playhead-thumb:active .timeline-playhead-label {
+  cursor: grabbing;
 }
 
 .timeline-playhead-live {
@@ -3456,15 +3601,30 @@ body {
   white-space: nowrap;
 }
 
-/* Non-interactive marker showing where the playhead slider's current time
-   falls within the (possibly scrolled/zoomed) timeline content below. */
+/* Marker showing where the playhead slider's current time falls within the
+   (possibly scrolled/zoomed) timeline content below. Draggable, like the
+   slider thumb above: the element itself is a wider (10px) invisible hit
+   target centered on the visible dashed line (drawn via ::after) so a thin
+   line is still easy to grab -- see handleTimelineMarkerLinePointerDown. */
 .timeline-playhead-marker-line {
   position: absolute;
   top: 0;
   bottom: 0;
+  width: 10px;
+  margin-left: -5px;
+  z-index: 4;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.timeline-playhead-marker-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
   width: 0;
   border-left: 2px dashed #b9571f;
-  z-index: 4;
   pointer-events: none;
 }
 

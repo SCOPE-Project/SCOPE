@@ -8,6 +8,9 @@ const TIMELINE_ZOOM_LEVELS = [
   { id: 'fit', label: 'Fit', multiplier: 1 },
   { id: 'detail', label: 'Detail', multiplier: 5.2 },
 ]
+const TIMELINE_WHEEL_ZOOM_STEP = 0.6
+const TIMELINE_MIN_ZOOM_MULTIPLIER = 1
+const TIMELINE_MAX_ZOOM_MULTIPLIER = 24
 const TIMELINE_PLAYBACK_SPEEDS = [1, 2, 4, 8, 16, 32, 64, 128]
 const DEFAULT_PLANNING_TIME_MODE = 'utc'
 // Panel identity is separate from panel position: PANEL_LABELS/panelSlotAssignment
@@ -98,6 +101,9 @@ export default function App() {
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
+  const timelineWheelHintRef = useRef(null)
+  const timelineWheelHintTimeoutRef = useRef(null)
+  const schedulerAbortControllerRef = useRef(null)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
   const [loading, setLoading] = useState(false)
@@ -164,6 +170,8 @@ export default function App() {
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
   const [showGroundStationVisibilityCircles, setShowGroundStationVisibilityCircles] = useState(true)
   const [showSatelliteVisibilityCircles, setShowSatelliteVisibilityCircles] = useState(true)
+  const [showGroundTracks, setShowGroundTracks] = useState(true)
+  const [groundTrackWindowHours, setGroundTrackWindowHours] = useState(6)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
   const [timelineNow, setTimelineNow] = useState(() => Date.now())
   const [timelinePlayheadTime, setTimelinePlayheadTime] = useState(() => Date.now())
@@ -171,6 +179,11 @@ export default function App() {
   const [timelinePlaying, setTimelinePlaying] = useState(false)
   const [timelinePlaybackSpeed, setTimelinePlaybackSpeed] = useState(1)
   const [timelineZoomLevel, setTimelineZoomLevel] = useState('detail')
+  // null means "use the preset multiplier from timelineZoomLevel"; a number
+  // means the person has zoomed continuously with Ctrl/⌘ + scroll (mirroring
+  // the map's Ctrl-gated wheel zoom) and that exact value overrides the
+  // Fit/Detail preset until they click a preset button again.
+  const [timelineCustomZoomMultiplier, setTimelineCustomZoomMultiplier] = useState(null)
   const [timelineLayers, setTimelineLayers] = useState({
     current: true,
     potential: true,
@@ -1391,9 +1404,28 @@ export default function App() {
     }
   }
 
-  const wait = (durationMs) =>
-    new Promise((resolve) => {
-      window.setTimeout(resolve, durationMs)
+  const makeAbortError = () => {
+    const abortError = new Error('Terminated by user.')
+    abortError.name = 'AbortError'
+    return abortError
+  }
+
+  // Signal-aware: lets handleTerminateScheduler interrupt an in-progress
+  // wait immediately instead of only taking effect on the next fetch (which
+  // could otherwise leave "Terminate" feeling unresponsive for up to the
+  // full poll interval).
+  const wait = (durationMs, signal) =>
+    new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(makeAbortError())
+        return
+      }
+
+      const timeoutId = window.setTimeout(resolve, durationMs)
+      signal?.addEventListener('abort', () => {
+        window.clearTimeout(timeoutId)
+        reject(makeAbortError())
+      }, { once: true })
     })
 
   const formatTaskStatusLabel = (status) => {
@@ -1411,9 +1443,13 @@ export default function App() {
     }
   }
 
-  const pollTaskResult = async (taskId, onStatusUpdate) => {
+  const pollTaskResult = async (taskId, onStatusUpdate, signal) => {
     while (true) {
-      const statusResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}`)
+      if (signal?.aborted) {
+        throw makeAbortError()
+      }
+
+      const statusResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}`, { signal })
       if (!statusResponse.ok) {
         throw new Error(`Status polling failed with ${statusResponse.status}`)
       }
@@ -1422,7 +1458,7 @@ export default function App() {
       onStatusUpdate?.(taskStatus)
 
       if (taskStatus.status === 'completed') {
-        const resultResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}/result`)
+        const resultResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}/result`, { signal })
         if (!resultResponse.ok) {
           throw new Error(`Result request failed with ${resultResponse.status}`)
         }
@@ -1434,7 +1470,7 @@ export default function App() {
         throw new Error(taskStatus.message || 'Overpass extraction failed.')
       }
 
-      await wait(1200)
+      await wait(1200, signal)
     }
   }
 
@@ -1514,6 +1550,9 @@ export default function App() {
 
     setActivePlanningWindow(planningWindow)
 
+    const abortController = new AbortController()
+    schedulerAbortControllerRef.current = abortController
+
     try {
       const response = await fetch(`${BACKEND_BASE_URL}/tasks/extract-overpasses`, {
         method: 'POST',
@@ -1526,6 +1565,7 @@ export default function App() {
           start_time: planningWindow.startTime,
           end_time: planningWindow.endTime,
         }),
+        signal: abortController.signal,
       })
 
       if (!response.ok) {
@@ -1554,7 +1594,7 @@ export default function App() {
             ]
           })
         }
-      })
+      }, abortController.signal)
       const scheduleItems = buildCurrentScheduleItems(
         assetSchedules,
         [...selectedSatellites, ...selectedGroundStations],
@@ -1569,17 +1609,31 @@ export default function App() {
       setExtractionStatus('Completed')
       setExtractionProgress(100)
     } catch (err) {
-      console.error(err)
+      const wasTerminated = err?.name === 'AbortError'
+      if (!wasTerminated) {
+        console.error(err)
+      }
       setOverviewRows([])
       setSatelliteTracks({})
       setActivePlanningWindow(null)
       setSchedulerLaunched(false)
       setSidebarCollapsed(false)
-      setExtractionStatus('Failed')
-      setError(err.message || 'Failed to extract overpasses from the backend.')
+      setExtractionStatus(wasTerminated ? 'Terminated' : 'Failed')
+      setError(wasTerminated ? null : (err.message || 'Failed to extract overpasses from the backend.'))
     } finally {
+      schedulerAbortControllerRef.current = null
       setLaunchingScheduler(false)
     }
+  }
+
+  // Repurposes the Launch Communication Scheduler button into a Terminate
+  // button while a launch is in flight (see the JSX below): aborts the
+  // in-progress fetch/poll loop via the shared AbortController, which
+  // throws an AbortError back in handleLaunchScheduler's catch block --
+  // that's what actually resets schedulerLaunched/sidebarCollapsed/etc.,
+  // this just requests the cancellation.
+  const handleTerminateScheduler = () => {
+    schedulerAbortControllerRef.current?.abort()
   }
 
   const handleCalculateTradeOffs = async () => {
@@ -1834,8 +1888,12 @@ export default function App() {
           : 'Satellite position becomes available after propagation.',
       })),
   ]
-  const activeMapAsset =
-    visibleMapAssets.find((asset) => asset.id === activeMapAssetId) ?? visibleMapAssets[0] ?? null
+  // No fallback to visibleMapAssets[0] here: defaulting to "always something
+  // highlighted" would make it impossible to ever reach a genuinely
+  // unhighlighted state -- clicking to deselect (or clicking empty map
+  // space, see MissionMap's background-click handling) needs an actual
+  // "nothing selected" state to land on.
+  const activeMapAsset = visibleMapAssets.find((asset) => asset.id === activeMapAssetId) ?? null
 
   const currentScheduleItems = buildCurrentScheduleItems(
     assetSchedules,
@@ -1860,8 +1918,8 @@ export default function App() {
     currentScheduleItems,
     activePlanningWindow,
   )
-  const timelineZoomMultiplier =
-    TIMELINE_ZOOM_LEVELS.find((level) => level.id === timelineZoomLevel)?.multiplier ?? 1
+  const timelineZoomMultiplier = timelineCustomZoomMultiplier
+    ?? (TIMELINE_ZOOM_LEVELS.find((level) => level.id === timelineZoomLevel)?.multiplier ?? 1)
   const timelineWidthPx = timelineModel
     ? Math.round(timelineModel.widthPx * timelineZoomMultiplier)
     : 0
@@ -1994,6 +2052,128 @@ export default function App() {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
   }
+
+  // The playhead marker line(s) and the datetime label live inside
+  // `.timeline-time-canvas` -- the scrollable/zoomable region -- rather than
+  // the fixed, always-full-width playhead slider above it, so a screen X
+  // position has to be translated back through the canvas's own current
+  // scroll offset and its padding-inline:50% buffer (see the big comment
+  // above getTimelineScrollLeftForRatio) to land on the right ratio.
+  const computeTimelineRatioFromCanvasClientX = (clientX) => {
+    const scrollContainer = timelineScrollRef.current
+    if (!scrollContainer || timelineWidthPx <= 0) {
+      return null
+    }
+
+    const rect = scrollContainer.getBoundingClientRect()
+    const canvasPositionPx = (
+      scrollContainer.scrollLeft
+      + (clientX - rect.left)
+      - (rect.width / 2)
+    )
+    return Math.max(0, Math.min(1, canvasPositionPx / timelineWidthPx))
+  }
+
+  const computeTimelineTimestampFromCanvasClientX = (clientX) => {
+    if (timelineBaseTimestamp === null || timelineDurationMs <= 0) {
+      return null
+    }
+
+    const ratio = computeTimelineRatioFromCanvasClientX(clientX)
+    if (ratio === null) {
+      return null
+    }
+
+    return timelineBaseTimestamp + (ratio * timelineDurationMs)
+  }
+
+  // Lets a person click-and-drag the playhead marker line itself (one is
+  // rendered per visible track row, all representing the same instant) to
+  // move the current time, not just the small slider thumb above. Mirrors
+  // handleTimelinePlayheadPointerDown/Move/Up, just reading position from
+  // the scrollable canvas instead of the fixed slider.
+  const handleTimelineMarkerLinePointerDown = (event) => {
+    if (event.button !== undefined && event.button !== 0) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setTimelineLive(false)
+    setTimelinePlaying(false)
+
+    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
+    if (nextTimestamp !== null) {
+      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+    }
+  }
+
+  const handleTimelineMarkerLinePointerMove = (event) => {
+    if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      return
+    }
+
+    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
+    if (nextTimestamp !== null) {
+      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+    }
+  }
+
+  const handleTimelineMarkerLinePointerUp = (event) => {
+    event.stopPropagation()
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  // Mirrors the map's Ctrl/⌘ + scroll-to-zoom gesture: a plain wheel event
+  // still just pans the timeline (via the browser's native scroll) and
+  // pauses live mode as before, while holding Ctrl/⌘ zooms in/out instead.
+  // The existing "layout changed" effect below already re-centers the
+  // scroll position on the current playhead time whenever timelineWidthPx
+  // changes (the same effect the Fit/Detail preset buttons already drive),
+  // so continuous wheel-zoom gets that same recentering for free.
+  const handleTimelineWheel = (event) => {
+    if (!event.ctrlKey && !event.metaKey) {
+      pauseTimelineLiveMode(event)
+      if (timelineWheelHintRef.current) {
+        timelineWheelHintRef.current.classList.add('timeline-wheel-hint--visible')
+        window.clearTimeout(timelineWheelHintTimeoutRef.current)
+        timelineWheelHintTimeoutRef.current = window.setTimeout(() => {
+          timelineWheelHintRef.current?.classList.remove('timeline-wheel-hint--visible')
+        }, 1400)
+      }
+      return
+    }
+
+    event.preventDefault()
+    const direction = event.deltaY > 0 ? -1 : 1
+    setTimelineCustomZoomMultiplier((current) => {
+      const base = current ?? timelineZoomMultiplier
+      const next = base + (direction * TIMELINE_WHEEL_ZOOM_STEP)
+      return Math.max(
+        TIMELINE_MIN_ZOOM_MULTIPLIER,
+        Math.min(TIMELINE_MAX_ZOOM_MULTIPLIER, next),
+      )
+    })
+  }
+
+  // React's synthetic onWheel is attached as a passive listener by default,
+  // so event.preventDefault() inside handleTimelineWheel would silently
+  // fail there (Ctrl+wheel would zoom AND still scroll the page) -- same
+  // reasoning as MissionMap's handleWheel, which registers a native
+  // { passive: false } listener instead of using JSX onWheel. Re-attached on
+  // every render (cheap) so it always closes over the latest state.
+  useEffect(() => {
+    const scrollContainer = timelineScrollRef.current
+    if (!scrollContainer) {
+      return undefined
+    }
+
+    scrollContainer.addEventListener('wheel', handleTimelineWheel, { passive: false })
+    return () => scrollContainer.removeEventListener('wheel', handleTimelineWheel)
+  })
 
   const handleTimelinePlayheadKeyDown = (event) => {
     if (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null) {
@@ -2328,7 +2508,15 @@ export default function App() {
     }
   }
 
-  const clampBottomTopHeightPx = (value) => Math.min(640, Math.max(140, value))
+  // The upper bound used to be a tight 640px, which capped the Map View
+  // panel well before the sidebar's Visible Assets list could fully unroll
+  // for missions with more than a handful of assets (the sidebar tracks this
+  // height via `maxHeight: mapViewHeightPx` and `overflow-y: auto`, so
+  // raising this cap is what lets a taller drag actually show the whole list
+  // without internal scrolling). Raised generously rather than computed
+  // exactly from asset count, since the panel is a manual, user-driven
+  // resize -- the drag simply has more room to go as far as they need.
+  const clampBottomTopHeightPx = (value) => Math.min(2400, Math.max(140, value))
 
   const handlePlanningRowResizeStart = (event) => {
     event.preventDefault()
@@ -3164,6 +3352,8 @@ export default function App() {
                         timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
                         showGroundStationVisibility={showGroundStationVisibilityCircles}
                         showSatelliteVisibility={showSatelliteVisibilityCircles}
+                        showGroundTracks={showGroundTracks}
+                        groundTrackWindowHours={groundTrackWindowHours}
                       />
                     </Suspense>
                   </MapErrorBoundary>
@@ -3172,49 +3362,97 @@ export default function App() {
                 <aside className="map-sidebar" style={{ maxHeight: `${mapViewHeightPx}px` }}>
                   <div className="map-sidebar-section">
                     <h3>Map Layers</h3>
-                    <div className="map-layer-toggle-list">
-                      <div className="map-layer-toggle">
-                        <span className="map-layer-toggle-label">
-                          <span
-                            className="map-layer-toggle-swatch map-layer-toggle-swatch--ground-station"
-                            aria-hidden="true"
-                          ></span>
-                          Ground station visibility circles
-                        </span>
-                        <label className="demo-switch">
-                          <input
-                            type="checkbox"
-                            checked={showGroundStationVisibilityCircles}
-                            onChange={() =>
-                              setShowGroundStationVisibilityCircles((current) => !current)
-                            }
-                          />
-                          <span className="demo-switch-track" aria-hidden="true">
-                            <span className="demo-switch-thumb"></span>
+                    <div
+                      className={`map-layer-controls-wrapper${
+                        schedulerLaunched ? '' : ' map-layer-controls-wrapper--disabled'
+                      }`}
+                    >
+                      <div className="map-layer-toggle-list">
+                        <div className="map-layer-toggle">
+                          <span className="map-layer-toggle-label">
+                            <span
+                              className="map-layer-toggle-swatch map-layer-toggle-swatch--ground-station"
+                              aria-hidden="true"
+                            ></span>
+                            Ground station visibility circles
                           </span>
+                          <label className="demo-switch">
+                            <input
+                              type="checkbox"
+                              checked={showGroundStationVisibilityCircles}
+                              disabled={!schedulerLaunched}
+                              onChange={() =>
+                                setShowGroundStationVisibilityCircles((current) => !current)
+                              }
+                            />
+                            <span className="demo-switch-track" aria-hidden="true">
+                              <span className="demo-switch-thumb"></span>
+                            </span>
+                          </label>
+                        </div>
+                        <div className="map-layer-toggle">
+                          <span className="map-layer-toggle-label">
+                            <span
+                              className="map-layer-toggle-swatch map-layer-toggle-swatch--satellite"
+                              aria-hidden="true"
+                            ></span>
+                            Satellite visibility circles
+                          </span>
+                          <label className="demo-switch">
+                            <input
+                              type="checkbox"
+                              checked={showSatelliteVisibilityCircles}
+                              disabled={!schedulerLaunched}
+                              onChange={() =>
+                                setShowSatelliteVisibilityCircles((current) => !current)
+                              }
+                            />
+                            <span className="demo-switch-track" aria-hidden="true">
+                              <span className="demo-switch-thumb"></span>
+                            </span>
+                          </label>
+                        </div>
+                        <div className="map-layer-toggle">
+                          <span className="map-layer-toggle-label">
+                            <span
+                              className="map-layer-toggle-swatch map-layer-toggle-swatch--ground-track"
+                              aria-hidden="true"
+                            ></span>
+                            Ground tracks
+                          </span>
+                          <label className="demo-switch">
+                            <input
+                              type="checkbox"
+                              checked={showGroundTracks}
+                              disabled={!schedulerLaunched}
+                              onChange={() => setShowGroundTracks((current) => !current)}
+                            />
+                            <span className="demo-switch-track" aria-hidden="true">
+                              <span className="demo-switch-thumb"></span>
+                            </span>
+                          </label>
+                        </div>
+                        <label className="time-window-field map-layer-window-field">
+                          <span>Ground track window (hours)</span>
+                          <input
+                            className="time-window-input"
+                            type="number"
+                            min="0"
+                            step="0.5"
+                            value={groundTrackWindowHours}
+                            disabled={!schedulerLaunched || !showGroundTracks}
+                            onChange={(event) => {
+                              const parsed = Number(event.target.value)
+                              setGroundTrackWindowHours(Number.isFinite(parsed) ? Math.max(0, parsed) : 0)
+                            }}
+                          />
                         </label>
                       </div>
-                      <div className="map-layer-toggle">
-                        <span className="map-layer-toggle-label">
-                          <span
-                            className="map-layer-toggle-swatch map-layer-toggle-swatch--satellite"
-                            aria-hidden="true"
-                          ></span>
-                          Satellite visibility circles
+                      {!schedulerLaunched && (
+                        <span className="map-layer-controls-tooltip">
+                          Launch the communication scheduler to unlock map layer settings.
                         </span>
-                        <label className="demo-switch">
-                          <input
-                            type="checkbox"
-                            checked={showSatelliteVisibilityCircles}
-                            onChange={() =>
-                              setShowSatelliteVisibilityCircles((current) => !current)
-                            }
-                          />
-                          <span className="demo-switch-track" aria-hidden="true">
-                            <span className="demo-switch-thumb"></span>
-                          </span>
-                        </label>
-                      </div>
+                      )}
                     </div>
                   </div>
 
@@ -3229,7 +3467,9 @@ export default function App() {
                             className={`map-asset-card ${
                               activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
                             }`}
-                            onClick={() => setActiveMapAssetId(asset.id)}
+                            onClick={() => setActiveMapAssetId((current) => (
+                              current === asset.id ? null : asset.id
+                            ))}
                           >
                             <div className="map-asset-card-header">
                               <span className={`map-asset-dot map-asset-dot--${asset.markerType}`}></span>
@@ -3371,8 +3611,11 @@ export default function App() {
                           <button
                             key={level.id}
                             type="button"
-                            className={`timeline-zoom-option ${timelineZoomLevel === level.id ? 'timeline-zoom-option--active' : ''}`}
-                            onClick={() => setTimelineZoomLevel(level.id)}
+                            className={`timeline-zoom-option ${timelineZoomLevel === level.id && timelineCustomZoomMultiplier === null ? 'timeline-zoom-option--active' : ''}`}
+                            onClick={() => {
+                              setTimelineZoomLevel(level.id)
+                              setTimelineCustomZoomMultiplier(null)
+                            }}
                           >
                             {level.label}
                           </button>
@@ -3439,6 +3682,13 @@ export default function App() {
                     </div>
 
                     <div ref={timelineScrollFrameRef} className="timeline-scroll-frame">
+                      <span
+                        ref={timelineWheelHintRef}
+                        className="timeline-wheel-hint"
+                        aria-hidden="true"
+                      >
+                        Hold Ctrl (⌘ on Mac) + scroll to zoom the timeline
+                      </span>
                       <div
                         ref={timelinePlayheadSliderRef}
                         className="timeline-playhead-slider"
@@ -3475,7 +3725,6 @@ export default function App() {
                         tabIndex="0"
                         role="region"
                         aria-label="Interactive planning timeline"
-                        onWheel={pauseTimelineLiveMode}
                         onPointerDown={pauseTimelineLiveMode}
                         onTouchStart={pauseTimelineLiveMode}
                         onKeyDown={handleTimelineKeyDown}
@@ -3543,6 +3792,10 @@ export default function App() {
                                 className="timeline-playhead-marker-line"
                                 aria-hidden="true"
                                 style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                                onPointerDown={handleTimelineMarkerLinePointerDown}
+                                onPointerMove={handleTimelineMarkerLinePointerMove}
+                                onPointerUp={handleTimelineMarkerLinePointerUp}
+                                onPointerCancel={handleTimelineMarkerLinePointerUp}
                               ></div>
                             )}
 
@@ -3695,7 +3948,20 @@ export default function App() {
           </div>
 
           {sidebarCollapsed ? (
-            <div className="sidebar-collapsed-label">Configuration</div>
+            <div className="sidebar-collapsed-content">
+              <span className="sidebar-collapsed-label">Configuration</span>
+              {launchingScheduler && (
+                <button
+                  type="button"
+                  className="sidebar-collapsed-terminate"
+                  onClick={handleTerminateScheduler}
+                  aria-label="Terminate the communication scheduler launch"
+                  title="Terminate"
+                >
+                  <span aria-hidden="true">&#x2715;</span>
+                </button>
+              )}
+            </div>
           ) : (
             <>
               <div className="workspace-sidebar-content">
@@ -3880,13 +4146,24 @@ export default function App() {
               </div>
 
               <div className="sidebar-action-wrapper">
-                <button
-                  className="btn-fetch"
-                  disabled={!launchRequirementsMet || launchingScheduler}
-                  onClick={handleLaunchScheduler}
-                >
-                  {launchingScheduler ? 'Launching...' : 'Launch Communication Scheduler'}
-                </button>
+                {launchingScheduler ? (
+                  <button
+                    type="button"
+                    className="btn-fetch btn-terminate"
+                    onClick={handleTerminateScheduler}
+                  >
+                    Terminate
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-fetch"
+                    disabled={!launchRequirementsMet}
+                    onClick={handleLaunchScheduler}
+                  >
+                    Launch Communication Scheduler
+                  </button>
+                )}
                 {!launchRequirementsMet && !launchingScheduler && (
                   <span className="sidebar-action-tooltip">
                     Enter a valid time window and select at least 1 satellite and 1 ground station first.

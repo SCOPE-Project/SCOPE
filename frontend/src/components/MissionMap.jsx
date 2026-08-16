@@ -3,6 +3,7 @@ import {
   buildGeodesicCircle,
   calculateElevationFootprintAngle,
   clipPolylineToLatitudeRange,
+  clipTrackToTimeWindow,
   computeMeanTrackAltitudeMeters,
   geocentricEarthRadiusMeters,
   normalizeSignedLongitude,
@@ -202,6 +203,8 @@ const renderMapOverlay = (
   activeAssetId,
   showGroundStationVisibility,
   showSatelliteVisibility,
+  showGroundTracks,
+  groundTrackWindowHours,
 ) => {
   if (!overlayGroup || width <= 0 || height <= 0) {
     return
@@ -251,12 +254,9 @@ const renderMapOverlay = (
     }
   })
 
-  const selectedSatelliteNames = assets
-    .filter((asset) => asset.markerType === 'satellite')
-    .map((asset) => asset.name)
-  const selectedSatelliteAssets = assets.filter((asset) => (
-    asset.markerType === 'satellite'
-    && Number.isFinite(asset.altitude)
+  const allSatelliteAssets = assets.filter((asset) => asset.markerType === 'satellite')
+  const selectedSatelliteAssets = allSatelliteAssets.filter((asset) => (
+    Number.isFinite(asset.altitude)
   ))
   const referenceSatellite = (
     selectedSatelliteAssets.find((asset) => asset.id === activeAssetId)
@@ -298,6 +298,7 @@ const renderMapOverlay = (
           footprintAngle,
         )
 
+        const isActiveStation = groundStation.id === activeAssetId
         splitCoordinatesAtAntimeridian(ring)
           .flatMap((segment) => clipPolylineToLatitudeRange(
             segment,
@@ -307,7 +308,9 @@ const renderMapOverlay = (
           .forEach((segment) => {
             appendPath(
               fragment,
-              'mission-map-elevation-footprint',
+              isActiveStation
+                ? 'mission-map-elevation-footprint mission-map-elevation-footprint--active'
+                : 'mission-map-elevation-footprint',
               segment.map(projectPoint),
             )
           })
@@ -344,6 +347,7 @@ const renderMapOverlay = (
         footprintAngle,
       )
 
+      const isActiveSatellite = satellite.id === activeAssetId
       splitCoordinatesAtAntimeridian(ring)
         .flatMap((segment) => clipPolylineToLatitudeRange(
           segment,
@@ -353,29 +357,44 @@ const renderMapOverlay = (
         .forEach((segment) => {
           appendPath(
             fragment,
-            'mission-map-satellite-footprint',
+            isActiveSatellite
+              ? 'mission-map-satellite-footprint mission-map-satellite-footprint--active'
+              : 'mission-map-satellite-footprint',
             segment.map(projectPoint),
           )
         })
     })
   }
 
-  selectedSatelliteNames.forEach((satelliteName) => {
-    const segments = splitTrackAtAntimeridian(satelliteTracks[satelliteName] ?? [])
-      .flatMap((segment) => clipPolylineToLatitudeRange(
-        segment,
-        -MAX_LATITUDE,
-        MAX_LATITUDE,
-      ))
-
-    segments.forEach((segment) => {
-      appendPath(
-        fragment,
-        'mission-map-track-path mission-map-orbit-path',
-        segment.map(projectPoint),
+  if (showGroundTracks) {
+    allSatelliteAssets.forEach((satellite) => {
+      // Center the windowed track on this satellite's own live (interpolated)
+      // position timestamp, so each satellite's "current pass" window tracks
+      // its own playhead position rather than a single shared reference time.
+      const windowedTrack = clipTrackToTimeWindow(
+        satelliteTracks[satellite.name],
+        satellite.timestamp,
+        groundTrackWindowHours,
       )
+      const isActiveSatellite = satellite.id === activeAssetId
+      const segments = splitTrackAtAntimeridian(windowedTrack)
+        .flatMap((segment) => clipPolylineToLatitudeRange(
+          segment,
+          -MAX_LATITUDE,
+          MAX_LATITUDE,
+        ))
+
+      segments.forEach((segment) => {
+        appendPath(
+          fragment,
+          isActiveSatellite
+            ? 'mission-map-track-path mission-map-orbit-path mission-map-orbit-path--active'
+            : 'mission-map-track-path mission-map-orbit-path',
+          segment.map(projectPoint),
+        )
+      })
     })
-  })
+  }
 
   overlayGroup.replaceChildren(fragment)
 }
@@ -476,6 +495,7 @@ const syncAssetMarkers = (
   markers,
   assets,
   activeAssetId,
+  activeAssetIdRef,
   onSelectAssetRef,
   timeMode,
   view,
@@ -504,7 +524,17 @@ const syncAssetMarkers = (
       label.className = 'mission-map-marker-label'
       label.textContent = asset.name
       element.append(label)
-      element.addEventListener('click', () => onSelectAssetRef.current(asset.id))
+      // Clicking an already-selected marker deselects it, mirroring the
+      // Visible Assets sidebar card's toggle behavior, instead of always
+      // forcing a selection. Reads activeAssetIdRef.current (not the
+      // `activeAssetId` parameter above) because this listener is attached
+      // once at marker-creation time -- a captured plain value would go
+      // stale the moment the selection changes after that, the same class
+      // of bug fixed elsewhere in this file via refs.
+      element.addEventListener('click', () => {
+        const nextAssetId = activeAssetIdRef.current === asset.id ? null : asset.id
+        onSelectAssetRef.current(nextAssetId)
+      })
 
       const popupContent = document.createElement('div')
       popupContent.className = 'mission-map-popup-content'
@@ -567,6 +597,8 @@ export default function MissionMap({
   heightPx = 380,
   showGroundStationVisibility = true,
   showSatelliteVisibility = true,
+  showGroundTracks = true,
+  groundTrackWindowHours = 0,
 }) {
   // Below this height there isn't room for the informational overlays
   // (legend, fit-to-selection buttons, coordinate readout, scale bar, grid
@@ -595,10 +627,26 @@ export default function MissionMap({
   const onSelectAssetRef = useRef(onSelectAsset)
   const showGroundStationVisibilityRef = useRef(showGroundStationVisibility)
   const showSatelliteVisibilityRef = useRef(showSatelliteVisibility)
+  const showGroundTracksRef = useRef(showGroundTracks)
+  const groundTrackWindowHoursRef = useRef(groundTrackWindowHours)
   const [mapStatus, setMapStatus] = useState('loading')
   const [worldPaths, setWorldPaths] = useState([])
 
-  useEffect(() => {
+  // This MUST be useLayoutEffect, not useEffect: the render-triggering
+  // effect further below (the one that calls renderFrameRef.current?.() for
+  // assets/satelliteTracks/activeAssetId/timeMode) is itself a
+  // useLayoutEffect, and layout effects always run before ANY passive
+  // effect within the same commit -- regardless of declaration order across
+  // effect types. If this ref-sync stayed a plain useEffect, every
+  // assets/activeAssetId change would render with the PREVIOUS commit's
+  // stale ref values (the passive write hasn't happened yet when the layout
+  // effect reads it), permanently lagging the map one selection change
+  // behind -- exactly the "select something and it doesn't show up until
+  // you deselect it" symptom. Being a layout effect itself and declared
+  // before that other layout effect (React runs a component's layout
+  // effects in declaration order) guarantees the refs are fresh by the time
+  // it reads them.
+  useLayoutEffect(() => {
     assetsRef.current = assets
     satelliteTracksRef.current = satelliteTracks
     activeAssetIdRef.current = activeAssetId
@@ -606,34 +654,34 @@ export default function MissionMap({
     onSelectAssetRef.current = onSelectAsset
     showGroundStationVisibilityRef.current = showGroundStationVisibility
     showSatelliteVisibilityRef.current = showSatelliteVisibility
+    showGroundTracksRef.current = showGroundTracks
+    groundTrackWindowHoursRef.current = groundTrackWindowHours
   }, [
     activeAssetId,
     assets,
+    groundTrackWindowHours,
     onSelectAsset,
     satelliteTracks,
     showGroundStationVisibility,
+    showGroundTracks,
     showSatelliteVisibility,
     timeMode,
   ])
 
-  // The two visibility-circle toggles change rarely (a person flipping a
-  // switch), unlike assets/satelliteTracks/activeAssetId/timeMode which
-  // change up to ~60x/second during timeline playback and need the
-  // synchronous useLayoutEffect below to stay paint-ordered. A plain
-  // useEffect is deliberately used here instead: it runs in the passive
-  // phase, strictly after the ref-sync effect above has already written
-  // showGroundStationVisibilityRef/showSatelliteVisibilityRef for this same
-  // update, so renderFrame is guaranteed to see the new value instead of
-  // possibly reading it one render behind (which is what happens if a
-  // layout effect reads a ref that a passive effect elsewhere is
-  // responsible for updating -- layout effects always fire before passive
-  // effects within the same commit).
+  // The visibility-circle/ground-track toggles change rarely (a person
+  // flipping a switch), unlike assets/satelliteTracks/activeAssetId/timeMode
+  // above which change up to ~60x/second during timeline playback and need
+  // the synchronous useLayoutEffect further below to stay paint-ordered. A
+  // plain useEffect is fine here: layout effects (including the ref-sync one
+  // above) always run before ANY passive effect in the same commit, so by
+  // the time this runs, every *Ref.current is already fresh regardless of
+  // effect declaration order.
   useEffect(() => {
     if (!mapReadyRef.current) {
       return
     }
     renderFrameRef.current?.()
-  }, [showGroundStationVisibility, showSatelliteVisibility])
+  }, [showGroundStationVisibility, showSatelliteVisibility, showGroundTracks, groundTrackWindowHours])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -692,12 +740,15 @@ export default function MissionMap({
         overlayData.activeAssetId,
         showGroundStationVisibilityRef.current,
         showSatelliteVisibilityRef.current,
+        showGroundTracksRef.current,
+        groundTrackWindowHoursRef.current,
       )
       syncAssetMarkers(
         container,
         markers,
         overlayData.assets,
         overlayData.activeAssetId,
+        activeAssetIdRef,
         onSelectAssetRef,
         timeModeRef.current,
         view,
@@ -755,6 +806,13 @@ export default function MissionMap({
     let interactionMode = null
     let panStart = null
     let pinchStart = null
+    // Tracks whether the current single-pointer gesture turns out to be a
+    // genuine click (not a pan/drag) that lands on empty map background
+    // (not a marker or its popup) -- used to clear the selected asset,
+    // mirroring the sidebar card's click-to-toggle. BACKGROUND_CLICK_SLOP_PX
+    // tolerates the tiny pointer jitter real clicks always have.
+    const BACKGROUND_CLICK_SLOP_PX = 4
+    let clickCandidate = null
 
     const pointerCenter = () => {
       const points = [...activePointers.values()]
@@ -814,6 +872,15 @@ export default function MissionMap({
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
       if (activePointers.size === 1) {
         beginInteractionSnapshot()
+        clickCandidate = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          target: event.target,
+        }
+      } else {
+        // A second pointer joined -- this is a pinch, not a click.
+        clickCandidate = null
       }
       recomputeInteractionMode()
     }
@@ -823,6 +890,17 @@ export default function MissionMap({
         return
       }
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+
+      if (
+        clickCandidate
+        && clickCandidate.pointerId === event.pointerId
+        && Math.hypot(
+          event.clientX - clickCandidate.startX,
+          event.clientY - clickCandidate.startY,
+        ) > BACKGROUND_CLICK_SLOP_PX
+      ) {
+        clickCandidate = null
+      }
 
       const { width, height } = getSize()
 
@@ -853,6 +931,26 @@ export default function MissionMap({
       if (!activePointers.has(event.pointerId)) {
         return
       }
+
+      // A genuine click (not a pan/drag, per BACKGROUND_CLICK_SLOP_PX) that
+      // lands on empty map background -- not a marker or its popup, which
+      // handle their own selection -- clears the current selection. This is
+      // the map-side counterpart to clicking an already-active sidebar card
+      // or marker to deselect it. Uses clickCandidate.target (captured at
+      // pointerdown) rather than this event's own target: container.
+      // setPointerCapture() during pointerdown retargets every later
+      // pointer event for that pointerId to the capturing element itself
+      // (container), so event.target here would always be container --
+      // never the marker actually under the cursor.
+      if (
+        clickCandidate
+        && clickCandidate.pointerId === event.pointerId
+        && !clickCandidate.target?.closest?.('.mission-map-marker, .mission-map-asset-popup')
+      ) {
+        onSelectAssetRef.current(null)
+      }
+      clickCandidate = null
+
       activePointers.delete(event.pointerId)
       if (container.hasPointerCapture?.(event.pointerId)) {
         container.releasePointerCapture(event.pointerId)
@@ -1067,9 +1165,12 @@ export default function MissionMap({
     ?? selectedSatelliteAssets[0]
     ?? null
   )
-  const hasPropagatedOrbit = selectedSatelliteAssets.some((asset) => (
-    (satelliteTracks[asset.name] ?? []).length >= 2
-  ))
+  const hasPropagatedOrbit = Boolean(
+    showGroundTracks
+    && selectedSatelliteAssets.some((asset) => (
+      (satelliteTracks[asset.name] ?? []).length >= 2
+    )),
+  )
   const hasElevationFootprint = Boolean(
     showGroundStationVisibility
     && coverageReferenceSatellite

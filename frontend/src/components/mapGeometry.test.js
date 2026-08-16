@@ -5,6 +5,7 @@ import {
   buildGeodesicCircle,
   calculateElevationFootprintAngle,
   clipPolylineToLatitudeRange,
+  clipTrackToTimeWindow,
   computeMeanTrackAltitudeMeters,
   geocentricEarthRadiusMeters,
   interpolateTrackPosition,
@@ -166,6 +167,45 @@ describe('interpolateTrackPosition', () => {
     ], Date.parse('2026-08-10T12:00:00.000Z'))
 
     expect(position.longitude).toBe(-179)
+  })
+})
+
+describe('clipTrackToTimeWindow', () => {
+  const track = [
+    { timestamp: '2026-08-10T09:00:00.000Z', latitude_deg: 1, longitude_deg: 1 },
+    { timestamp: '2026-08-10T11:00:00.000Z', latitude_deg: 2, longitude_deg: 2 },
+    { timestamp: '2026-08-10T12:00:00.000Z', latitude_deg: 3, longitude_deg: 3 },
+    { timestamp: '2026-08-10T13:00:00.000Z', latitude_deg: 4, longitude_deg: 4 },
+    { timestamp: '2026-08-10T15:00:00.000Z', latitude_deg: 5, longitude_deg: 5 },
+  ]
+
+  it('keeps only points within +/- half the window around the center timestamp', () => {
+    const clipped = clipTrackToTimeWindow(track, '2026-08-10T12:00:00.000Z', 4)
+
+    expect(clipped.map((point) => point.latitude_deg)).toEqual([2, 3, 4])
+  })
+
+  it('returns the full track unfiltered when windowHours is non-positive or non-finite', () => {
+    expect(clipTrackToTimeWindow(track, '2026-08-10T12:00:00.000Z', 0)).toBe(track)
+    expect(clipTrackToTimeWindow(track, '2026-08-10T12:00:00.000Z', -2)).toBe(track)
+    expect(clipTrackToTimeWindow(track, '2026-08-10T12:00:00.000Z', NaN)).toBe(track)
+  })
+
+  it('returns the full track unfiltered when the center timestamp does not parse', () => {
+    expect(clipTrackToTimeWindow(track, 'not-a-timestamp', 4)).toBe(track)
+    expect(clipTrackToTimeWindow(track, undefined, 4)).toBe(track)
+  })
+
+  it('excludes track points with unparseable timestamps from a windowed result', () => {
+    const trackWithBadPoint = [...track, { timestamp: 'invalid', latitude_deg: 99, longitude_deg: 99 }]
+    const clipped = clipTrackToTimeWindow(trackWithBadPoint, '2026-08-10T12:00:00.000Z', 100)
+
+    expect(clipped.some((point) => point.latitude_deg === 99)).toBe(false)
+  })
+
+  it('handles an empty or missing track gracefully', () => {
+    expect(clipTrackToTimeWindow([], '2026-08-10T12:00:00.000Z', 4)).toEqual([])
+    expect(clipTrackToTimeWindow(undefined, '2026-08-10T12:00:00.000Z', 4)).toEqual([])
   })
 })
 
