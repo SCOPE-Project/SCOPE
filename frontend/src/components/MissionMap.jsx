@@ -437,21 +437,38 @@ const syncAssetPopupContent = (container, asset, timeMode) => {
   container.replaceChildren(heading, type, details)
 }
 
+// Positions the popup using the marker's last computed screen coordinates
+// (see positionMarkerRecord below) rather than recomputing them from a
+// `view` passed in by the caller. This matters because showPopup/hidePopup
+// (wired up once, when a marker is first created) close over whatever
+// `view` happened to be current at creation time -- if this function were
+// called with that captured `view` again later (e.g. from a mouseenter
+// handler that fires long after the map has been panned/zoomed), it would
+// reposition using stale pan/zoom state. Reading lastX/lastY instead always
+// reflects the most recent real render, which runs on every pan/zoom/resize
+// regardless of whether a popup is open.
+const positionAssetPopup = (markerRecord, containerWidth) => {
+  const { lastX: x, lastY: y } = markerRecord
+  const popupElement = markerRecord.popup.element
+  const showBelow = y < 150
+  popupElement.classList.toggle('mission-map-asset-popup--below', showBelow)
+  const clampedX = Math.max(105, Math.min(containerWidth - 105, x))
+  popupElement.style.left = `${clampedX}px`
+  popupElement.style.top = `${showBelow ? y + 15 : y - 15}px`
+}
+
 const positionMarkerRecord = (markerRecord, view, width, height) => {
   const longitude = normalizeSignedLongitude(markerRecord.asset.longitude)
   const { x, y } = project(longitude, markerRecord.asset.latitude, view, width, height)
   markerRecord.element.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`
+  markerRecord.lastX = x
+  markerRecord.lastY = y
 
   if (!markerRecord.popup.isOpen) {
     return
   }
 
-  const popupElement = markerRecord.popup.element
-  const showBelow = y < 150
-  popupElement.classList.toggle('mission-map-asset-popup--below', showBelow)
-  const clampedX = Math.max(105, Math.min(width - 105, x))
-  popupElement.style.left = `${clampedX}px`
-  popupElement.style.top = `${showBelow ? y + 15 : y - 15}px`
+  positionAssetPopup(markerRecord, width)
 }
 
 const syncAssetMarkers = (
@@ -464,6 +481,7 @@ const syncAssetMarkers = (
   view,
   width,
   height,
+  getSize,
 ) => {
   const visibleAssetIds = new Set(assets.map((asset) => asset.id))
 
@@ -500,7 +518,14 @@ const syncAssetMarkers = (
         syncAssetPopupContent(popupContent, markerRecord.asset, markerRecord.timeMode)
         popup.isOpen = true
         markersContainer.append(popupElement)
-        positionMarkerRecord(markerRecord, view, width, height)
+        // Uses the marker's already-current last-rendered position (see
+        // positionAssetPopup) instead of calling positionMarkerRecord with
+        // this closure's captured `view`/`width`/`height` -- those are
+        // frozen at whatever they were when this marker was first created,
+        // which goes stale (and visibly "teleports" the marker) the moment
+        // the map is panned or zoomed afterward. getSize() is still called
+        // fresh here since container width can change independently of view.
+        positionAssetPopup(markerRecord, getSize().width)
       }
       const hidePopup = () => {
         popup.isOpen = false
@@ -554,7 +579,6 @@ export default function MissionMap({
   const svgRef = useRef(null)
   const worldGroupRef = useRef(null)
   const overlayGroupRef = useRef(null)
-  const coordinateReadoutRef = useRef(null)
   const wheelHintRef = useRef(null)
   const scaleBarRef = useRef(null)
   const viewRef = useRef({ centerLongitude: 0, centerLatitude: 0, zoom: 0 })
@@ -679,6 +703,7 @@ export default function MissionMap({
         view,
         width,
         height,
+        getSize,
       )
 
       if (scaleBarRef.current) {
@@ -794,24 +819,6 @@ export default function MissionMap({
     }
 
     const handlePointerMove = (event) => {
-      if (coordinateReadoutRef.current) {
-        const { width, height } = getSize()
-        const rect = container.getBoundingClientRect()
-        const { longitude, latitude } = unproject(
-          event.clientX - rect.left,
-          event.clientY - rect.top,
-          viewRef.current,
-          width,
-          height,
-        )
-        if (Math.abs(latitude) <= 90.5 && Math.abs(longitude) <= 180.5) {
-          coordinateReadoutRef.current.textContent = [
-            `Lat ${formatCoordinate(Math.max(-90, Math.min(90, latitude)), 'N', 'S', 4)}`,
-            `Lon ${formatCoordinate(Math.max(-180, Math.min(180, longitude)), 'E', 'W', 4)}`,
-          ].join(' · ')
-        }
-      }
-
       if (!activePointers.has(event.pointerId)) {
         return
       }
@@ -854,13 +861,6 @@ export default function MissionMap({
       if (activePointers.size === 0) {
         endInteractionSnapshot()
       }
-    }
-
-    const handlePointerLeaveReadout = (event) => {
-      if (activePointers.size === 0 && coordinateReadoutRef.current) {
-        coordinateReadoutRef.current.textContent = 'Move the crosshair over the map'
-      }
-      handlePointerUp(event)
     }
 
     let wheelHintTimeoutId = null
@@ -925,8 +925,7 @@ export default function MissionMap({
     container.addEventListener('pointerdown', handlePointerDown)
     container.addEventListener('pointermove', handlePointerMove)
     container.addEventListener('pointerup', handlePointerUp)
-    container.addEventListener('pointercancel', handlePointerLeaveReadout)
-    container.addEventListener('mouseleave', handlePointerLeaveReadout)
+    container.addEventListener('pointercancel', handlePointerUp)
     container.addEventListener('wheel', handleWheel, { passive: false })
     container.addEventListener('dblclick', handleDoubleClick)
 
@@ -957,8 +956,7 @@ export default function MissionMap({
       container.removeEventListener('pointerdown', handlePointerDown)
       container.removeEventListener('pointermove', handlePointerMove)
       container.removeEventListener('pointerup', handlePointerUp)
-      container.removeEventListener('pointercancel', handlePointerLeaveReadout)
-      container.removeEventListener('mouseleave', handlePointerLeaveReadout)
+      container.removeEventListener('pointercancel', handlePointerUp)
       container.removeEventListener('wheel', handleWheel)
       container.removeEventListener('dblclick', handleDoubleClick)
       renderFrameRef.current = null
@@ -1105,13 +1103,6 @@ export default function MissionMap({
           <g ref={overlayGroupRef} />
         </svg>
       </div>
-      <output
-        ref={coordinateReadoutRef}
-        className="mission-map-coordinate-readout"
-        aria-label="Map cursor coordinates"
-      >
-        Move the crosshair over the map
-      </output>
       <span
         ref={wheelHintRef}
         className="mission-map-wheel-hint"

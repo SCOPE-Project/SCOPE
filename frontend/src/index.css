@@ -1264,6 +1264,11 @@ body {
   justify-content: space-between;
   gap: 0.8rem;
   margin-bottom: 1rem;
+  cursor: grab;
+}
+
+.panel-heading:active {
+  cursor: grabbing;
 }
 
 .panel-heading--collapsed {
@@ -2102,11 +2107,10 @@ body {
    whichever panel layout is hosting the map — e.g. the draggable divider
    between Map View and Timeline). Below a height threshold the component
    also adds --compact, since the overlays below (legend, fit-to-selection
-   buttons, coordinate readout, scale bar, grid labels) don't have room to
-   render without overlapping in a strip that thin. The zoom/fullscreen
-   controls stay so a person can still expand the map to inspect it in
-   full via the browser Fullscreen API, exempted below via :not(:fullscreen). */
-.mission-map-shell--compact:not(:fullscreen) .mission-map-coordinate-readout,
+   buttons, scale bar, grid labels) don't have room to render without
+   overlapping in a strip that thin. The zoom/fullscreen controls stay so a
+   person can still expand the map to inspect it in full via the browser
+   Fullscreen API, exempted below via :not(:fullscreen). */
 .mission-map-shell--compact:not(:fullscreen) .mission-map-wheel-hint,
 .mission-map-shell--compact:not(:fullscreen) .mission-map-fit-controls,
 .mission-map-shell--compact:not(:fullscreen) .mission-map-legend,
@@ -2329,26 +2333,6 @@ body {
 .mission-map-popup-grid dd {
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
-}
-
-.mission-map-coordinate-readout {
-  position: absolute;
-  z-index: 4;
-  top: 0.65rem;
-  left: 50%;
-  transform: translateX(-50%);
-  min-width: 15rem;
-  padding: 0.38rem 0.65rem;
-  border: 1px solid rgba(31, 42, 51, 0.2);
-  border-radius: 0.2rem;
-  background: rgba(255, 255, 255, 0.95);
-  color: var(--text-primary);
-  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.18);
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 650;
-  text-align: center;
-  pointer-events: none;
 }
 
 /* Shown briefly whenever a plain (non-modifier) wheel gesture passes over

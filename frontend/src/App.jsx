@@ -1143,7 +1143,22 @@ export default function App() {
       : planningEndTimestamp
     const baseTimestamp = planningStartTimestamp ?? (minTimestamp - 30 * 60000)
     const endTimestamp = planningEndTimestamp ?? (maxTimestamp + 30 * 60000)
-    const totalMinutes = Math.max(60, Math.ceil((endTimestamp - baseTimestamp) / 60000))
+    // When an explicit planning window is active, use its exact (possibly
+    // fractional) duration in minutes instead of flooring/padding it. The
+    // playhead slider above the timeline positions itself as a fraction of
+    // planningWindowStartTimestamp/EndTimestamp directly, while the marker
+    // line drawn inside the scrollable canvas positions itself as a
+    // fraction of this totalMinutes value -- if totalMinutes were rounded
+    // up (Math.ceil) or padded out to a 60-minute floor, the two would be
+    // computing their percentage against slightly different spans and the
+    // timestamp label and its line would visibly drift apart, worse the
+    // shorter the actual planning window is. Only fall back to the
+    // floor/rounding when there's no explicit window to derive exact
+    // bounds from (the timeline is instead sized to whatever schedule data
+    // happens to exist, padded with a 30-minute margin).
+    const totalMinutes = (planningStartTimestamp !== null && planningEndTimestamp !== null)
+      ? Math.max(1, (endTimestamp - baseTimestamp) / 60000)
+      : Math.max(60, Math.ceil((endTimestamp - baseTimestamp) / 60000))
     const baseDate = new Date(baseTimestamp)
 
     const mapToTimelineItem = (item) => ({
@@ -1867,6 +1882,32 @@ export default function App() {
     )))
     : null
 
+  // `.timeline-time-canvas` (the scrollable/zoomable element holding the
+  // day bands, ticks, schedule blocks and the playhead marker line) is
+  // deliberately given `padding-inline: 50%` -- half a viewport's width of
+  // blank space on each side -- so the very first/last moments of the
+  // window can still be scrolled into the center of the viewport instead
+  // of being stuck against the hard edge. That padding shifts where a
+  // percentage-based `left` on its children actually lands on screen: a
+  // child at `left: r*100%` renders at
+  //   (canvas's own left edge, post-scroll) + halfViewportWidth + r*timelineWidthPx
+  // The separate playhead slider/thumb above (see the CSS comment on
+  // .timeline-playhead-slider) has no such padding -- it renders at
+  // `frameLeft + r*viewportWidth`. Setting scrollLeft to just
+  // `r*timelineWidthPx` (pinning the target pixel to the viewport's left
+  // edge) ignores that half-viewport padding entirely, so the line and the
+  // thumb would land up to a whole extra half-viewport-width apart. Adding
+  // that same halfViewportWidth term back into scrollLeft, and scaling the
+  // rest by (timelineWidthPx - viewportWidth) so scrollLeft still reaches
+  // exactly its native [0, canvas scroll max] range, is what makes the two
+  // line up at any ratio, zoom level, or viewport size -- not just at the
+  // very start of the window.
+  const getTimelineScrollLeftForRatio = (ratio) => {
+    const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
+    const halfViewportWidthPx = viewportWidthPx / 2
+    return halfViewportWidthPx + (ratio * Math.max(0, timelineWidthPx - viewportWidthPx))
+  }
+
   const getTimelineScrollLeftForTimestamp = (timestamp) => {
     if (timelineBaseTimestamp === null || timelineDurationMs <= 0 || timelineWidthPx <= 0) {
       return 0
@@ -1876,7 +1917,7 @@ export default function App() {
       0,
       Math.min(1, (timestamp - timelineBaseTimestamp) / timelineDurationMs),
     )
-    return ratio * timelineWidthPx
+    return getTimelineScrollLeftForRatio(ratio)
   }
 
   const scrollTimelineToTimestamp = (timestamp, behavior = 'auto') => {
@@ -1998,13 +2039,6 @@ export default function App() {
     scrollTimelineToTimestamp(nextTimestamp)
   }
 
-  const handleTimelineNow = () => {
-    setTimelinePlayheadTime(clampToPlanningWindow(timelineNow))
-    setTimelineLive(true)
-    setTimelinePlaying(false)
-    scrollTimelineToTimestamp(clampToPlanningWindow(timelineNow), 'smooth')
-  }
-
   // Plays the timeline forward from wherever the playhead currently sits, at
   // `timelinePlaybackSpeed`x real time -- independent of the actual wall-clock
   // "now" (unlike Live/"Now" mode, which breaks/stalls when the planning
@@ -2062,7 +2096,12 @@ export default function App() {
           (timelinePlayheadTimestamp - timelineBaseTimestamp) / timelineDurationMs,
         ),
       )
-      scrollContainer.scrollTo({ left: ratio * timelineWidthPx, behavior: 'auto' })
+      const halfViewportWidthPx = scrollContainer.clientWidth / 2
+      const scrollableWidthPx = Math.max(0, timelineWidthPx - scrollContainer.clientWidth)
+      scrollContainer.scrollTo({
+        left: halfViewportWidthPx + (ratio * scrollableWidthPx),
+        behavior: 'auto',
+      })
     })
 
     return () => window.cancelAnimationFrame(animationFrameId)
@@ -2106,8 +2145,10 @@ export default function App() {
         ),
       )
       timelineProgrammaticScrollRef.current = true
+      const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
+      const scrollableWidthPx = Math.max(0, timelineWidthPx - viewportWidthPx)
       timelineScrollRef.current?.scrollTo({
-        left: ratio * timelineWidthPx,
+        left: (viewportWidthPx / 2) + (ratio * scrollableWidthPx),
         behavior: 'auto',
       })
       window.requestAnimationFrame(() => {
@@ -2463,6 +2504,20 @@ export default function App() {
     </button>
   )
 
+  // The small handle icon above is still the clearest visual affordance,
+  // but requiring a precise grab on that ~27px icon made panels feel only
+  // partly movable. Spreading this onto the whole heading row lets a
+  // person pick the panel up from anywhere across its title/status area
+  // too, the way dragging a browser tab or an OS window by its title bar
+  // works -- nested buttons (collapse toggle, badges) keep working
+  // normally since a plain click never crosses HTML5's drag-start
+  // threshold.
+  const getPanelHeadingDragProps = (panelId) => ({
+    draggable: true,
+    onDragStart: handlePanelDragStart(panelId),
+    onDragEnd: handlePanelDragEnd,
+  })
+
   const renderTradeOffPill = (tradeOffId, colorIndex) => (
     <span
       className="tradeoff-id-pill"
@@ -2710,7 +2765,10 @@ export default function App() {
             className={`panel overview-panel ${expandedSections.overview ? '' : 'panel--collapsed'}${getPanelDragClassName('overview')}`}
             {...getPanelDropZoneProps('overview')}
           >
-            <div className={`panel-heading ${expandedSections.overview ? '' : 'panel-heading--collapsed'}`}>
+            <div
+              className={`panel-heading ${expandedSections.overview ? '' : 'panel-heading--collapsed'}`}
+              {...getPanelHeadingDragProps('overview')}
+            >
               <div className="panel-heading-lead">
                 {renderPanelDragHandle('overview')}
               <div className="panel-heading-title">
@@ -2928,7 +2986,10 @@ export default function App() {
             className={`panel tradeoff-panel ${expandedSections.tradeOff ? '' : 'panel--collapsed'}${getPanelDragClassName('tradeOff')}`}
             {...getPanelDropZoneProps('tradeOff')}
           >
-            <div className={`panel-heading ${expandedSections.tradeOff ? '' : 'panel-heading--collapsed'}`}>
+            <div
+              className={`panel-heading ${expandedSections.tradeOff ? '' : 'panel-heading--collapsed'}`}
+              {...getPanelHeadingDragProps('tradeOff')}
+            >
               <div className="panel-heading-lead">
                 {renderPanelDragHandle('tradeOff')}
               <div className="panel-heading-title">
@@ -3056,7 +3117,10 @@ export default function App() {
             className={`panel map-panel${getPanelDragClassName('mapView')}`}
             {...getPanelDropZoneProps('mapView')}
           >
-            <div className="panel-heading panel-heading--map">
+            <div
+              className="panel-heading panel-heading--map"
+              {...getPanelHeadingDragProps('mapView')}
+            >
               <div className="panel-heading-lead">
                 {renderPanelDragHandle('mapView')}
               <div className="panel-heading-title">
@@ -3229,7 +3293,10 @@ export default function App() {
             className={`panel timeline-panel ${expandedSections.timeline ? '' : 'panel--collapsed'}${getPanelDragClassName('timeline')}`}
             {...getPanelDropZoneProps('timeline')}
           >
-            <div className={`panel-heading panel-heading--timeline ${expandedSections.timeline ? '' : 'panel-heading--collapsed'}`}>
+            <div
+              className={`panel-heading panel-heading--timeline ${expandedSections.timeline ? '' : 'panel-heading--collapsed'}`}
+              {...getPanelHeadingDragProps('timeline')}
+            >
               <div className="panel-heading-lead">
                 {renderPanelDragHandle('timeline')}
               <div className="panel-heading-title">
@@ -3311,14 +3378,6 @@ export default function App() {
                           </button>
                         ))}
                       </div>
-                      <button
-                        type="button"
-                        className={`timeline-toggle ${timelineLive ? 'timeline-toggle--active' : ''}`}
-                        onClick={handleTimelineNow}
-                        aria-pressed={timelineLive}
-                      >
-                        Now
-                      </button>
                     </div>
                     <div className="timeline-toggle-group" role="group" aria-label="Timeline playback">
                       <button
