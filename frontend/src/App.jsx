@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { Component, lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { interpolateTrackPosition } from './components/mapGeometry.js'
 
 const BACKEND_BASE_URL = 'http://localhost:8000'
@@ -8,7 +8,17 @@ const TIMELINE_ZOOM_LEVELS = [
   { id: 'fit', label: 'Fit', multiplier: 1 },
   { id: 'detail', label: 'Detail', multiplier: 5.2 },
 ]
+const TIMELINE_PLAYBACK_SPEEDS = [1, 2, 4, 8, 16, 32, 64, 128]
 const DEFAULT_PLANNING_TIME_MODE = 'utc'
+// Panel identity is separate from panel position: PANEL_LABELS/panelSlotAssignment
+// let every panel (Overview, Trade-Off, Map View, Timeline) be dragged into any of
+// the 4 layout slots, while collapse state etc. stays keyed to the panel itself.
+const PANEL_LABELS = {
+  overview: 'Overview',
+  tradeOff: 'Trade-Off',
+  mapView: 'Map View',
+  timeline: 'Timeline',
+}
 
 class MapErrorBoundary extends Component {
   state = { error: null }
@@ -77,12 +87,16 @@ const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
 
 export default function App() {
   const splitPanelsRef = useRef(null)
+  const planningRowResizeDragCleanupRef = useRef(null)
   const splitDragCleanupRef = useRef(null)
   const timelineScrollRef = useRef(null)
   const timelineScrollFrameRef = useRef(null)
-  const timelineScrollRafRef = useRef(null)
   const timelineLayoutKeyRef = useRef('')
   const timelineProgrammaticScrollRef = useRef(false)
+  const timelinePlayheadSliderRef = useRef(null)
+  const timelinePlaybackRafRef = useRef(null)
+  const timelinePlaybackFrameTimestampRef = useRef(null)
+  const timelinePlayheadTimeRef = useRef(null)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
   const [loading, setLoading] = useState(false)
@@ -117,6 +131,26 @@ export default function App() {
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
   const [overviewPanelWidth, setOverviewPanelWidth] = useState(58)
+  // Which panel currently occupies which of the 4 layout slots. The top row
+  // (topLeft/topRight) sits side by side with a width-resizer between them;
+  // the bottom row (bottomTop/bottomBottom) is stacked with a height-resizer
+  // between them. Dragging a panel's handle onto another panel swaps their
+  // slots, regardless of row — this does not persist across reloads.
+  const [panelSlotAssignment, setPanelSlotAssignment] = useState({
+    topLeft: 'overview',
+    topRight: 'tradeOff',
+    bottomTop: 'mapView',
+    bottomBottom: 'timeline',
+  })
+  const [draggedPanelId, setDraggedPanelId] = useState(null)
+  const [dragOverPanelId, setDragOverPanelId] = useState(null)
+  // Height (px) of the bottomTop slot -- this is the whole panel's grid
+  // row (heading + padding + content), not just its content area; the
+  // bottomBottom slot always flows naturally beneath it. Defaults to a
+  // thin strip so Map View stays a compact overview by default when it
+  // occupies that slot (160px of row - ~88px of heading/padding chrome
+  // leaves roughly the same thin map strip as before this was resizable).
+  const [bottomTopHeightPx, setBottomTopHeightPx] = useState(160)
   const [confirmingSchedule, setConfirmingSchedule] = useState(false)
   const [confirmationProgress, setConfirmationProgress] = useState(0)
   const [confirmationStep, setConfirmationStep] = useState('')
@@ -127,6 +161,8 @@ export default function App() {
   const [timelineNow, setTimelineNow] = useState(() => Date.now())
   const [timelinePlayheadTime, setTimelinePlayheadTime] = useState(() => Date.now())
   const [timelineLive, setTimelineLive] = useState(true)
+  const [timelinePlaying, setTimelinePlaying] = useState(false)
+  const [timelinePlaybackSpeed, setTimelinePlaybackSpeed] = useState(1)
   const [timelineZoomLevel, setTimelineZoomLevel] = useState('detail')
   const [timelineLayers, setTimelineLayers] = useState({
     current: true,
@@ -270,8 +306,8 @@ export default function App() {
     if (splitDragCleanupRef.current) {
       splitDragCleanupRef.current()
     }
-    if (timelineScrollRafRef.current !== null) {
-      window.cancelAnimationFrame(timelineScrollRafRef.current)
+    if (planningRowResizeDragCleanupRef.current) {
+      planningRowResizeDragCleanupRef.current()
     }
   }, [])
 
@@ -1209,6 +1245,8 @@ export default function App() {
     setTimelineNow(Date.now())
     setTimelinePlayheadTime(Date.now())
     setTimelineLive(true)
+    setTimelinePlaying(false)
+    setTimelinePlaybackSpeed(1)
     setTimelineZoomLevel('detail')
     setTimelineLayers({
       current: true,
@@ -1446,6 +1484,7 @@ export default function App() {
     setTimelineNow(schedulerLaunchTime)
     setTimelinePlayheadTime(schedulerLaunchTime)
     setTimelineLive(true)
+    setTimelinePlaying(false)
     setSidebarCollapsed(true)
 
     setActivePlanningWindow(planningWindow)
@@ -1804,6 +1843,19 @@ export default function App() {
   const visibleTimelineTracks = timelineModel?.tracks.filter((track) => timelineLayers[track.id]) ?? []
   const timelineBaseTimestamp = timelineModel?.baseDate.getTime() ?? null
   const timelineDurationMs = timelineModel ? timelineModel.totalMinutes * 60000 : 0
+  const timelinePlayheadOffsetMinutes = timelineBaseTimestamp !== null
+    ? (timelinePlayheadTimestamp - timelineBaseTimestamp) / 60000
+    : null
+  const timelinePlayheadWindowRatio = (
+    planningWindowStartTimestamp !== null
+    && planningWindowEndTimestamp !== null
+    && planningWindowEndTimestamp > planningWindowStartTimestamp
+  )
+    ? Math.max(0, Math.min(1, (
+      (timelinePlayheadTimestamp - planningWindowStartTimestamp)
+      / (planningWindowEndTimestamp - planningWindowStartTimestamp)
+    )))
+    : null
 
   const getTimelineScrollLeftForTimestamp = (timestamp) => {
     if (timelineBaseTimestamp === null || timelineDurationMs <= 0 || timelineWidthPx <= 0) {
@@ -1828,58 +1880,92 @@ export default function App() {
     })
   }
 
-  const handleTimelineScroll = () => {
-    if (timelineProgrammaticScrollRef.current) {
-      return
-    }
-
-    if (timelineScrollRafRef.current !== null) {
-      window.cancelAnimationFrame(timelineScrollRafRef.current)
-    }
-
-    timelineScrollRafRef.current = window.requestAnimationFrame(() => {
-      timelineScrollRafRef.current = null
-      const scrollContainer = timelineScrollRef.current
-      if (
-        !scrollContainer
-        || timelineBaseTimestamp === null
-        || timelineDurationMs <= 0
-        || timelineWidthPx <= 0
-      ) {
-        return
-      }
-
-      const ratio = Math.max(0, Math.min(1, scrollContainer.scrollLeft / timelineWidthPx))
-      setTimelinePlayheadTime(timelineBaseTimestamp + (ratio * timelineDurationMs))
-    })
-  }
-
   const pauseTimelineLiveMode = (event) => {
     if (!event?.target?.closest?.('button')) {
       setTimelineLive(false)
     }
   }
 
-  const handleTimelineBackgroundClick = (event) => {
-    if (event.target.closest('button')) {
+  // The playhead slider is a separate control from the scrollable timeline
+  // below it: scrolling/panning the timeline (`.timeline-scroll`) never
+  // changes the current time value, and clicking the timeline background no
+  // longer does either. Only grabbing and dragging this slider's thumb (or
+  // using the keyboard while it's focused) moves the current time.
+  const computeTimelineTimestampFromSliderClientX = (clientX) => {
+    const slider = timelinePlayheadSliderRef.current
+    if (
+      !slider
+      || planningWindowStartTimestamp === null
+      || planningWindowEndTimestamp === null
+    ) {
+      return null
+    }
+
+    const rect = slider.getBoundingClientRect()
+    if (rect.width <= 0) {
+      return null
+    }
+
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+    return planningWindowStartTimestamp
+      + (ratio * (planningWindowEndTimestamp - planningWindowStartTimestamp))
+  }
+
+  const handleTimelinePlayheadPointerDown = (event) => {
+    if (event.button !== undefined && event.button !== 0) {
       return
     }
 
-    const scrollContainer = timelineScrollRef.current
-    if (!scrollContainer) {
-      return
-    }
-
-    const rect = scrollContainer.getBoundingClientRect()
-    if (event.clientY >= rect.bottom - 18) {
-      return
-    }
-
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
     setTimelineLive(false)
-    scrollContainer.scrollTo({
-      left: scrollContainer.scrollLeft + event.clientX - rect.left - (rect.width / 2),
-      behavior: 'smooth',
-    })
+    setTimelinePlaying(false)
+
+    const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
+    if (nextTimestamp !== null) {
+      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+    }
+  }
+
+  const handleTimelinePlayheadPointerMove = (event) => {
+    if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      return
+    }
+
+    const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
+    if (nextTimestamp !== null) {
+      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+    }
+  }
+
+  const handleTimelinePlayheadPointerUp = (event) => {
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const handleTimelinePlayheadKeyDown = (event) => {
+    if (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null) {
+      return
+    }
+
+    let nextTimestamp
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const direction = event.key === 'ArrowLeft' ? -1 : 1
+      const stepMilliseconds = event.shiftKey ? 60000 : 10000
+      nextTimestamp = timelinePlayheadTimestamp + (direction * stepMilliseconds)
+    } else if (event.key === 'Home') {
+      nextTimestamp = planningWindowStartTimestamp
+    } else if (event.key === 'End') {
+      nextTimestamp = planningWindowEndTimestamp
+    } else {
+      return
+    }
+
+    event.preventDefault()
+    setTimelineLive(false)
+    setTimelinePlaying(false)
+    setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
   }
 
   const handleTimelineKeyDown = (event) => {
@@ -1897,6 +1983,7 @@ export default function App() {
       timelinePlayheadTimestamp + (direction * stepMilliseconds),
     )
     setTimelineLive(false)
+    setTimelinePlaying(false)
     setTimelinePlayheadTime(nextTimestamp)
     scrollTimelineToTimestamp(nextTimestamp)
   }
@@ -1904,7 +1991,30 @@ export default function App() {
   const handleTimelineNow = () => {
     setTimelinePlayheadTime(clampToPlanningWindow(timelineNow))
     setTimelineLive(true)
+    setTimelinePlaying(false)
     scrollTimelineToTimestamp(clampToPlanningWindow(timelineNow), 'smooth')
+  }
+
+  // Plays the timeline forward from wherever the playhead currently sits, at
+  // `timelinePlaybackSpeed`x real time -- independent of the actual wall-clock
+  // "now" (unlike Live/"Now" mode, which breaks/stalls when the planning
+  // window doesn't contain the real current time). See the playback useEffect
+  // below for the actual per-frame stepping.
+  const handleTimelinePlaybackToggle = () => {
+    if (timelinePlaying) {
+      setTimelinePlaying(false)
+      return
+    }
+
+    if (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null) {
+      return
+    }
+
+    setTimelineLive(false)
+    if (timelinePlayheadTimestamp >= planningWindowEndTimestamp) {
+      setTimelinePlayheadTime(planningWindowStartTimestamp)
+    }
+    setTimelinePlaying(true)
   }
 
   const isTimelineItemAtPlayhead = (item) => {
@@ -2005,6 +2115,83 @@ export default function App() {
     visibleTimelineTracks.length,
   ])
 
+  // Keep a ref mirror of the (clamped) playhead timestamp so the playback
+  // loop below can always read the latest value without needing to restart
+  // its requestAnimationFrame loop on every tick.
+  //
+  // This MUST be useLayoutEffect, not useEffect: the playback loop also
+  // writes this same ref directly, synchronously, right before scheduling
+  // its next animation frame. useEffect's passive-effect flush is
+  // deferred/async and isn't guaranteed to run before the next
+  // requestAnimationFrame callback fires, so a stale commit's effect could
+  // overwrite the ref with an older value AFTER a newer frame already
+  // advanced it -- the playback loop would then briefly compute from that
+  // stale value before self-correcting on the next tick, which is exactly
+  // what showed up as the satellite marker occasionally jumping backward
+  // ("vibrating") during fast playback. useLayoutEffect runs synchronously
+  // right after each commit, before paint and before any later
+  // requestAnimationFrame callback can run, which closes that race.
+  useLayoutEffect(() => {
+    timelinePlayheadTimeRef.current = timelinePlayheadTimestamp
+  }, [timelinePlayheadTimestamp])
+
+  // Drives the "Play" button: advances the playhead forward at
+  // `timelinePlaybackSpeed`x real elapsed time, starting from wherever the
+  // playhead currently is. Unlike Live/"Now" mode this never depends on the
+  // actual wall-clock time, so it keeps animating smoothly even when the
+  // planning window doesn't contain the real current time.
+  useEffect(() => {
+    if (!timelinePlaying) {
+      timelinePlaybackFrameTimestampRef.current = null
+      return undefined
+    }
+
+    const step = (frameTimestamp) => {
+      if (timelinePlaybackFrameTimestampRef.current === null) {
+        timelinePlaybackFrameTimestampRef.current = frameTimestamp
+      }
+
+      const elapsedMs = frameTimestamp - timelinePlaybackFrameTimestampRef.current
+      timelinePlaybackFrameTimestampRef.current = frameTimestamp
+
+      const rawNextTimestamp =
+        (timelinePlayheadTimeRef.current ?? planningWindowStartTimestamp ?? 0)
+        + (elapsedMs * timelinePlaybackSpeed)
+      // Inlined clampToPlanningWindow: only planningWindow{Start,End}Timestamp
+      // (already in the dependency list below) are needed here, so the loop
+      // doesn't have to restart every render to satisfy exhaustive-deps.
+      const clampedNextTimestamp =
+        (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null)
+          ? rawNextTimestamp
+          : Math.max(planningWindowStartTimestamp, Math.min(planningWindowEndTimestamp, rawNextTimestamp))
+
+      timelinePlayheadTimeRef.current = clampedNextTimestamp
+      setTimelinePlayheadTime(clampedNextTimestamp)
+
+      if (planningWindowEndTimestamp !== null && rawNextTimestamp >= planningWindowEndTimestamp) {
+        setTimelinePlaying(false)
+        return
+      }
+
+      timelinePlaybackRafRef.current = window.requestAnimationFrame(step)
+    }
+
+    timelinePlaybackRafRef.current = window.requestAnimationFrame(step)
+
+    return () => {
+      if (timelinePlaybackRafRef.current !== null) {
+        window.cancelAnimationFrame(timelinePlaybackRafRef.current)
+        timelinePlaybackRafRef.current = null
+      }
+      timelinePlaybackFrameTimestampRef.current = null
+    }
+  }, [
+    timelinePlaying,
+    timelinePlaybackSpeed,
+    planningWindowStartTimestamp,
+    planningWindowEndTimestamp,
+  ])
+
   const activeTradeOffCard = tradeOffCards[activeTradeOffCardIndex] ?? null
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-label={message}>
@@ -2089,6 +2276,140 @@ export default function App() {
       setOverviewPanelWidth((current) => clampOverviewPanelWidth(current + 4))
     }
   }
+
+  const clampBottomTopHeightPx = (value) => Math.min(640, Math.max(140, value))
+
+  const handlePlanningRowResizeStart = (event) => {
+    event.preventDefault()
+
+    const startClientY = event.clientY
+    const startHeight = bottomTopHeightPx
+
+    const handlePointerMove = (moveEvent) => {
+      setBottomTopHeightPx(clampBottomTopHeightPx(startHeight + (moveEvent.clientY - startClientY)))
+    }
+
+    const stopResize = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopResize)
+      window.removeEventListener('pointercancel', stopResize)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      planningRowResizeDragCleanupRef.current = null
+    }
+
+    planningRowResizeDragCleanupRef.current = stopResize
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopResize)
+    window.addEventListener('pointercancel', stopResize)
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  const handlePlanningRowResizeKeyDown = (event) => {
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setBottomTopHeightPx((current) => clampBottomTopHeightPx(current - 16))
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setBottomTopHeightPx((current) => clampBottomTopHeightPx(current + 16))
+    }
+  }
+
+  // bottomTopHeightPx is the whole panel row (heading + padding included);
+  // the map canvas itself only gets what's left after that chrome, so it
+  // needs to subtract the same overhead the panel heading/padding takes up.
+  // Map View defaults to a tall, comfortable height whenever it isn't the
+  // panel occupying the resizable bottomTop slot (e.g. it got dragged into
+  // the top row, or swapped to bottomBottom), since there's no divider
+  // controlling its size in those positions.
+  const MAP_PANEL_CHROME_OVERHEAD_PX = 88
+  const mapViewHeightPx = panelSlotAssignment.bottomTop === 'mapView'
+    ? Math.max(40, bottomTopHeightPx - MAP_PANEL_CHROME_OVERHEAD_PX)
+    : 380
+
+  const handlePanelDragStart = (panelId) => (event) => {
+    setDraggedPanelId(panelId)
+    event.dataTransfer.effectAllowed = 'move'
+    try {
+      event.dataTransfer.setData('text/plain', panelId)
+    } catch {
+      // Some browsers restrict dataTransfer access mid-drag; draggedPanelId
+      // state is already the source of truth for the drop handler below.
+    }
+  }
+
+  const handlePanelDragEnd = () => {
+    setDraggedPanelId(null)
+    setDragOverPanelId(null)
+  }
+
+  const handlePanelDragOver = (panelId) => (event) => {
+    if (!draggedPanelId || draggedPanelId === panelId) {
+      return
+    }
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    setDragOverPanelId((current) => (current === panelId ? current : panelId))
+  }
+
+  const handlePanelDragLeave = (panelId) => () => {
+    setDragOverPanelId((current) => (current === panelId ? null : current))
+  }
+
+  const handlePanelDrop = (targetPanelId) => (event) => {
+    event.preventDefault()
+    const sourcePanelId = draggedPanelId
+    setDraggedPanelId(null)
+    setDragOverPanelId(null)
+
+    if (!sourcePanelId || sourcePanelId === targetPanelId) {
+      return
+    }
+
+    setPanelSlotAssignment((current) => {
+      const sourceSlot = Object.keys(current).find((slot) => current[slot] === sourcePanelId)
+      const targetSlot = Object.keys(current).find((slot) => current[slot] === targetPanelId)
+
+      if (!sourceSlot || !targetSlot) {
+        return current
+      }
+
+      return {
+        ...current,
+        [sourceSlot]: targetPanelId,
+        [targetSlot]: sourcePanelId,
+      }
+    })
+  }
+
+  const getPanelDropZoneProps = (panelId) => ({
+    onDragOver: handlePanelDragOver(panelId),
+    onDragLeave: handlePanelDragLeave(panelId),
+    onDrop: handlePanelDrop(panelId),
+  })
+
+  const getPanelDragClassName = (panelId) => (
+    `${draggedPanelId === panelId ? ' panel--dragging' : ''}`
+    + `${dragOverPanelId === panelId && draggedPanelId && draggedPanelId !== panelId ? ' panel--drag-over' : ''}`
+  )
+
+  const renderPanelDragHandle = (panelId) => (
+    <button
+      type="button"
+      className="panel-drag-handle"
+      draggable="true"
+      onDragStart={handlePanelDragStart(panelId)}
+      onDragEnd={handlePanelDragEnd}
+      aria-label={`Drag to move the ${PANEL_LABELS[panelId]} panel`}
+      title="Drag to move panel"
+    >
+      <span className="panel-drag-handle-icon" aria-hidden="true"></span>
+    </button>
+  )
 
   const renderTradeOffPill = (tradeOffId, colorIndex) => (
     <span
@@ -2332,6 +2653,860 @@ export default function App() {
     )
   }
 
+  const overviewPanelNode = (
+          <section
+            className={`panel overview-panel ${expandedSections.overview ? '' : 'panel--collapsed'}${getPanelDragClassName('overview')}`}
+            {...getPanelDropZoneProps('overview')}
+          >
+            <div className={`panel-heading ${expandedSections.overview ? '' : 'panel-heading--collapsed'}`}>
+              <div className="panel-heading-lead">
+                {renderPanelDragHandle('overview')}
+              <div className="panel-heading-title">
+                <h2>Overview</h2>
+              </div>
+              </div>
+              <div className="panel-heading-actions">
+                <div
+                  className={`overview-inline-status ${
+                    extractionStatus === 'Completed'
+                      ? 'overview-inline-status--online'
+                      : extractionStatus === 'Running' || extractionStatus === 'Queued'
+                        ? 'overview-inline-status--checking'
+                        : 'overview-inline-status--offline'
+                  }`}
+                >
+                  {schedulerLaunched && (
+                    <div className="overview-count-inline">
+                      <span className="overview-status-label">Overpasses</span>
+                      <span className="overview-count-value">{overviewRows.length}</span>
+                    </div>
+                  )}
+                  <div className="overview-status-block">
+                    <span className="overview-status-label">Status</span>
+                    <div className="overview-status-value">
+                      <span className="app-status-dot" aria-hidden="true"></span>
+                      <span className="overview-status-text">{extractionStatus}</span>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="panel-collapse-toggle"
+                  onClick={() => toggleSection('overview')}
+                  aria-expanded={expandedSections.overview}
+                  aria-controls="overview-panel-content"
+                  aria-label={expandedSections.overview ? 'Collapse overview view' : 'Expand overview view'}
+                >
+                  <span className="section-toggle-icon" aria-hidden="true">
+                    {renderSectionChevron(expandedSections.overview)}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {expandedSections.overview && (
+              <div id="overview-panel-content" className="panel-collapsible-content">
+              <div className="overview-list">
+              {showOverviewProgress ? (
+                <div className="overview-progress">
+                  <div className="overview-progress-body">
+                    <div className="overview-progress-heading">
+                      <span className="overview-progress-title">Processing Log</span>
+                      <span className="overview-progress-percent">{extractionProgress}%</span>
+                    </div>
+                    <div className="overview-progress-log" role="log" aria-live="polite">
+                      {extractionMessages.length === 0 ? (
+                        <div className="overview-progress-entry overview-progress-entry--placeholder">
+                          Waiting for backend status updates.
+                        </div>
+                      ) : (
+                        extractionMessages.map((entry) => (
+                          <div key={entry.id} className="overview-progress-entry">
+                            {entry.text}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                  <div className="overview-progress-footer">
+                    <div
+                      className="overview-progress-bar"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={extractionProgress}
+                      aria-label="Overpass extraction progress"
+                    >
+                      <div
+                        className="overview-progress-bar-fill"
+                        style={{ width: `${Math.max(0, Math.min(100, extractionProgress))}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="overview-table-scroll">
+                  <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
+                    <span>Overpass ID</span>
+                    <span>Sat ID</span>
+                    <span>GS ID</span>
+                    <span>Start</span>
+                    <span>End</span>
+                    <span>Max Elev.</span>
+                    <span>Duration</span>
+                    {tradeOffsCalculated && (
+                      <span className="overview-header-cell overview-header-cell--tradeoff">
+                        <span>Trade-Off ID</span>
+                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                      </span>
+                    )}
+                    {tradeOffsCalculated && (
+                      <span className="overview-header-cell overview-header-cell--score">
+                        <span>Score</span>
+                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                      </span>
+                    )}
+                  </div>
+                  {overviewRows.length === 0 ? (
+                    <>
+                      <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
+                        <span>OP-001</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
+                      </div>
+                      <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
+                        <span>OP-002</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        <span>Pending</span>
+                        {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {overviewRows.map((row) => {
+                        const isRecommendedRow = tradeOffsCalculated
+                          && row.tradeOffId !== '—'
+                          && row.tradeOffScore !== '—'
+                          && tradeOffCards
+                            .flatMap((card) => card.options)
+                            .find((option) => option.overpassId === row.overpassId)?.recommended
+
+                        return (
+                          <div
+                            key={row.overpassId}
+                            className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
+                          >
+                            <span className="overview-overpass-cell">
+                              <span>{row.overpassId}</span>
+                              {isRecommendedRow ? (
+                                <span className="overview-row-note overview-row-note--recommended">
+                                  Recommended
+                                </span>
+                              ) : null}
+                              {row.scheduleBlocked && (
+                                <span
+                                  className="overview-row-note"
+                                  title={getScheduleBlockMessage(row)}
+                                >
+                                  Blocked
+                                </span>
+                              )}
+                            </span>
+                            <span>{row.satId}</span>
+                            <span>{row.gsId}</span>
+                            <span>{formatDateTimeCompact(row.startTime)}</span>
+                            <span>{formatDateTimeCompact(row.endTime)}</span>
+                            <span>{row.maxElevation ?? '—'}</span>
+                            <span>{row.duration}</span>
+                            {tradeOffsCalculated && (
+                              row.tradeOffId !== '—'
+                                ? <span className="overview-tradeoff-cell">{renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)}</span>
+                                : <span className="overview-tradeoff-cell">—</span>
+                            )}
+                            {tradeOffsCalculated && <span className="overview-score-cell">{row.tradeOffScore}</span>}
+                          </div>
+                        )
+                      })}
+                    </>
+                  )}
+                </div>
+              )}
+              </div>
+
+              <div className="panel-action-wrapper">
+                <button
+                  className="panel-action"
+                  disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffDemoAvailable}
+                  onClick={handleCalculateTradeOffs}
+                >
+                  {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
+                </button>
+                {!calculatingTradeOffs && (
+                  <span className="panel-action-tooltip">
+                    {!schedulerLaunched
+                      ? 'Launch Communication Scheduler first and wait for extraction to complete.'
+                      : !useDemoData
+                        ? 'Trade-off calculation is not connected for real-data mode yet. Enable demo data to preview this workflow.'
+                        : !tradeOffDemoAvailable
+                          ? overviewRows.length > 0
+                            ? 'All extracted overpasses are blocked by existing scheduled activities with higher priority.'
+                            : 'Launch the scheduler first so extracted overpasses are available for the simulated trade-off step.'
+                          : 'Calculate the simulated trade-off groups for the currently visible extracted overpasses.'}
+                  </span>
+                )}
+              </div>
+              </div>
+            )}
+          </section>
+  )
+
+  const tradeOffPanelNode = (
+          <section
+            className={`panel tradeoff-panel ${expandedSections.tradeOff ? '' : 'panel--collapsed'}${getPanelDragClassName('tradeOff')}`}
+            {...getPanelDropZoneProps('tradeOff')}
+          >
+            <div className={`panel-heading ${expandedSections.tradeOff ? '' : 'panel-heading--collapsed'}`}>
+              <div className="panel-heading-lead">
+                {renderPanelDragHandle('tradeOff')}
+              <div className="panel-heading-title">
+                <h2>Trade-Off</h2>
+                {useDemoData && schedulerLaunched && renderDemoBadge()}
+              </div>
+              </div>
+              <button
+                type="button"
+                className="panel-collapse-toggle"
+                onClick={() => toggleSection('tradeOff')}
+                aria-expanded={expandedSections.tradeOff}
+                aria-controls="tradeoff-panel-content"
+                aria-label={expandedSections.tradeOff ? 'Collapse trade-off view' : 'Expand trade-off view'}
+              >
+                <span className="section-toggle-icon" aria-hidden="true">
+                  {renderSectionChevron(expandedSections.tradeOff)}
+                </span>
+              </button>
+            </div>
+            {expandedSections.tradeOff && (
+              <div id="tradeoff-panel-content" className="panel-collapsible-content">
+                {!tradeOffsCalculated && !useDemoData && (
+                  <p>Enable Demo mode to use Trade-Off view.</p>
+                )}
+                {tradeOffsCalculated && tradeOffCards.length === 0 && (
+                  <p>No trade-off groups were identified for the current selection.</p>
+                )}
+                {tradeOffsCalculated && tradeOffCards.length > 0 && (
+                  <div className="tradeoff-card-list">
+                {tradeOffCards.length > 1 && (
+                  <div className="tradeoff-browser">
+                    <div className="tradeoff-browser-tabs">
+                      {tradeOffCards.map((card, index) => (
+                        <button
+                          key={`${card.id}-tab`}
+                          type="button"
+                          className={`tradeoff-browser-tab ${index === activeTradeOffCardIndex ? 'tradeoff-browser-tab--active' : ''}`}
+                          style={{ '--tradeoff-accent': getTradeOffAccentColor(card.colorIndex) }}
+                          onClick={() => setActiveTradeOffCardIndex(index)}
+                        >
+                          {card.title}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {activeTradeOffCard && (
+                  <article
+                    key={activeTradeOffCard.id}
+                    className="tradeoff-card"
+                    style={{ '--tradeoff-accent': getTradeOffAccentColor(activeTradeOffCard.colorIndex) }}
+                  >
+                    <div className="tradeoff-card-header">
+                      <div className="tradeoff-card-titleblock">
+                        <h3>{renderTradeOffPill(activeTradeOffCard.title, activeTradeOffCard.colorIndex)}</h3>
+                        <p className="tradeoff-card-resource">{activeTradeOffCard.resourceLabel}</p>
+                      </div>
+                    </div>
+                    <p className="tradeoff-reason">
+                      <span className="tradeoff-reason-label">Reason:</span> {activeTradeOffCard.reason}
+                    </p>
+
+                    <div className="tradeoff-option-list">
+                      {activeTradeOffCard.options.map((option) => (
+                        <div
+                          key={option.optionId}
+                          className={`tradeoff-option ${selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : ''}`}
+                          style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
+                        >
+                          <div className="tradeoff-option-header">
+                            <span className="tradeoff-option-id">{option.overpassId}</span>
+                            <div className="tradeoff-meta tradeoff-meta--option">
+                              {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
+                              <span className="tradeoff-score">{option.score}</span>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="tradeoff-select-button"
+                            onClick={() => handleSelectTradeOffOption(option.optionId)}
+                          >
+                            {selectedTradeOffOption === option.optionId ? 'Selected' : 'Select'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                )}
+                {tradeOffCards.length > 1 && (
+                  <div className="tradeoff-browser-nav tradeoff-browser-nav--bottom">
+                    <button
+                      type="button"
+                      className="tradeoff-browser-button"
+                      disabled={activeTradeOffCardIndex === 0}
+                      onClick={() => setActiveTradeOffCardIndex((current) => Math.max(0, current - 1))}
+                      aria-label="Previous trade-off card"
+                    >
+                      ‹
+                    </button>
+                    <span className="tradeoff-browser-status">
+                      {activeTradeOffCardIndex + 1} / {tradeOffCards.length}
+                    </span>
+                    <button
+                      type="button"
+                      className="tradeoff-browser-button"
+                      disabled={activeTradeOffCardIndex >= tradeOffCards.length - 1}
+                      onClick={() => setActiveTradeOffCardIndex((current) => Math.min(tradeOffCards.length - 1, current + 1))}
+                      aria-label="Next trade-off card"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+  )
+
+  const mapViewPanelNode = (
+          <section
+            className={`panel map-panel${getPanelDragClassName('mapView')}`}
+            {...getPanelDropZoneProps('mapView')}
+          >
+            <div className="panel-heading panel-heading--map">
+              <div className="panel-heading-lead">
+                {renderPanelDragHandle('mapView')}
+              <div className="panel-heading-title">
+                <h2>Map View</h2>
+                {useDemoData && renderDemoBadge()}
+              </div>
+              </div>
+              <div className="map-panel-controls">
+                <button
+                  type="button"
+                  className="map-panel-toggle"
+                  onClick={() => toggleSection('mapView')}
+                  aria-expanded={expandedSections.mapView}
+                  aria-controls="map-panel-content"
+                  aria-label={expandedSections.mapView ? 'Collapse map view' : 'Expand map view'}
+                >
+                  <span className="section-toggle-icon" aria-hidden="true">
+                    {renderSectionChevron(expandedSections.mapView)}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {expandedSections.mapView && (
+              <div id="map-panel-content" className="map-layout">
+                <div className="map-canvas-shell">
+                  <MapErrorBoundary>
+                    <Suspense
+                      fallback={(
+                        <div className="mission-map-shell">
+                          <div className="mission-map-state" role="status">Loading map...</div>
+                        </div>
+                      )}
+                    >
+                      <MissionMap
+                        heightPx={mapViewHeightPx}
+                        assets={visibleMapAssets}
+                        satelliteTracks={satelliteTracks}
+                        activeAssetId={activeMapAsset?.id ?? null}
+                        onSelectAsset={setActiveMapAssetId}
+                        timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
+                      />
+                    </Suspense>
+                  </MapErrorBoundary>
+                </div>
+
+                <aside className="map-sidebar">
+                  <div className="map-sidebar-section">
+                    <h3>Visible Assets</h3>
+                    {visibleMapAssets.length > 0 ? (
+                      <div className="map-asset-card-list">
+                        {visibleMapAssets.map((asset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            className={`map-asset-card ${
+                              activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
+                            }`}
+                            onClick={() => setActiveMapAssetId(asset.id)}
+                          >
+                            <div className="map-asset-card-header">
+                              <span className={`map-asset-dot map-asset-dot--${asset.markerType}`}></span>
+                              <span className="map-asset-card-name">{asset.name.toUpperCase()}</span>
+                            </div>
+                            <div className="map-asset-card-type">{asset.type}</div>
+                            <dl className="map-asset-card-grid">
+                              <dt>Latitude</dt>
+                              <dd>{formatCoordinate(asset.latitude, 'N', 'S')}</dd>
+                              <dt>Longitude</dt>
+                              <dd>{formatCoordinate(asset.longitude, 'E', 'W')}</dd>
+                              {asset.markerType === 'ground-station' && (
+                                <>
+                                  <dt>Min. Elevation</dt>
+                                  <dd>
+                                    {Number.isFinite(asset.minLinkElevation)
+                                      ? `${asset.minLinkElevation.toFixed(1)}°`
+                                      : '—'}
+                                  </dd>
+                                </>
+                              )}
+                              {asset.markerType === 'satellite' && (
+                                <>
+                                  <dt>Altitude</dt>
+                                  <dd>{formatAltitude(asset.altitude)}</dd>
+                                  <dt>Track Time</dt>
+                                  <dd>{formatTimelinePlayheadDateTime(asset.timestamp)}</dd>
+                                </>
+                              )}
+                            </dl>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p>No selected assets with usable map coordinates yet.</p>
+                    )}
+                  </div>
+
+                  {selectedAssetsWithoutLocation.length > 0 && (
+                    <div className="map-sidebar-section">
+                      <h3>Selected Without Location</h3>
+                      <div className="map-missing-location-list">
+                        {selectedAssetsWithoutLocation.map((asset) => (
+                          <div key={asset.id} className="map-missing-location-card">
+                            <span className="map-missing-location-name">{asset.name.toUpperCase()}</span>
+                            <span className="map-missing-location-type">{asset.type}</span>
+                            <span className="map-missing-location-copy">{asset.locationMessage}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </aside>
+              </div>
+            )}
+          </section>
+  )
+
+  const timelinePanelNode = (
+          <section
+            className={`panel timeline-panel ${expandedSections.timeline ? '' : 'panel--collapsed'}${getPanelDragClassName('timeline')}`}
+            {...getPanelDropZoneProps('timeline')}
+          >
+            <div className={`panel-heading panel-heading--timeline ${expandedSections.timeline ? '' : 'panel-heading--collapsed'}`}>
+              <div className="panel-heading-lead">
+                {renderPanelDragHandle('timeline')}
+              <div className="panel-heading-title">
+                <h2>Timeline</h2>
+              </div>
+              </div>
+              <div className="panel-heading-actions">
+                {timelineModel && (
+                  <div className="timeline-header-meta">
+                    <span className="timeline-meta-item">
+                      <span className="timeline-meta-label">
+                        Planning Window ({activePlanningWindow?.timeMode === 'local' ? 'Local' : 'UTC'})
+                      </span>
+                      <span className="timeline-meta-value">
+                        {formatPlanningWindow(
+                          activePlanningWindow?.startTime,
+                          activePlanningWindow?.endTime,
+                          activePlanningWindow?.timeMode,
+                        )}
+                      </span>
+                    </span>
+                    <span className="timeline-meta-item timeline-meta-item--muted">
+                      <span className="timeline-meta-label">DOY</span>
+                      <span className="timeline-meta-value">
+                        {getDayOfYear(timelineModel.baseDate, activePlanningWindow?.timeMode)}
+                      </span>
+                    </span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="panel-collapse-toggle"
+                  onClick={() => toggleSection('timeline')}
+                  aria-expanded={expandedSections.timeline}
+                  aria-controls="timeline-panel-content"
+                  aria-label={expandedSections.timeline ? 'Collapse timeline view' : 'Expand timeline view'}
+                >
+                  <span className="section-toggle-icon" aria-hidden="true">
+                    {renderSectionChevron(expandedSections.timeline)}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {expandedSections.timeline && (
+              <div id="timeline-panel-content" className="panel-collapsible-content">
+                {!schedulerLaunched && (
+                  <p className="timeline-empty-copy">
+                    Launch Communication Scheduler to initialize the planning timeline.
+                  </p>
+                )}
+
+                {schedulerLaunched && timelineModel && (
+                  <>
+                <div className="timeline-toolbar">
+                  <div className="timeline-toolbar-groups">
+                    <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
+                      {timelineModel.tracks.map((track) => (
+                        <button
+                          key={track.id}
+                          type="button"
+                          className={`timeline-toggle ${timelineLayers[track.id] ? 'timeline-toggle--active' : ''}`}
+                          onClick={() => toggleTimelineLayer(track.id)}
+                        >
+                          {track.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="timeline-toggle-group" role="group" aria-label="Timeline view controls">
+                      <div className="timeline-zoom-control" role="group" aria-label="Timeline zoom">
+                        {TIMELINE_ZOOM_LEVELS.map((level) => (
+                          <button
+                            key={level.id}
+                            type="button"
+                            className={`timeline-zoom-option ${timelineZoomLevel === level.id ? 'timeline-zoom-option--active' : ''}`}
+                            onClick={() => setTimelineZoomLevel(level.id)}
+                          >
+                            {level.label}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        className={`timeline-toggle ${timelineLive ? 'timeline-toggle--active' : ''}`}
+                        onClick={handleTimelineNow}
+                        aria-pressed={timelineLive}
+                      >
+                        Now
+                      </button>
+                    </div>
+                    <div className="timeline-toggle-group" role="group" aria-label="Timeline playback">
+                      <button
+                        type="button"
+                        className={`timeline-toggle timeline-play-toggle ${timelinePlaying ? 'timeline-toggle--active' : ''}`}
+                        onClick={handleTimelinePlaybackToggle}
+                        disabled={planningWindowStartTimestamp === null || planningWindowEndTimestamp === null}
+                        aria-pressed={timelinePlaying}
+                      >
+                        <span className="timeline-play-icon" aria-hidden="true">
+                          {timelinePlaying ? '⏸' : '▶'}
+                        </span>
+                        {timelinePlaying ? 'Pause' : 'Play'}
+                      </button>
+                      <div className="timeline-speed-control" role="group" aria-label="Playback speed">
+                        {TIMELINE_PLAYBACK_SPEEDS.map((speed) => (
+                          <button
+                            key={speed}
+                            type="button"
+                            className={`timeline-speed-option ${timelinePlaybackSpeed === speed ? 'timeline-speed-option--active' : ''}`}
+                            onClick={() => setTimelinePlaybackSpeed(speed)}
+                            aria-pressed={timelinePlaybackSpeed === speed}
+                          >
+                            {speed}×
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  {!useDemoData && (
+                    <div className="timeline-toolbar-copy">
+                      Current schedule activities and extracted overpasses use backend timestamps. Proposed scheduling remains empty until the backend trade-off workflow is connected.
+                    </div>
+                  )}
+                </div>
+
+                {visibleTimelineTracks.length === 0 ? (
+                  <p className="timeline-empty-copy">Enable at least one timeline layer to display the schedule view.</p>
+                ) : (
+                  <div className="timeline-layout">
+                    <div className="timeline-label-column">
+                      <div className="timeline-label-cell timeline-label-cell--day"></div>
+                      <div className="timeline-label-cell timeline-label-cell--axis"></div>
+                      {visibleTimelineTracks.map((track) => (
+                        <div
+                          key={`${track.id}-label`}
+                          className="timeline-label-cell"
+                          style={{
+                            '--timeline-row-height': `${Math.max(3.2, (track.laneCount ?? 1) * 2.68 + 0.44)}rem`,
+                          }}
+                        >
+                          <span className="timeline-track-name">
+                            {track.label}
+                            {track.demoLabel && <span className="timeline-track-demo">{track.demoLabel}</span>}
+                          </span>
+                          <span className="timeline-track-copy">{track.copy}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div ref={timelineScrollFrameRef} className="timeline-scroll-frame">
+                      <div
+                        ref={timelinePlayheadSliderRef}
+                        className="timeline-playhead-slider"
+                        aria-hidden={timelinePlayheadWindowRatio === null}
+                      >
+                        {timelinePlayheadWindowRatio !== null && (
+                          <div
+                            className="timeline-playhead-thumb"
+                            role="slider"
+                            tabIndex="0"
+                            aria-label="Current time shown on the map"
+                            aria-valuemin={planningWindowStartTimestamp ?? undefined}
+                            aria-valuemax={planningWindowEndTimestamp ?? undefined}
+                            aria-valuenow={timelinePlayheadTimestamp}
+                            aria-valuetext={formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
+                            style={{ left: `${timelinePlayheadWindowRatio * 100}%` }}
+                            onPointerDown={handleTimelinePlayheadPointerDown}
+                            onPointerMove={handleTimelinePlayheadPointerMove}
+                            onPointerUp={handleTimelinePlayheadPointerUp}
+                            onPointerCancel={handleTimelinePlayheadPointerUp}
+                            onKeyDown={handleTimelinePlayheadKeyDown}
+                          >
+                            <span className="timeline-playhead-handle" aria-hidden="true"></span>
+                            <span className="timeline-playhead-label">
+                              {timelineLive && <span className="timeline-playhead-live">Live</span>}
+                              {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        ref={timelineScrollRef}
+                        className="timeline-scroll"
+                        tabIndex="0"
+                        role="region"
+                        aria-label="Interactive planning timeline"
+                        onWheel={pauseTimelineLiveMode}
+                        onPointerDown={pauseTimelineLiveMode}
+                        onTouchStart={pauseTimelineLiveMode}
+                        onKeyDown={handleTimelineKeyDown}
+                      >
+                        <div
+                          className="timeline-time-canvas"
+                          style={{ width: `${timelineWidthPx}px` }}
+                        >
+                      <div className="timeline-day-row">
+                        {timelineModel.dayBands.map((band, index) => (
+                          <div
+                            key={`${band.label}-${index}`}
+                            className={`timeline-day-band ${band.alt ? 'timeline-day-band--alt' : ''}`}
+                            style={{
+                              left: `${(band.startMinutes / timelineModel.totalMinutes) * 100}%`,
+                              width: `${(band.widthMinutes / timelineModel.totalMinutes) * 100}%`,
+                            }}
+                          >
+                            {band.label}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="timeline-axis-row">
+                        {timelineModel.ticks.map((tick) => (
+                          <div
+                            key={tick.offsetMinutes}
+                            className={`timeline-axis-marker ${tick.offsetMinutes % 120 === 0 ? 'timeline-axis-marker--major' : ''}`}
+                            style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                          >
+                            <span>{tick.label}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {visibleTimelineTracks.map((track, trackIndex) => (
+                          <div
+                            key={`${track.id}-row`}
+                            className="timeline-track-row"
+                            style={{
+                              '--timeline-row-height': `${Math.max(3.2, (track.laneCount ?? 1) * 2.68 + 0.44)}rem`,
+                            }}
+                          >
+                            {timelineModel.ticks.map((tick) => (
+                              <div
+                                key={`${track.id}-tick-${tick.offsetMinutes}`}
+                                className={`timeline-grid-line ${tick.offsetMinutes % 120 === 0 ? 'timeline-grid-line--major' : ''}`}
+                                style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                              ></div>
+                            ))}
+
+                            {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
+                              <div
+                                className="timeline-now-line"
+                                style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                              >
+                                {trackIndex === 0 && <span className="timeline-now-badge">Now</span>}
+                              </div>
+                            )}
+
+                            {timelinePlayheadOffsetMinutes !== null
+                              && timelinePlayheadOffsetMinutes >= 0
+                              && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
+                              <div
+                                className="timeline-playhead-marker-line"
+                                aria-hidden="true"
+                                style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                              ></div>
+                            )}
+
+                            {track.items.map((item) => (
+                              (() => {
+                                const itemWidthPx = (item.durationMinutes / timelineModel.totalMinutes) * timelineWidthPx
+                                const compactBar = itemWidthPx < 120
+                                const tinyBar = itemWidthPx < 72
+
+                                return (
+                                  <button
+                                    key={item.id}
+                                    type="button"
+                                    className={`timeline-bar timeline-bar--${item.variant} ${item.tradeOffColorIndex !== null ? 'timeline-bar--tradeoff' : ''} ${compactBar ? 'timeline-bar--compact' : ''} ${tinyBar ? 'timeline-bar--tiny' : ''} ${isTimelineItemAtPlayhead(item) ? 'timeline-bar--playhead-active' : ''}`}
+                                    style={{
+                                      left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
+                                      width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
+                                      top: `calc(0.56rem + ${(item.laneIndex ?? 0) * 2.68}rem)`,
+                                      '--tradeoff-accent': item.tradeOffColorIndex !== null
+                                        ? getTradeOffAccentColor(item.tradeOffColorIndex)
+                                        : 'transparent',
+                                    }}
+                                    onClick={() => handleTimelineItemClick(item)}
+                                    aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
+                                  >
+                                    <span className="timeline-bar-content">
+                                      {item.recommended && !tinyBar && (
+                                        <span
+                                          className="timeline-bar-marker"
+                                          aria-hidden="true"
+                                        ></span>
+                                      )}
+                                      <span className="timeline-bar-title">
+                                        {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
+                                      </span>
+                                      {!tinyBar && <span className="timeline-bar-copy">{item.detail}</span>}
+                                    </span>
+                                    <span className="timeline-bar-tooltip" role="tooltip">
+                                      <span
+                                        className="timeline-bar-tooltip-inner"
+                                        onPointerDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => event.stopPropagation()}
+                                      >
+                                      <strong>{item.label}</strong>
+                                      {item.recommended && <span>Recommended option</span>}
+                                      <span>{item.detail}</span>
+                                      <span>Start: {formatTimelineDateTime(item.startTime)}</span>
+                                      <span>End: {formatTimelineDateTime(item.endTime)}</span>
+                                      <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
+                                      </span>
+                                    </span>
+                                  </button>
+                                )
+                              })()
+                            ))}
+                          </div>
+                      ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="timeline-confirmation">
+                  <div className="timeline-confirmation-copy">
+                    <div className="timeline-confirmation-heading">
+                      <span className="timeline-confirmation-title">Confirm Communication Schedule</span>
+                      {useDemoData && renderDemoBadge()}
+                    </div>
+                    <span className="timeline-confirmation-text">
+                      {useDemoData
+                        ? 'Demo mode simulates activity generation, SatOS write calls and the final confirmation state.'
+                        : 'Confirmation remains unavailable until the backend write workflow is connected.'}
+                    </span>
+                  </div>
+                  <div className="timeline-confirmation-actions">
+                    <button
+                      type="button"
+                      className="btn-fetch timeline-confirm-button"
+                      disabled={!confirmDemoAvailable || confirmingSchedule}
+                      onClick={handleConfirmSchedule}
+                    >
+                      {confirmingSchedule ? 'Confirming...' : 'Confirm Communication Schedule'}
+                    </button>
+                    {!confirmingSchedule && !confirmDemoAvailable && (
+                      <span className="timeline-confirmation-tooltip">
+                        {!useDemoData
+                          ? 'Enable Demo to preview the confirmation workflow.'
+                          : !schedulerLaunched
+                            ? 'Launch Communication Scheduler first.'
+                            : !tradeOffsCalculated
+                              ? 'Calculate Trade-Offs first so a final schedule exists.'
+                              : finalScheduleRows.length === 0
+                                ? 'No schedulable links remain for confirmation.'
+                                : 'The final schedule is not ready yet.'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {confirmationSuccess && (
+                  <div className="confirmation-success" role="status" aria-live="polite">
+                    <span className="confirmation-success-icon" aria-hidden="true">✓</span>
+                    <div className="confirmation-success-copy">
+                      <strong>Success</strong>
+                      <span>
+                        {confirmedScheduleCount} schedule entr{confirmedScheduleCount === 1 ? 'y was' : 'ies were'} confirmed in the demo workflow.
+                      </span>
+                    </div>
+                  </div>
+                )}
+                  </>
+                )}
+              </div>
+            )}
+          </section>
+  )
+
+  const panelNodesById = {
+    overview: overviewPanelNode,
+    tradeOff: tradeOffPanelNode,
+    mapView: mapViewPanelNode,
+    timeline: timelinePanelNode,
+  }
+
   const pageContent = (
     <div className={`workspace-shell ${sidebarCollapsed ? 'workspace-shell--collapsed' : ''}`}>
         <aside className={`workspace-sidebar ${sidebarCollapsed ? 'workspace-sidebar--collapsed' : ''}`}>
@@ -2569,221 +3744,13 @@ export default function App() {
               gridTemplateColumns: `minmax(0, ${overviewPanelWidth}%) 0.9rem minmax(0, calc(${100 - overviewPanelWidth}% - 0.9rem))`,
             }}
           >
-          <section className={`panel overview-panel ${expandedSections.overview ? '' : 'panel--collapsed'}`}>
-            <div className={`panel-heading ${expandedSections.overview ? '' : 'panel-heading--collapsed'}`}>
-              <div className="panel-heading-title">
-                <h2>Overview</h2>
-              </div>
-              <div className="panel-heading-actions">
-                <div
-                  className={`overview-inline-status ${
-                    extractionStatus === 'Completed'
-                      ? 'overview-inline-status--online'
-                      : extractionStatus === 'Running' || extractionStatus === 'Queued'
-                        ? 'overview-inline-status--checking'
-                        : 'overview-inline-status--offline'
-                  }`}
-                >
-                  {schedulerLaunched && (
-                    <div className="overview-count-inline">
-                      <span className="overview-status-label">Overpasses</span>
-                      <span className="overview-count-value">{overviewRows.length}</span>
-                    </div>
-                  )}
-                  <div className="overview-status-block">
-                    <span className="overview-status-label">Status</span>
-                    <div className="overview-status-value">
-                      <span className="app-status-dot" aria-hidden="true"></span>
-                      <span className="overview-status-text">{extractionStatus}</span>
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="panel-collapse-toggle"
-                  onClick={() => toggleSection('overview')}
-                  aria-expanded={expandedSections.overview}
-                  aria-controls="overview-panel-content"
-                  aria-label={expandedSections.overview ? 'Collapse overview view' : 'Expand overview view'}
-                >
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.overview)}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {expandedSections.overview && (
-              <div id="overview-panel-content" className="panel-collapsible-content">
-              <div className="overview-list">
-              {showOverviewProgress ? (
-                <div className="overview-progress">
-                  <div className="overview-progress-body">
-                    <div className="overview-progress-heading">
-                      <span className="overview-progress-title">Processing Log</span>
-                      <span className="overview-progress-percent">{extractionProgress}%</span>
-                    </div>
-                    <div className="overview-progress-log" role="log" aria-live="polite">
-                      {extractionMessages.length === 0 ? (
-                        <div className="overview-progress-entry overview-progress-entry--placeholder">
-                          Waiting for backend status updates.
-                        </div>
-                      ) : (
-                        extractionMessages.map((entry) => (
-                          <div key={entry.id} className="overview-progress-entry">
-                            {entry.text}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                  <div className="overview-progress-footer">
-                    <div
-                      className="overview-progress-bar"
-                      role="progressbar"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={extractionProgress}
-                      aria-label="Overpass extraction progress"
-                    >
-                      <div
-                        className="overview-progress-bar-fill"
-                        style={{ width: `${Math.max(0, Math.min(100, extractionProgress))}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="overview-table-scroll">
-                  <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                    <span>Overpass ID</span>
-                    <span>Sat ID</span>
-                    <span>GS ID</span>
-                    <span>Start</span>
-                    <span>End</span>
-                    <span>Max Elev.</span>
-                    <span>Duration</span>
-                    {tradeOffsCalculated && (
-                      <span className="overview-header-cell overview-header-cell--tradeoff">
-                        <span>Trade-Off ID</span>
-                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
-                      </span>
-                    )}
-                    {tradeOffsCalculated && (
-                      <span className="overview-header-cell overview-header-cell--score">
-                        <span>Score</span>
-                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
-                      </span>
-                    )}
-                  </div>
-                  {overviewRows.length === 0 ? (
-                    <>
-                      <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                        <span>OP-001</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                      </div>
-                      <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                        <span>OP-002</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      {overviewRows.map((row) => {
-                        const isRecommendedRow = tradeOffsCalculated
-                          && row.tradeOffId !== '—'
-                          && row.tradeOffScore !== '—'
-                          && tradeOffCards
-                            .flatMap((card) => card.options)
-                            .find((option) => option.overpassId === row.overpassId)?.recommended
-
-                        return (
-                          <div
-                            key={row.overpassId}
-                            className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
-                          >
-                            <span className="overview-overpass-cell">
-                              <span>{row.overpassId}</span>
-                              {isRecommendedRow ? (
-                                <span className="overview-row-note overview-row-note--recommended">
-                                  Recommended
-                                </span>
-                              ) : null}
-                              {row.scheduleBlocked && (
-                                <span
-                                  className="overview-row-note"
-                                  title={getScheduleBlockMessage(row)}
-                                >
-                                  Blocked
-                                </span>
-                              )}
-                            </span>
-                            <span>{row.satId}</span>
-                            <span>{row.gsId}</span>
-                            <span>{formatDateTimeCompact(row.startTime)}</span>
-                            <span>{formatDateTimeCompact(row.endTime)}</span>
-                            <span>{row.maxElevation ?? '—'}</span>
-                            <span>{row.duration}</span>
-                            {tradeOffsCalculated && (
-                              row.tradeOffId !== '—'
-                                ? <span className="overview-tradeoff-cell">{renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)}</span>
-                                : <span className="overview-tradeoff-cell">—</span>
-                            )}
-                            {tradeOffsCalculated && <span className="overview-score-cell">{row.tradeOffScore}</span>}
-                          </div>
-                        )
-                      })}
-                    </>
-                  )}
-                </div>
-              )}
-              </div>
-
-              <div className="panel-action-wrapper">
-                <button
-                  className="panel-action"
-                  disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffDemoAvailable}
-                  onClick={handleCalculateTradeOffs}
-                >
-                  {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
-                </button>
-                {!calculatingTradeOffs && (
-                  <span className="panel-action-tooltip">
-                    {!schedulerLaunched
-                      ? 'Launch Communication Scheduler first and wait for extraction to complete.'
-                      : !useDemoData
-                        ? 'Trade-off calculation is not connected for real-data mode yet. Enable demo data to preview this workflow.'
-                        : !tradeOffDemoAvailable
-                          ? overviewRows.length > 0
-                            ? 'All extracted overpasses are blocked by existing scheduled activities with higher priority.'
-                            : 'Launch the scheduler first so extracted overpasses are available for the simulated trade-off step.'
-                          : 'Calculate the simulated trade-off groups for the currently visible extracted overpasses.'}
-                  </span>
-                )}
-              </div>
-              </div>
-            )}
-          </section>
+          {panelNodesById[panelSlotAssignment.topLeft]}
 
           <div
-            className={`panel-resizer ${!expandedSections.overview && !expandedSections.tradeOff ? 'panel-resizer--collapsed' : ''}`}
+            className={`panel-resizer ${!expandedSections[panelSlotAssignment.topLeft] && !expandedSections[panelSlotAssignment.topRight] ? 'panel-resizer--collapsed' : ''}`}
             role="separator"
             aria-orientation="vertical"
-            aria-label="Resize overview and trade-off panels"
+            aria-label="Resize the top-row panels"
             tabIndex={0}
             onPointerDown={handlePanelResizeStart}
             onKeyDown={handlePanelResizeKeyDown}
@@ -2792,550 +3759,31 @@ export default function App() {
             <span className="panel-resizer-grip" aria-hidden="true"></span>
           </div>
 
-          <section className={`panel tradeoff-panel ${expandedSections.tradeOff ? '' : 'panel--collapsed'}`}>
-            <div className={`panel-heading ${expandedSections.tradeOff ? '' : 'panel-heading--collapsed'}`}>
-              <div className="panel-heading-title">
-                <h2>Trade-Off</h2>
-                {useDemoData && schedulerLaunched && renderDemoBadge()}
-              </div>
-              <button
-                type="button"
-                className="panel-collapse-toggle"
-                onClick={() => toggleSection('tradeOff')}
-                aria-expanded={expandedSections.tradeOff}
-                aria-controls="tradeoff-panel-content"
-                aria-label={expandedSections.tradeOff ? 'Collapse trade-off view' : 'Expand trade-off view'}
-              >
-                <span className="section-toggle-icon" aria-hidden="true">
-                  {renderSectionChevron(expandedSections.tradeOff)}
-                </span>
-              </button>
-            </div>
-            {expandedSections.tradeOff && (
-              <div id="tradeoff-panel-content" className="panel-collapsible-content">
-                {!tradeOffsCalculated && !useDemoData && (
-                  <p>Enable Demo mode to use Trade-Off view.</p>
-                )}
-                {tradeOffsCalculated && tradeOffCards.length === 0 && (
-                  <p>No trade-off groups were identified for the current selection.</p>
-                )}
-                {tradeOffsCalculated && tradeOffCards.length > 0 && (
-                  <div className="tradeoff-card-list">
-                {tradeOffCards.length > 1 && (
-                  <div className="tradeoff-browser">
-                    <div className="tradeoff-browser-tabs">
-                      {tradeOffCards.map((card, index) => (
-                        <button
-                          key={`${card.id}-tab`}
-                          type="button"
-                          className={`tradeoff-browser-tab ${index === activeTradeOffCardIndex ? 'tradeoff-browser-tab--active' : ''}`}
-                          style={{ '--tradeoff-accent': getTradeOffAccentColor(card.colorIndex) }}
-                          onClick={() => setActiveTradeOffCardIndex(index)}
-                        >
-                          {card.title}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {activeTradeOffCard && (
-                  <article
-                    key={activeTradeOffCard.id}
-                    className="tradeoff-card"
-                    style={{ '--tradeoff-accent': getTradeOffAccentColor(activeTradeOffCard.colorIndex) }}
-                  >
-                    <div className="tradeoff-card-header">
-                      <div className="tradeoff-card-titleblock">
-                        <h3>{renderTradeOffPill(activeTradeOffCard.title, activeTradeOffCard.colorIndex)}</h3>
-                        <p className="tradeoff-card-resource">{activeTradeOffCard.resourceLabel}</p>
-                      </div>
-                    </div>
-                    <p className="tradeoff-reason">
-                      <span className="tradeoff-reason-label">Reason:</span> {activeTradeOffCard.reason}
-                    </p>
-
-                    <div className="tradeoff-option-list">
-                      {activeTradeOffCard.options.map((option) => (
-                        <div
-                          key={option.optionId}
-                          className={`tradeoff-option ${selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : ''}`}
-                          style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
-                        >
-                          <div className="tradeoff-option-header">
-                            <span className="tradeoff-option-id">{option.overpassId}</span>
-                            <div className="tradeoff-meta tradeoff-meta--option">
-                              {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
-                              <span className="tradeoff-score">{option.score}</span>
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            className="tradeoff-select-button"
-                            onClick={() => handleSelectTradeOffOption(option.optionId)}
-                          >
-                            {selectedTradeOffOption === option.optionId ? 'Selected' : 'Select'}
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </article>
-                )}
-                {tradeOffCards.length > 1 && (
-                  <div className="tradeoff-browser-nav tradeoff-browser-nav--bottom">
-                    <button
-                      type="button"
-                      className="tradeoff-browser-button"
-                      disabled={activeTradeOffCardIndex === 0}
-                      onClick={() => setActiveTradeOffCardIndex((current) => Math.max(0, current - 1))}
-                      aria-label="Previous trade-off card"
-                    >
-                      ‹
-                    </button>
-                    <span className="tradeoff-browser-status">
-                      {activeTradeOffCardIndex + 1} / {tradeOffCards.length}
-                    </span>
-                    <button
-                      type="button"
-                      className="tradeoff-browser-button"
-                      disabled={activeTradeOffCardIndex >= tradeOffCards.length - 1}
-                      onClick={() => setActiveTradeOffCardIndex((current) => Math.min(tradeOffCards.length - 1, current + 1))}
-                      aria-label="Next trade-off card"
-                    >
-                      ›
-                    </button>
-                  </div>
-                )}
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
+          {panelNodesById[panelSlotAssignment.topRight]}
           </div>
 
-          <div className="planning-views-row">
-          <section className="panel map-panel">
-            <div className="panel-heading panel-heading--map">
-              <div className="panel-heading-title">
-                <h2>Map View</h2>
-                {useDemoData && renderDemoBadge()}
-              </div>
-              <div className="map-panel-controls">
-                <button
-                  type="button"
-                  className="map-panel-toggle"
-                  onClick={() => toggleSection('mapView')}
-                  aria-expanded={expandedSections.mapView}
-                  aria-controls="map-panel-content"
-                  aria-label={expandedSections.mapView ? 'Collapse map view' : 'Expand map view'}
-                >
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.mapView)}
-                  </span>
-                </button>
-              </div>
-            </div>
+          <div
+            className="planning-views-row"
+            style={{
+              gridTemplateRows: `${bottomTopHeightPx}px 0.9rem auto`,
+            }}
+          >
+          {panelNodesById[panelSlotAssignment.bottomTop]}
 
-            {expandedSections.mapView && (
-              <div id="map-panel-content" className="map-layout">
-                <div className="map-canvas-shell">
-                  <MapErrorBoundary>
-                    <Suspense
-                      fallback={(
-                        <div className="mission-map-shell">
-                          <div className="mission-map-state" role="status">Loading map...</div>
-                        </div>
-                      )}
-                    >
-                      <MissionMap
-                        assets={visibleMapAssets}
-                        satelliteTracks={satelliteTracks}
-                        activeAssetId={activeMapAsset?.id ?? null}
-                        onSelectAsset={setActiveMapAssetId}
-                        timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
-                      />
-                    </Suspense>
-                  </MapErrorBoundary>
-                </div>
+          <div
+            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.bottomTop] && !expandedSections[panelSlotAssignment.bottomBottom] ? 'panel-resizer--collapsed' : ''}`}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize the map view and timeline panels"
+            tabIndex={0}
+            onPointerDown={handlePlanningRowResizeStart}
+            onKeyDown={handlePlanningRowResizeKeyDown}
+          >
+            <span className="panel-resizer-line panel-resizer-line--horizontal" aria-hidden="true"></span>
+            <span className="panel-resizer-grip panel-resizer-grip--horizontal" aria-hidden="true"></span>
+          </div>
 
-                <aside className="map-sidebar">
-                  <div className="map-sidebar-section">
-                    <h3>Visible Assets</h3>
-                    {visibleMapAssets.length > 0 ? (
-                      <div className="map-asset-card-list">
-                        {visibleMapAssets.map((asset) => (
-                          <button
-                            key={asset.id}
-                            type="button"
-                            className={`map-asset-card ${
-                              activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
-                            }`}
-                            onClick={() => setActiveMapAssetId(asset.id)}
-                          >
-                            <div className="map-asset-card-header">
-                              <span className={`map-asset-dot map-asset-dot--${asset.markerType}`}></span>
-                              <span className="map-asset-card-name">{asset.name.toUpperCase()}</span>
-                            </div>
-                            <div className="map-asset-card-type">{asset.type}</div>
-                            <dl className="map-asset-card-grid">
-                              <dt>Latitude</dt>
-                              <dd>{formatCoordinate(asset.latitude, 'N', 'S')}</dd>
-                              <dt>Longitude</dt>
-                              <dd>{formatCoordinate(asset.longitude, 'E', 'W')}</dd>
-                              {asset.markerType === 'ground-station' && (
-                                <>
-                                  <dt>Min. Elevation</dt>
-                                  <dd>
-                                    {Number.isFinite(asset.minLinkElevation)
-                                      ? `${asset.minLinkElevation.toFixed(1)}°`
-                                      : '—'}
-                                  </dd>
-                                </>
-                              )}
-                              {asset.markerType === 'satellite' && (
-                                <>
-                                  <dt>Altitude</dt>
-                                  <dd>{formatAltitude(asset.altitude)}</dd>
-                                  <dt>Track Time</dt>
-                                  <dd>{formatTimelinePlayheadDateTime(asset.timestamp)}</dd>
-                                </>
-                              )}
-                            </dl>
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <p>No selected assets with usable map coordinates yet.</p>
-                    )}
-                  </div>
-
-                  {selectedAssetsWithoutLocation.length > 0 && (
-                    <div className="map-sidebar-section">
-                      <h3>Selected Without Location</h3>
-                      <div className="map-missing-location-list">
-                        {selectedAssetsWithoutLocation.map((asset) => (
-                          <div key={asset.id} className="map-missing-location-card">
-                            <span className="map-missing-location-name">{asset.name.toUpperCase()}</span>
-                            <span className="map-missing-location-type">{asset.type}</span>
-                            <span className="map-missing-location-copy">{asset.locationMessage}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </aside>
-              </div>
-            )}
-          </section>
-
-          <section className={`panel timeline-panel ${expandedSections.timeline ? '' : 'panel--collapsed'}`}>
-            <div className={`panel-heading panel-heading--timeline ${expandedSections.timeline ? '' : 'panel-heading--collapsed'}`}>
-              <div className="panel-heading-title">
-                <h2>Timeline</h2>
-              </div>
-              <div className="panel-heading-actions">
-                {timelineModel && (
-                  <div className="timeline-header-meta">
-                    <span className="timeline-meta-item">
-                      <span className="timeline-meta-label">
-                        Planning Window ({activePlanningWindow?.timeMode === 'local' ? 'Local' : 'UTC'})
-                      </span>
-                      <span className="timeline-meta-value">
-                        {formatPlanningWindow(
-                          activePlanningWindow?.startTime,
-                          activePlanningWindow?.endTime,
-                          activePlanningWindow?.timeMode,
-                        )}
-                      </span>
-                    </span>
-                    <span className="timeline-meta-item timeline-meta-item--muted">
-                      <span className="timeline-meta-label">DOY</span>
-                      <span className="timeline-meta-value">
-                        {getDayOfYear(timelineModel.baseDate, activePlanningWindow?.timeMode)}
-                      </span>
-                    </span>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="panel-collapse-toggle"
-                  onClick={() => toggleSection('timeline')}
-                  aria-expanded={expandedSections.timeline}
-                  aria-controls="timeline-panel-content"
-                  aria-label={expandedSections.timeline ? 'Collapse timeline view' : 'Expand timeline view'}
-                >
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.timeline)}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {expandedSections.timeline && (
-              <div id="timeline-panel-content" className="panel-collapsible-content">
-                {!schedulerLaunched && (
-                  <p className="timeline-empty-copy">
-                    Launch Communication Scheduler to initialize the planning timeline.
-                  </p>
-                )}
-
-                {schedulerLaunched && timelineModel && (
-                  <>
-                <div className="timeline-toolbar">
-                  <div className="timeline-toolbar-groups">
-                    <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
-                      {timelineModel.tracks.map((track) => (
-                        <button
-                          key={track.id}
-                          type="button"
-                          className={`timeline-toggle ${timelineLayers[track.id] ? 'timeline-toggle--active' : ''}`}
-                          onClick={() => toggleTimelineLayer(track.id)}
-                        >
-                          {track.label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="timeline-toggle-group" role="group" aria-label="Timeline zoom">
-                      {TIMELINE_ZOOM_LEVELS.map((level) => (
-                        <button
-                          key={level.id}
-                          type="button"
-                          className={`timeline-toggle ${timelineZoomLevel === level.id ? 'timeline-toggle--active' : ''}`}
-                          onClick={() => setTimelineZoomLevel(level.id)}
-                        >
-                          {level.label}
-                        </button>
-                      ))}
-                      <button
-                        type="button"
-                        className={`timeline-toggle ${timelineLive ? 'timeline-toggle--active' : ''}`}
-                        onClick={handleTimelineNow}
-                        aria-pressed={timelineLive}
-                      >
-                        Now
-                      </button>
-                    </div>
-                  </div>
-                  {!useDemoData && (
-                    <div className="timeline-toolbar-copy">
-                      Current schedule activities and extracted overpasses use backend timestamps. Proposed scheduling remains empty until the backend trade-off workflow is connected.
-                    </div>
-                  )}
-                </div>
-
-                {visibleTimelineTracks.length === 0 ? (
-                  <p className="timeline-empty-copy">Enable at least one timeline layer to display the schedule view.</p>
-                ) : (
-                  <div className="timeline-layout">
-                    <div className="timeline-label-column">
-                      <div className="timeline-label-cell timeline-label-cell--day"></div>
-                      <div className="timeline-label-cell timeline-label-cell--axis"></div>
-                      {visibleTimelineTracks.map((track) => (
-                        <div
-                          key={`${track.id}-label`}
-                          className="timeline-label-cell"
-                          style={{
-                            '--timeline-row-height': `${Math.max(3.2, (track.laneCount ?? 1) * 2.68 + 0.44)}rem`,
-                          }}
-                        >
-                          <span className="timeline-track-name">
-                            {track.label}
-                            {track.demoLabel && <span className="timeline-track-demo">{track.demoLabel}</span>}
-                          </span>
-                          <span className="timeline-track-copy">{track.copy}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div ref={timelineScrollFrameRef} className="timeline-scroll-frame">
-                      <div className="timeline-playhead" aria-hidden="true">
-                        <span className="timeline-playhead-label">
-                          {timelineLive && <span className="timeline-playhead-live">Live</span>}
-                          {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
-                        </span>
-                      </div>
-                      <div
-                        ref={timelineScrollRef}
-                        className="timeline-scroll"
-                        tabIndex="0"
-                        role="region"
-                        aria-label="Interactive planning timeline"
-                        onScroll={handleTimelineScroll}
-                        onWheel={pauseTimelineLiveMode}
-                        onPointerDown={pauseTimelineLiveMode}
-                        onTouchStart={pauseTimelineLiveMode}
-                        onKeyDown={handleTimelineKeyDown}
-                        onClick={handleTimelineBackgroundClick}
-                      >
-                        <div
-                          className="timeline-time-canvas"
-                          style={{ width: `${timelineWidthPx}px` }}
-                        >
-                      <div className="timeline-day-row">
-                        {timelineModel.dayBands.map((band, index) => (
-                          <div
-                            key={`${band.label}-${index}`}
-                            className={`timeline-day-band ${band.alt ? 'timeline-day-band--alt' : ''}`}
-                            style={{
-                              left: `${(band.startMinutes / timelineModel.totalMinutes) * 100}%`,
-                              width: `${(band.widthMinutes / timelineModel.totalMinutes) * 100}%`,
-                            }}
-                          >
-                            {band.label}
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="timeline-axis-row">
-                        {timelineModel.ticks.map((tick) => (
-                          <div
-                            key={tick.offsetMinutes}
-                            className={`timeline-axis-marker ${tick.offsetMinutes % 120 === 0 ? 'timeline-axis-marker--major' : ''}`}
-                            style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                          >
-                            <span>{tick.label}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      {visibleTimelineTracks.map((track, trackIndex) => (
-                          <div
-                            key={`${track.id}-row`}
-                            className="timeline-track-row"
-                            style={{
-                              '--timeline-row-height': `${Math.max(3.2, (track.laneCount ?? 1) * 2.68 + 0.44)}rem`,
-                            }}
-                          >
-                            {timelineModel.ticks.map((tick) => (
-                              <div
-                                key={`${track.id}-tick-${tick.offsetMinutes}`}
-                                className={`timeline-grid-line ${tick.offsetMinutes % 120 === 0 ? 'timeline-grid-line--major' : ''}`}
-                                style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                              ></div>
-                            ))}
-
-                            {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
-                              <div
-                                className="timeline-now-line"
-                                style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                              >
-                                {trackIndex === 0 && <span className="timeline-now-badge">Now</span>}
-                              </div>
-                            )}
-
-                            {track.items.map((item) => (
-                              (() => {
-                                const itemWidthPx = (item.durationMinutes / timelineModel.totalMinutes) * timelineWidthPx
-                                const compactBar = itemWidthPx < 120
-                                const tinyBar = itemWidthPx < 72
-
-                                return (
-                                  <button
-                                    key={item.id}
-                                    type="button"
-                                    className={`timeline-bar timeline-bar--${item.variant} ${item.tradeOffColorIndex !== null ? 'timeline-bar--tradeoff' : ''} ${compactBar ? 'timeline-bar--compact' : ''} ${tinyBar ? 'timeline-bar--tiny' : ''} ${isTimelineItemAtPlayhead(item) ? 'timeline-bar--playhead-active' : ''}`}
-                                    style={{
-                                      left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
-                                      width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
-                                      top: `calc(0.56rem + ${(item.laneIndex ?? 0) * 2.68}rem)`,
-                                      '--tradeoff-accent': item.tradeOffColorIndex !== null
-                                        ? getTradeOffAccentColor(item.tradeOffColorIndex)
-                                        : 'transparent',
-                                    }}
-                                    onClick={() => handleTimelineItemClick(item)}
-                                    aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
-                                  >
-                                    <span className="timeline-bar-content">
-                                      {item.recommended && !tinyBar && (
-                                        <span
-                                          className="timeline-bar-marker"
-                                          aria-hidden="true"
-                                        ></span>
-                                      )}
-                                      <span className="timeline-bar-title">
-                                        {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
-                                      </span>
-                                      {!tinyBar && <span className="timeline-bar-copy">{item.detail}</span>}
-                                    </span>
-                                    <span className="timeline-bar-tooltip" role="tooltip">
-                                      <span
-                                        className="timeline-bar-tooltip-inner"
-                                        onPointerDown={(event) => event.stopPropagation()}
-                                        onClick={(event) => event.stopPropagation()}
-                                      >
-                                      <strong>{item.label}</strong>
-                                      {item.recommended && <span>Recommended option</span>}
-                                      <span>{item.detail}</span>
-                                      <span>Start: {formatTimelineDateTime(item.startTime)}</span>
-                                      <span>End: {formatTimelineDateTime(item.endTime)}</span>
-                                      <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
-                                      </span>
-                                    </span>
-                                  </button>
-                                )
-                              })()
-                            ))}
-                          </div>
-                      ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="timeline-confirmation">
-                  <div className="timeline-confirmation-copy">
-                    <div className="timeline-confirmation-heading">
-                      <span className="timeline-confirmation-title">Confirm Communication Schedule</span>
-                      {useDemoData && renderDemoBadge()}
-                    </div>
-                    <span className="timeline-confirmation-text">
-                      {useDemoData
-                        ? 'Demo mode simulates activity generation, SatOS write calls and the final confirmation state.'
-                        : 'Confirmation remains unavailable until the backend write workflow is connected.'}
-                    </span>
-                  </div>
-                  <div className="timeline-confirmation-actions">
-                    <button
-                      type="button"
-                      className="btn-fetch timeline-confirm-button"
-                      disabled={!confirmDemoAvailable || confirmingSchedule}
-                      onClick={handleConfirmSchedule}
-                    >
-                      {confirmingSchedule ? 'Confirming...' : 'Confirm Communication Schedule'}
-                    </button>
-                    {!confirmingSchedule && !confirmDemoAvailable && (
-                      <span className="timeline-confirmation-tooltip">
-                        {!useDemoData
-                          ? 'Enable Demo to preview the confirmation workflow.'
-                          : !schedulerLaunched
-                            ? 'Launch Communication Scheduler first.'
-                            : !tradeOffsCalculated
-                              ? 'Calculate Trade-Offs first so a final schedule exists.'
-                              : finalScheduleRows.length === 0
-                                ? 'No schedulable links remain for confirmation.'
-                                : 'The final schedule is not ready yet.'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {confirmationSuccess && (
-                  <div className="confirmation-success" role="status" aria-live="polite">
-                    <span className="confirmation-success-icon" aria-hidden="true">✓</span>
-                    <div className="confirmation-success-copy">
-                      <strong>Success</strong>
-                      <span>
-                        {confirmedScheduleCount} schedule entr{confirmedScheduleCount === 1 ? 'y was' : 'ies were'} confirmed in the demo workflow.
-                      </span>
-                    </div>
-                  </div>
-                )}
-                  </>
-                )}
-              </div>
-            )}
-          </section>
+          {panelNodesById[panelSlotAssignment.bottomBottom]}
           </div>
         </main>
       </div>

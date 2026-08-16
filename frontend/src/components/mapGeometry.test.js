@@ -5,6 +5,8 @@ import {
   buildGeodesicCircle,
   calculateElevationFootprintAngle,
   clipPolylineToLatitudeRange,
+  computeMeanTrackAltitudeMeters,
+  geocentricEarthRadiusMeters,
   interpolateTrackPosition,
   normalizeSignedLongitude,
   splitCoordinatesAtAntimeridian,
@@ -181,6 +183,77 @@ describe('calculateElevationFootprintAngle', () => {
   it('collapses to the station location at zenith', () => {
     expect(calculateElevationFootprintAngle(300000, 90)).toBeCloseTo(0, 10)
   })
+
+  it('uses an explicit ground radius instead of the mean-sphere default when given one', () => {
+    const altitudeMeters = 300000
+    const groundRadiusMeters = 6356752.314245 // WGS84 polar radius, smaller than the mean sphere
+
+    const defaultAngle = calculateElevationFootprintAngle(altitudeMeters, 10)
+    const polarAngle = calculateElevationFootprintAngle(altitudeMeters, 10, groundRadiusMeters)
+
+    expect(polarAngle).toBeCloseTo(
+      Math.acos(
+        (groundRadiusMeters / (groundRadiusMeters + altitudeMeters))
+        * Math.cos(10 * Math.PI / 180),
+      ) - (10 * Math.PI / 180),
+      10,
+    )
+    expect(polarAngle).not.toBeCloseTo(defaultAngle, 6)
+  })
+
+  it('falls back to the mean-sphere radius for a non-finite ground radius', () => {
+    const withInvalidRadius = calculateElevationFootprintAngle(300000, 10, NaN)
+    const withDefaultRadius = calculateElevationFootprintAngle(300000, 10)
+
+    expect(withInvalidRadius).toBeCloseTo(withDefaultRadius, 10)
+  })
+})
+
+describe('geocentricEarthRadiusMeters', () => {
+  it('equals the WGS84 equatorial (semi-major axis) radius at the equator', () => {
+    expect(geocentricEarthRadiusMeters(0)).toBeCloseTo(6378137, 3)
+  })
+
+  it('equals the WGS84 polar (semi-minor axis) radius at the poles', () => {
+    expect(geocentricEarthRadiusMeters(90)).toBeCloseTo(6356752.314245, 3)
+    expect(geocentricEarthRadiusMeters(-90)).toBeCloseTo(6356752.314245, 3)
+  })
+
+  it('is strictly between the polar and equatorial radius at mid-latitudes', () => {
+    const radius = geocentricEarthRadiusMeters(45)
+    expect(radius).toBeGreaterThan(6356752.314245)
+    expect(radius).toBeLessThan(6378137)
+  })
+
+  it('falls back to the mean sphere radius for a non-finite latitude', () => {
+    expect(geocentricEarthRadiusMeters(NaN)).toBe(EARTH_MEAN_RADIUS_METERS)
+    expect(geocentricEarthRadiusMeters(undefined)).toBe(EARTH_MEAN_RADIUS_METERS)
+  })
+})
+
+describe('computeMeanTrackAltitudeMeters', () => {
+  it('averages the altitude samples across a track', () => {
+    expect(computeMeanTrackAltitudeMeters([
+      { altitude_m: 300000 },
+      { altitude_m: 320000 },
+      { altitude_m: 310000 },
+    ])).toBeCloseTo(310000, 6)
+  })
+
+  it('ignores non-finite altitude samples', () => {
+    expect(computeMeanTrackAltitudeMeters([
+      { altitude_m: 300000 },
+      { altitude_m: null },
+      { altitude_m: undefined },
+      { altitude_m: 320000 },
+    ])).toBeCloseTo(310000, 6)
+  })
+
+  it('returns null when there is no usable altitude data', () => {
+    expect(computeMeanTrackAltitudeMeters([])).toBeNull()
+    expect(computeMeanTrackAltitudeMeters(undefined)).toBeNull()
+    expect(computeMeanTrackAltitudeMeters([{ altitude_m: null }])).toBeNull()
+  })
 })
 
 describe('buildGeodesicCircle', () => {
@@ -190,5 +263,46 @@ describe('buildGeodesicCircle', () => {
     expect(circle).toHaveLength(33)
     expect(circle[0][0]).toBeCloseTo(circle.at(-1)[0], 10)
     expect(circle[0][1]).toBeCloseTo(circle.at(-1)[1], 10)
+  })
+
+  const maxWrappedLongitudeStep = (points) => {
+    let max = 0
+    for (let index = 1; index < points.length; index += 1) {
+      const rawDelta = Math.abs(points[index][0] - points[index - 1][0])
+      const wrapped = rawDelta > 180 ? 360 - rawDelta : rawDelta
+      max = Math.max(max, wrapped)
+    }
+    return max
+  }
+
+  it('does not add extra points for an ordinary circle far from a pole', () => {
+    const circle = buildGeodesicCircle(50, 10, 0.1, 32)
+    expect(circle).toHaveLength(33)
+  })
+
+  it('adaptively refines a footprint circle that encloses a pole so it never jumps far in a single step', () => {
+    // A near-polar ground station (e.g. Svalbard) whose visibility circle
+    // reaches past the pole: the raw bearing-sampled version leaves huge
+    // longitude gaps between adjacent samples near the pole, which used to
+    // render as a wrong-looking straight chord across the map.
+    const stationLatitude = 78.23
+    const angularRadiusRadians = (90 - stationLatitude + 6.8) * (Math.PI / 180)
+    const circle = buildGeodesicCircle(stationLatitude, 15.4, angularRadiusRadians, 128)
+
+    expect(circle.length).toBeGreaterThan(129)
+    expect(maxWrappedLongitudeStep(circle)).toBeLessThanOrEqual(5)
+  })
+
+  it('stays closed and bounded even for a circle barely larger than the distance to the pole', () => {
+    const stationLatitude = 78.23
+    const distanceToPoleDegrees = 90 - stationLatitude
+    const angularRadiusRadians = (distanceToPoleDegrees + 0.001) * (Math.PI / 180)
+    const circle = buildGeodesicCircle(stationLatitude, 15.4, angularRadiusRadians, 128)
+
+    expect(maxWrappedLongitudeStep(circle)).toBeLessThanOrEqual(5)
+    expect(circle[0][0]).toBeCloseTo(circle.at(-1)[0], 6)
+    expect(circle[0][1]).toBeCloseTo(circle.at(-1)[1], 6)
+    // bounded refinement: shouldn't explode into an unbounded number of points
+    expect(circle.length).toBeLessThan(5000)
   })
 })

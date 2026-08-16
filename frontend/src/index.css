@@ -1092,8 +1092,8 @@ body {
 .planning-views-row {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1.2rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.9rem;
   align-items: start;
   min-width: 0;
 }
@@ -1153,6 +1153,96 @@ body {
     radial-gradient(circle at center, rgba(37, 68, 102, 0.68) 0 1.1px, transparent 1.2px) center 0.25rem / 100% 0.45rem repeat-y,
     #f5f8fb;
   border-color: #b9c6d2;
+}
+
+/* Horizontal variant: the draggable divider between the Map View and
+   Timeline panels, which are stacked rather than side-by-side, so it
+   resizes height instead of width. */
+.panel-resizer--horizontal {
+  width: auto;
+  min-width: 0;
+  height: 0.9rem;
+  min-height: 0.9rem;
+  align-self: stretch;
+  cursor: row-resize;
+}
+
+.panel-resizer-line--horizontal {
+  top: 50%;
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.panel-resizer-grip--horizontal {
+  width: 2.25rem;
+  height: 0.42rem;
+  background:
+    radial-gradient(circle at center, rgba(60, 79, 98, 0.55) 0 1.1px, transparent 1.2px) 0.25rem center / 0.45rem 100% repeat-x,
+    #eef2f6;
+}
+
+.panel-resizer:hover .panel-resizer-grip--horizontal,
+.panel-resizer:focus-visible .panel-resizer-grip--horizontal {
+  background:
+    radial-gradient(circle at center, rgba(37, 68, 102, 0.68) 0 1.1px, transparent 1.2px) 0.25rem center / 0.45rem 100% repeat-x,
+    #f5f8fb;
+}
+
+/* Drag-to-reorder handle shown in every panel's heading. */
+.panel-heading-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.panel-drag-handle {
+  flex: 0 0 auto;
+  width: 1.7rem;
+  height: 1.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
+  cursor: grab;
+}
+
+.panel-drag-handle:hover {
+  background: var(--bg-hover);
+}
+
+.panel-drag-handle:active {
+  cursor: grabbing;
+}
+
+.panel-drag-handle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.panel-drag-handle-icon {
+  width: 0.8rem;
+  height: 0.8rem;
+  background:
+    radial-gradient(circle at center, rgba(60, 79, 98, 0.75) 0 1.1px, transparent 1.2px) 0 0 / 0.4rem 0.4rem repeat;
+}
+
+/* Drag state feedback: the panel being dragged fades slightly, and the
+   panel currently under the pointer is highlighted as the drop target. */
+.panel--dragging {
+  opacity: 0.45;
+}
+
+.panel--drag-over {
+  outline: 2px dashed var(--accent-primary);
+  outline-offset: 2px;
 }
 
 .panel h2 {
@@ -2000,34 +2090,67 @@ body {
 .mission-map-shell {
   position: relative;
   height: 462px;
-  min-height: 330px;
+  min-height: 48px;
   border: 1px solid var(--line-soft);
   border-radius: 0.22rem;
   overflow: hidden;
   background: #dceaf4;
 }
 
-.planning-views-row .mission-map-shell {
-  height: clamp(420px, 90cqi, 510px);
+/* The actual height comes from the heightPx prop (an inline style, set by
+   whichever panel layout is hosting the map — e.g. the draggable divider
+   between Map View and Timeline). Below a height threshold the component
+   also adds --compact, since the overlays below (legend, fit-to-selection
+   buttons, coordinate readout, scale bar, grid labels) don't have room to
+   render without overlapping in a strip that thin. The zoom/fullscreen
+   controls stay so a person can still expand the map to inspect it in
+   full via the browser Fullscreen API, exempted below via :not(:fullscreen). */
+.mission-map-shell--compact:not(:fullscreen) .mission-map-coordinate-readout,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-fit-controls,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-legend,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-scale-bar,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-attribution,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-coordinate-label,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-coordinate-tick {
+  display: none;
+}
+
+.mission-map-shell--compact:not(:fullscreen) .mission-map-navigation-controls {
+  top: 50%;
+  right: 0.4rem;
+  transform: translateY(-50%);
+  flex-direction: row;
+}
+
+.mission-map-shell--compact:not(:fullscreen) .mission-map-nav-control {
+  width: 1.4rem;
+  height: 1.4rem;
+  font-size: 0.7rem;
 }
 
 .mission-map {
+  position: relative;
   width: 100%;
   height: 100%;
-}
-
-.mission-map .maplibregl-canvas {
   cursor: crosshair;
+  touch-action: none;
 }
 
-.mission-map-track-overlay {
+.mission-map-canvas {
   position: absolute;
-  z-index: 1;
+  z-index: 0;
   inset: 0;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  pointer-events: none;
+}
+
+.mission-map-world-outline {
+  fill: #d9e2d2;
+  stroke: #8fa085;
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+  fill-rule: evenodd;
 }
 
 .mission-map-track-path {
@@ -2080,6 +2203,8 @@ body {
 .mission-map-marker {
   position: absolute;
   z-index: 2;
+  top: 0;
+  left: 0;
   width: 1.35rem;
   height: 1.35rem;
   padding: 0;
@@ -2138,21 +2263,23 @@ body {
   visibility: visible;
 }
 
-.mission-map-shell .maplibregl-marker {
-  z-index: 2;
-}
-
-.mission-map-shell .maplibregl-popup {
+.mission-map-asset-popup {
+  position: absolute;
   z-index: 3;
-  pointer-events: none;
-}
-
-.mission-map-shell .maplibregl-popup-content {
+  top: 0;
+  left: 0;
   min-width: 12.5rem;
   padding: 0.62rem 0.7rem;
   border: 1px solid rgba(31, 42, 51, 0.16);
   border-radius: 0.2rem;
+  background: rgba(255, 255, 255, 0.98);
   box-shadow: 0 3px 12px rgba(31, 42, 51, 0.2);
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+}
+
+.mission-map-asset-popup--below {
+  transform: translate(-50%, 0);
 }
 
 .mission-map-popup-content {
@@ -2309,14 +2436,72 @@ body {
   color: #7b4a00;
 }
 
-.mission-map-shell .maplibregl-ctrl-group {
-  overflow: hidden;
+.mission-map-navigation-controls {
+  position: absolute;
+  z-index: 4;
+  top: 0.65rem;
+  right: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(31, 42, 51, 0.2);
   border-radius: 0.2rem;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.18);
 }
 
-.mission-map-shell .maplibregl-ctrl-attrib {
+.mission-map-nav-control {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(31, 42, 51, 0.14);
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-weight: 650;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mission-map-nav-control:last-child {
+  border-bottom: 0;
+}
+
+.mission-map-nav-control:hover:not(:disabled) {
+  background: #f4f7fa;
+}
+
+.mission-map-nav-control:disabled {
+  color: #8b98a4;
+  cursor: not-allowed;
+}
+
+.mission-map-scale-bar {
+  position: absolute;
+  z-index: 4;
+  right: 0.65rem;
+  bottom: 0.6rem;
+  padding: 0.08rem 0.35rem;
+  border: 1.5px solid #334e68;
+  border-top: 0;
+  color: #263f53;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 0.64rem;
+  font-weight: 650;
+  text-align: center;
+  pointer-events: none;
+}
+
+.mission-map-attribution {
+  position: absolute;
+  z-index: 4;
+  left: 0.5rem;
+  bottom: 0.3rem;
   color: #334e68;
-  font-size: 0.66rem;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 0 0.25rem;
+  font-size: 0.62rem;
+  pointer-events: none;
 }
 
 .map-sidebar {
@@ -2602,6 +2787,93 @@ body {
   color: #fff;
 }
 
+/* Zoom level ("Fit"/"Detail") reads as one segmented control, distinct
+   from the standalone "Now" button next to it — the same visual pattern
+   already used to set the Play button apart from the speed-preset pill. */
+.timeline-zoom-control {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  overflow: hidden;
+}
+
+.timeline-zoom-option {
+  border: none;
+  border-right: 1px solid var(--line-strong);
+  background: #f4f6f8;
+  color: var(--text-secondary);
+  padding: 0.28rem 0.48rem;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.timeline-zoom-option:last-child {
+  border-right: none;
+}
+
+.timeline-zoom-option:hover {
+  background: #ebf1f8;
+  color: var(--text-primary);
+}
+
+.timeline-zoom-option--active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+
+.timeline-play-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.timeline-play-icon {
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+/* Playback speed "Regler": a compact segmented control of discrete speed
+   presets (1x/2x/4x/.../16x) rather than a free-form slider, since play
+   speed only ever takes these fixed steps. */
+.timeline-speed-control {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: #f4f6f8;
+  padding: 0.14rem;
+  gap: 0.1rem;
+}
+
+.timeline-speed-option {
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0.2rem 0.5rem;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.timeline-speed-option:hover {
+  color: var(--text-primary);
+}
+
+.timeline-speed-option--active {
+  background: var(--accent-primary);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(31, 42, 51, 0.28);
+}
+
 .timeline-toolbar-copy,
 .timeline-empty-copy {
   font-size: 0.82rem;
@@ -2777,33 +3049,63 @@ body {
   box-sizing: content-box;
   padding-inline: 50%;
   background: #f1f4f7;
-  cursor: crosshair;
 }
 
-.timeline-playhead {
+/*
+ * The playhead slider is deliberately separate from `.timeline-scroll`
+ * below it: it always spans the full planning window (never zoomed or
+ * panned), and its thumb is the ONLY way to change the current time shown
+ * on the map. Scrolling or clicking the timeline underneath must never
+ * move it -- see handleTimelinePlayheadPointerDown/Move/Up in App.jsx.
+ */
+.timeline-playhead-slider {
   position: absolute;
-  z-index: 15;
+  z-index: 16;
   top: 0;
-  bottom: 0.25rem;
-  left: 50%;
-  width: 0;
-  pointer-events: none;
+  left: 0;
+  right: 0;
+  height: 1.9rem;
 }
 
-.timeline-playhead::after {
-  content: "";
+.timeline-playhead-thumb {
   position: absolute;
-  top: 1.65rem;
+  top: 0;
+  bottom: 0.2rem;
+  width: 1.1rem;
+  transform: translateX(-50%);
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.timeline-playhead-thumb:active {
+  cursor: grabbing;
+}
+
+.timeline-playhead-handle {
+  position: absolute;
   bottom: 0;
-  left: 0;
-  border-left: 2px solid #b9571f;
-  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.9));
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: #b9571f;
+  border: 2px solid #fff8f1;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.35);
+}
+
+.timeline-playhead-thumb:focus-visible .timeline-playhead-handle {
+  box-shadow: 0 0 0 3px rgba(185, 87, 31, 0.35);
 }
 
 .timeline-playhead-label {
   position: absolute;
-  top: 0.2rem;
-  left: 0;
+  top: 0.05rem;
+  left: 50%;
   display: inline-flex;
   align-items: center;
   gap: 0.38rem;
@@ -2818,6 +3120,7 @@ body {
   font-weight: 700;
   line-height: 1.2;
   white-space: nowrap;
+  pointer-events: none;
 }
 
 .timeline-playhead-live {
@@ -3079,6 +3382,18 @@ body {
   font-size: 0.68rem;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* Non-interactive marker showing where the playhead slider's current time
+   falls within the (possibly scrolled/zoomed) timeline content below. */
+.timeline-playhead-marker-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px dashed #b9571f;
+  z-index: 4;
+  pointer-events: none;
 }
 
 .timeline-bar {
@@ -3361,8 +3676,7 @@ body {
   }
 
   .planning-views-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1rem;
+    gap: 0.8rem;
   }
 
   .overview-summary {

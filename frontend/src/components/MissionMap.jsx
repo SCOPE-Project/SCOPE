@@ -1,75 +1,70 @@
-import { useEffect, useRef, useState } from 'react'
-import * as maplibregl from 'maplibre-gl'
-import { MaptoolkitLogoControl } from '@maptoolkit/maplibre-gl-logo'
-import 'maplibre-gl/dist/maplibre-gl.css'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   buildGeodesicCircle,
   calculateElevationFootprintAngle,
   clipPolylineToLatitudeRange,
+  computeMeanTrackAltitudeMeters,
+  geocentricEarthRadiusMeters,
   normalizeSignedLongitude,
   splitCoordinatesAtAntimeridian,
   splitTrackAtAntimeridian,
 } from './mapGeometry.js'
+import {
+  MAX_LATITUDE,
+  clampView,
+  computeFitBoundsView,
+  computeFitWorldZoom,
+  getVisibleGeographicBounds,
+  project,
+  scaleForZoom,
+  unproject,
+  worldGroupTransform,
+} from './equirectangularProjection.js'
+import { loadWorldOutlines } from './worldMap.js'
 
-const MAPTOOLKIT_STYLE_URL = (
-  import.meta.env.VITE_MAPTOOLKIT_STYLE_URL?.trim()
-  || 'https://styles.maptoolkit.org/summer.json'
-)
+const WORLD_OUTLINES_URL = `${import.meta.env.BASE_URL}world/countries-110m.json`
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg'
-const MAX_MERCATOR_LATITUDE = 85.05112878
-const MIN_MAP_ZOOM = -1.2
+const WHEEL_ZOOM_STEP = 0.55
+const BUTTON_ZOOM_STEP = 1
+const EASE_DURATION_MS = 450
 
-const fitMapToGlobe = (map, animate = true) => {
-  const container = map.getContainer()
-  const availableSize = Math.max(
-    1,
-    Math.min(container.clientWidth, container.clientHeight) - 40,
-  )
-  const globeZoom = Math.max(
-    map.getMinZoom(),
-    Math.min(0, Math.log2(availableSize / 512)),
-  )
+// Equirectangular (Plate Carree) projection: longitude and latitude share the
+// same constant pixels-per-degree scale, so the whole world from pole to
+// pole can be shown at once and ground tracks / visibility footprints keep a
+// uniform north/south spacing instead of the Mercator's polar stretching.
 
-  map.easeTo({
-    center: [0, 0],
-    zoom: globeZoom,
-    bearing: 0,
-    pitch: 0,
-    duration: animate ? 650 : 0,
-  })
-}
+const easeOutCubic = (t) => 1 - ((1 - t) ** 3)
 
-const fitMapToAssets = (map, assets, animate = true) => {
-  if (assets.length === 0) {
-    fitMapToGlobe(map, animate)
+const animateView = (viewRef, target, duration, onFrame) => {
+  const start = { ...viewRef.current }
+  const startTime = (typeof performance !== 'undefined' ? performance : Date).now()
+
+  if (duration <= 0) {
+    viewRef.current = target
+    onFrame()
     return
   }
 
-  if (assets.length === 1) {
-    map.easeTo({
-      center: [normalizeSignedLongitude(assets[0].longitude), assets[0].latitude],
-      zoom: assets[0].markerType === 'ground-station' ? 4 : 2.8,
-      duration: animate ? 600 : 0,
-    })
-    return
+  const step = () => {
+    const now = (typeof performance !== 'undefined' ? performance : Date).now()
+    const progress = Math.min(1, (now - startTime) / duration)
+    const eased = easeOutCubic(progress)
+
+    viewRef.current = {
+      centerLongitude: start.centerLongitude
+        + ((target.centerLongitude - start.centerLongitude) * eased),
+      centerLatitude: start.centerLatitude
+        + ((target.centerLatitude - start.centerLatitude) * eased),
+      zoom: start.zoom + ((target.zoom - start.zoom) * eased),
+    }
+    onFrame()
+
+    if (progress < 1) {
+      window.requestAnimationFrame(step)
+    }
   }
 
-  const longitudes = assets.map((asset) => normalizeSignedLongitude(asset.longitude))
-  const minLongitude = Math.min(...longitudes)
-  const maxLongitude = Math.max(...longitudes)
-  const latitudes = assets.map((asset) => asset.latitude)
-
-  map.fitBounds(
-    [
-      [minLongitude, Math.min(...latitudes)],
-      [maxLongitude, Math.max(...latitudes)],
-    ],
-    {
-      padding: { top: 70, right: 110, bottom: 70, left: 70 },
-      maxZoom: 4.5,
-      duration: animate ? 650 : 0,
-    },
-  )
+  window.requestAnimationFrame(step)
 }
 
 const formatCoordinate = (value, positiveLabel, negativeLabel, precision = 2) => {
@@ -106,42 +101,49 @@ const getGridValues = (minimum, maximum, step) => {
   return values
 }
 
-const latitudeToMercatorY = (latitude) => {
-  const latitudeRadians = latitude * Math.PI / 180
-  return (
-    1
-    - (Math.log(Math.tan(latitudeRadians) + (1 / Math.cos(latitudeRadians))) / Math.PI)
-  ) / 2
+const niceScaleDistanceMeters = (maxDistanceMeters) => {
+  if (!Number.isFinite(maxDistanceMeters) || maxDistanceMeters <= 0) {
+    return 0
+  }
+
+  const exponent = Math.floor(Math.log10(maxDistanceMeters))
+  const fraction = maxDistanceMeters / (10 ** exponent)
+  let niceFraction = 1
+  if (fraction >= 7) {
+    niceFraction = 10
+  } else if (fraction >= 3) {
+    niceFraction = 5
+  } else if (fraction >= 1.5) {
+    niceFraction = 2
+  }
+
+  return niceFraction * (10 ** exponent)
 }
 
-const mercatorYToLatitude = (mercatorY) => (
-  Math.atan(Math.sinh(Math.PI * (1 - (2 * mercatorY)))) * 180 / Math.PI
-)
+const computeScaleBar = (view, maxBarWidthPx = 110) => {
+  const cosLatitude = Math.max(0.02, Math.cos(view.centerLatitude * Math.PI / 180))
+  const metersPerDegree = 111320 * cosLatitude
+  const scale = scaleForZoom(view.zoom)
+  const metersPerPixel = metersPerDegree / scale
+  const distanceMeters = niceScaleDistanceMeters(maxBarWidthPx * metersPerPixel)
 
-const getVisibleGeographicBounds = (map, width, height) => {
-  const center = map.getCenter()
-  const worldSize = 512 * (2 ** map.getZoom())
-  const longitudeHalfSpan = (width / 2) * 360 / worldSize
-  const centerMercatorY = latitudeToMercatorY(center.lat)
-  const mercatorYHalfSpan = (height / 2) / worldSize
-
-  return {
-    minimumLongitude: Math.max(-180, center.lng - longitudeHalfSpan),
-    maximumLongitude: Math.min(180, center.lng + longitudeHalfSpan),
-    minimumLatitude: Math.max(
-      -MAX_MERCATOR_LATITUDE,
-      mercatorYToLatitude(centerMercatorY + mercatorYHalfSpan),
-    ),
-    maximumLatitude: Math.min(
-      MAX_MERCATOR_LATITUDE,
-      mercatorYToLatitude(centerMercatorY - mercatorYHalfSpan),
-    ),
+  if (!(distanceMeters > 0) || !(metersPerPixel > 0)) {
+    return null
   }
+
+  const widthPx = distanceMeters / metersPerPixel
+  const label = distanceMeters >= 1000
+    ? `${(distanceMeters / 1000).toFixed(distanceMeters >= 10000 ? 0 : 1)} km`
+    : `${Math.round(distanceMeters)} m`
+
+  return { widthPx, label }
 }
 
 const createSvgElement = (name, className) => {
   const element = document.createElementNS(SVG_NAMESPACE, name)
-  element.setAttribute('class', className)
+  if (className) {
+    element.setAttribute('class', className)
+  }
   return element
 }
 
@@ -183,25 +185,20 @@ const appendPath = (fragment, className, coordinates, attributes = {}) => {
   fragment.append(path)
 }
 
-const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId) => {
-  if (!overlay) {
+const renderMapOverlay = (overlayGroup, view, width, height, assets, satelliteTracks, activeAssetId) => {
+  if (!overlayGroup || width <= 0 || height <= 0) {
     return
   }
 
-  const width = map.getContainer().clientWidth
-  const height = map.getContainer().clientHeight
-  if (width <= 0 || height <= 0) {
-    return
-  }
-  overlay.setAttribute('viewBox', `0 0 ${width} ${height}`)
-
+  const projectPoint = (coordinate) => project(coordinate[0], coordinate[1], view, width, height)
   const fragment = document.createDocumentFragment()
   const {
     minimumLongitude,
     maximumLongitude,
     minimumLatitude,
     maximumLatitude,
-  } = getVisibleGeographicBounds(map, width, height)
+  } = getVisibleGeographicBounds(view, width, height)
+
   const longitudeValues = getGridValues(
     minimumLongitude,
     maximumLongitude,
@@ -214,10 +211,10 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
   )
 
   longitudeValues.forEach((longitude) => {
-    const start = map.project([longitude, minimumLatitude])
-    const end = map.project([longitude, maximumLatitude])
+    const start = projectPoint([longitude, minimumLatitude])
+    const end = projectPoint([longitude, maximumLatitude])
     appendPath(fragment, 'mission-map-coordinate-grid-line', [start, end])
-    const x = map.project([longitude, 0]).x
+    const x = projectPoint([longitude, 0]).x
     if (x > 34 && x < width - 34) {
       const label = formatGridCoordinate(longitude, 'E', 'W')
       appendGridLabel(fragment, label, x, 14, 'middle', 'longitude', 'start')
@@ -226,10 +223,10 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
   })
 
   latitudeValues.forEach((latitude) => {
-    const start = map.project([minimumLongitude, latitude])
-    const end = map.project([maximumLongitude, latitude])
+    const start = projectPoint([minimumLongitude, latitude])
+    const end = projectPoint([maximumLongitude, latitude])
     appendPath(fragment, 'mission-map-coordinate-grid-line', [start, end])
-    const y = map.project([0, latitude]).y
+    const y = projectPoint([0, latitude]).y
     if (y > 22 && y < height - 22) {
       const label = formatGridCoordinate(latitude, 'N', 'S')
       appendGridLabel(fragment, label, 5, y + 3, 'start', 'latitude', 'start')
@@ -249,8 +246,21 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
     ?? selectedSatelliteAssets[0]
     ?? null
   )
+  // Stationary reference altitude for the visibility footprint: the orbit's
+  // mean altitude across its whole propagated track, not the live altitude
+  // at the current playhead time. Using the live value made the footprint
+  // circle resize on every timeline tick (and on eccentric orbits, visibly
+  // pulse); the track's mean altitude is a stable stand-in for "the orbit
+  // height" instead. Falls back to the live altitude if no track is
+  // available yet.
+  const referenceOrbitAltitudeMeters = referenceSatellite
+    ? (
+      computeMeanTrackAltitudeMeters(satelliteTracks[referenceSatellite.name])
+      ?? referenceSatellite.altitude
+    )
+    : null
 
-  if (referenceSatellite) {
+  if (referenceSatellite && Number.isFinite(referenceOrbitAltitudeMeters)) {
     assets
       .filter((asset) => (
         asset.markerType === 'ground-station'
@@ -258,8 +268,12 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
       ))
       .forEach((groundStation) => {
         const footprintAngle = calculateElevationFootprintAngle(
-          referenceSatellite.altitude,
+          referenceOrbitAltitudeMeters,
           groundStation.minLinkElevation,
+          // Correct for Earth's oblateness at the ground station's own
+          // latitude instead of assuming a uniform mean-radius sphere (see
+          // geocentricEarthRadiusMeters).
+          geocentricEarthRadiusMeters(groundStation.latitude),
         )
         const ring = buildGeodesicCircle(
           groundStation.latitude,
@@ -270,14 +284,14 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
         splitCoordinatesAtAntimeridian(ring)
           .flatMap((segment) => clipPolylineToLatitudeRange(
             segment,
-            -MAX_MERCATOR_LATITUDE,
-            MAX_MERCATOR_LATITUDE,
+            -MAX_LATITUDE,
+            MAX_LATITUDE,
           ))
           .forEach((segment) => {
             appendPath(
               fragment,
               'mission-map-elevation-footprint',
-              segment.map((coordinate) => map.project(coordinate)),
+              segment.map(projectPoint),
             )
           })
       })
@@ -287,20 +301,20 @@ const renderMapOverlays = (map, overlay, assets, satelliteTracks, activeAssetId)
     const segments = splitTrackAtAntimeridian(satelliteTracks[satelliteName] ?? [])
       .flatMap((segment) => clipPolylineToLatitudeRange(
         segment,
-        -MAX_MERCATOR_LATITUDE,
-        MAX_MERCATOR_LATITUDE,
+        -MAX_LATITUDE,
+        MAX_LATITUDE,
       ))
 
     segments.forEach((segment) => {
       appendPath(
         fragment,
         'mission-map-track-path mission-map-orbit-path',
-        segment.map((coordinate) => map.project(coordinate)),
+        segment.map(projectPoint),
       )
     })
   })
 
-  overlay.replaceChildren(fragment)
+  overlayGroup.replaceChildren(fragment)
 }
 
 const formatAssetTimestamp = (value, timeMode) => {
@@ -360,20 +374,40 @@ const syncAssetPopupContent = (container, asset, timeMode) => {
   container.replaceChildren(heading, type, details)
 }
 
+const positionMarkerRecord = (markerRecord, view, width, height) => {
+  const longitude = normalizeSignedLongitude(markerRecord.asset.longitude)
+  const { x, y } = project(longitude, markerRecord.asset.latitude, view, width, height)
+  markerRecord.element.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`
+
+  if (!markerRecord.popup.isOpen) {
+    return
+  }
+
+  const popupElement = markerRecord.popup.element
+  const showBelow = y < 150
+  popupElement.classList.toggle('mission-map-asset-popup--below', showBelow)
+  const clampedX = Math.max(105, Math.min(width - 105, x))
+  popupElement.style.left = `${clampedX}px`
+  popupElement.style.top = `${showBelow ? y + 15 : y - 15}px`
+}
+
 const syncAssetMarkers = (
-  map,
+  markersContainer,
   markers,
   assets,
   activeAssetId,
   onSelectAssetRef,
   timeMode,
+  view,
+  width,
+  height,
 ) => {
   const visibleAssetIds = new Set(assets.map((asset) => asset.id))
 
-  markers.forEach(({ marker, popup }, assetId) => {
+  markers.forEach(({ element, popup }, assetId) => {
     if (!visibleAssetIds.has(assetId)) {
-      popup.remove()
-      marker.remove()
+      popup.element.remove()
+      element.remove()
       markers.delete(assetId)
     }
   })
@@ -393,44 +427,33 @@ const syncAssetMarkers = (
 
       const popupContent = document.createElement('div')
       popupContent.className = 'mission-map-popup-content'
-      const popup = new maplibregl.Popup({
-        className: 'mission-map-asset-popup',
-        closeButton: false,
-        closeOnClick: false,
-        offset: 15,
-      })
-      const marker = new maplibregl.Marker({ element, anchor: 'center' })
-        .setLngLat([normalizeSignedLongitude(asset.longitude), asset.latitude])
-        .addTo(map)
-      markerRecord = { asset, element, marker, popup, popupContent, timeMode }
+      const popupElement = document.createElement('div')
+      popupElement.className = 'mission-map-asset-popup'
+      popupElement.append(popupContent)
+      const popup = { element: popupElement, isOpen: false }
+
+      markerRecord = { asset, element, popup, popupContent, timeMode }
       const showPopup = () => {
-        syncAssetPopupContent(
-          markerRecord.popupContent,
-          markerRecord.asset,
-          markerRecord.timeMode,
-        )
-        markerRecord.popup
-          .setLngLat(markerRecord.marker.getLngLat())
-          .setDOMContent(markerRecord.popupContent)
-          .addTo(map)
+        syncAssetPopupContent(popupContent, markerRecord.asset, markerRecord.timeMode)
+        popup.isOpen = true
+        markersContainer.append(popupElement)
+        positionMarkerRecord(markerRecord, view, width, height)
       }
-      const hidePopup = () => markerRecord.popup.remove()
+      const hidePopup = () => {
+        popup.isOpen = false
+        popupElement.remove()
+      }
       element.addEventListener('mouseenter', showPopup)
       element.addEventListener('mouseleave', hidePopup)
       element.addEventListener('focus', showPopup)
       element.addEventListener('blur', hidePopup)
+      markersContainer.append(element)
       markers.set(asset.id, markerRecord)
     }
 
     markerRecord.asset = asset
     markerRecord.timeMode = timeMode
-    const markerLongitude = normalizeSignedLongitude(asset.longitude)
-    markerRecord.marker.setLngLat([markerLongitude, asset.latitude])
-    if (markerRecord.popup.isOpen()) {
-      markerRecord.popup.setLngLat([markerLongitude, asset.latitude])
-      syncAssetPopupContent(markerRecord.popupContent, asset, timeMode)
-    }
-    markerRecord.element.classList.add('maplibregl-marker', 'mission-map-marker')
+    markerRecord.element.classList.add('mission-map-marker')
     markerRecord.element.classList.remove(
       'mission-map-marker--ground-station',
       'mission-map-marker--satellite',
@@ -440,6 +463,10 @@ const syncAssetMarkers = (
       'mission-map-marker--active',
       activeAssetId === asset.id,
     )
+    if (markerRecord.popup.isOpen) {
+      syncAssetPopupContent(markerRecord.popupContent, asset, timeMode)
+    }
+    positionMarkerRecord(markerRecord, view, width, height)
   })
 }
 
@@ -449,14 +476,27 @@ export default function MissionMap({
   activeAssetId,
   onSelectAsset,
   timeMode = 'utc',
+  heightPx = 380,
 }) {
+  // Below this height there isn't room for the informational overlays
+  // (legend, fit-to-selection buttons, coordinate readout, scale bar, grid
+  // labels) without them overlapping each other, so they're hidden while
+  // the panel is this short. The zoom/fullscreen controls stay available
+  // so a person can still expand the map for full detail.
+  const isCompact = heightPx < 140
+  const mapShellRef = useRef(null)
   const mapContainerRef = useRef(null)
-  const trackOverlayRef = useRef(null)
+  const svgRef = useRef(null)
+  const worldGroupRef = useRef(null)
+  const overlayGroupRef = useRef(null)
   const coordinateReadoutRef = useRef(null)
-  const mapRef = useRef(null)
+  const scaleBarRef = useRef(null)
+  const viewRef = useRef({ centerLongitude: 0, centerLatitude: 0, zoom: 0 })
+  const minZoomRef = useRef(computeFitWorldZoom(1, 1))
+  const worldOutlinesRef = useRef([])
   const mapReadyRef = useRef(false)
   const overlayInteractionSnapshotRef = useRef(null)
-  const renderOverlayRef = useRef(null)
+  const renderFrameRef = useRef(null)
   const markersRef = useRef(new Map())
   const assetsRef = useRef(assets)
   const satelliteTracksRef = useRef(satelliteTracks)
@@ -464,6 +504,7 @@ export default function MissionMap({
   const timeModeRef = useRef(timeMode)
   const onSelectAssetRef = useRef(onSelectAsset)
   const [mapStatus, setMapStatus] = useState('loading')
+  const [worldPaths, setWorldPaths] = useState([])
 
   useEffect(() => {
     assetsRef.current = assets
@@ -474,180 +515,429 @@ export default function MissionMap({
   }, [activeAssetId, assets, onSelectAsset, satelliteTracks, timeMode])
 
   useEffect(() => {
-    if (!mapContainerRef.current) {
+    const controller = new AbortController()
+    loadWorldOutlines(WORLD_OUTLINES_URL, { signal: controller.signal })
+      .then((paths) => {
+        worldOutlinesRef.current = paths
+        setWorldPaths(paths)
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          console.error('Failed to load world map outlines.', error)
+          setMapStatus('error')
+        }
+      })
+
+    return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
+    const container = mapContainerRef.current
+    const svg = svgRef.current
+    if (!container || !svg || worldPaths.length === 0) {
       return undefined
     }
 
-    const map = new maplibregl.Map({
-      container: mapContainerRef.current,
-      style: MAPTOOLKIT_STYLE_URL,
-      center: [0, 0],
-      zoom: -0.5,
-      minZoom: MIN_MAP_ZOOM,
-      renderWorldCopies: false,
-      dragRotate: false,
-      pitchWithRotate: false,
-      touchPitch: false,
-      maxPitch: 0,
-      attributionControl: { compact: true },
-    })
     const markers = markersRef.current
-    const renderTracks = () => {
+    const getSize = () => ({
+      width: container.clientWidth,
+      height: container.clientHeight,
+    })
+
+    const renderFrame = () => {
+      const { width, height } = getSize()
+      if (width <= 0 || height <= 0) {
+        return
+      }
+
+      const view = viewRef.current
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`)
+      if (worldGroupRef.current) {
+        worldGroupRef.current.setAttribute('transform', worldGroupTransform(view, width, height))
+      }
+
       const overlayData = overlayInteractionSnapshotRef.current ?? {
         assets: assetsRef.current,
         satelliteTracks: satelliteTracksRef.current,
         activeAssetId: activeAssetIdRef.current,
       }
-
-      renderMapOverlays(
-        map,
-        trackOverlayRef.current,
+      renderMapOverlay(
+        overlayGroupRef.current,
+        view,
+        width,
+        height,
         overlayData.assets,
         overlayData.satelliteTracks,
         overlayData.activeAssetId,
       )
+      syncAssetMarkers(
+        container,
+        markers,
+        overlayData.assets,
+        overlayData.activeAssetId,
+        onSelectAssetRef,
+        timeModeRef.current,
+        view,
+        width,
+        height,
+      )
+
+      if (scaleBarRef.current) {
+        const metrics = computeScaleBar(view)
+        if (metrics) {
+          scaleBarRef.current.style.width = `${metrics.widthPx}px`
+          scaleBarRef.current.textContent = metrics.label
+          scaleBarRef.current.style.visibility = 'visible'
+        } else {
+          scaleBarRef.current.style.visibility = 'hidden'
+        }
+      }
     }
-    let overlayRenderFrame = null
-    const scheduleTrackRender = () => {
-      if (overlayRenderFrame !== null) {
+    renderFrameRef.current = renderFrame
+
+    let renderQueued = false
+    const scheduleRender = () => {
+      if (renderQueued) {
         return
       }
-
-      overlayRenderFrame = window.requestAnimationFrame(() => {
-        overlayRenderFrame = null
-        renderTracks()
+      renderQueued = true
+      window.requestAnimationFrame(() => {
+        renderQueued = false
+        renderFrame()
       })
     }
-    let primaryPointerDown = false
-    const handlePrimaryPointerDown = (event) => {
-      if (event.button !== 0) {
-        return
-      }
 
-      primaryPointerDown = true
+    const applyView = (nextView) => {
+      const { width, height } = getSize()
+      viewRef.current = clampView(nextView, width, height, minZoomRef.current)
+      scheduleRender()
+    }
+
+    const easeToView = (target, duration = EASE_DURATION_MS) => {
+      const { width, height } = getSize()
+      const clampedTarget = clampView(target, width, height, minZoomRef.current)
+      animateView(viewRef, clampedTarget, duration, scheduleRender)
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      const { width, height } = getSize()
+      minZoomRef.current = computeFitWorldZoom(width, height)
+      applyView(viewRef.current)
+    })
+    resizeObserver.observe(container)
+
+    // --- Pan / zoom interaction ---------------------------------------
+    const activePointers = new Map()
+    let interactionMode = null
+    let panStart = null
+    let pinchStart = null
+
+    const pointerCenter = () => {
+      const points = [...activePointers.values()]
+      return {
+        x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+        y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+      }
+    }
+
+    const beginInteractionSnapshot = () => {
       overlayInteractionSnapshotRef.current = {
         assets: assetsRef.current,
         satelliteTracks: satelliteTracksRef.current,
         activeAssetId: activeAssetIdRef.current,
       }
     }
-    const handlePrimaryPointerRelease = () => {
-      if (!primaryPointerDown) {
-        return
-      }
 
-      primaryPointerDown = false
-      window.requestAnimationFrame(() => {
-        if (!map.isMoving()) {
-          overlayInteractionSnapshotRef.current = null
-          scheduleTrackRender()
-        }
-      })
-    }
-    const handleMapMoveEnd = () => {
-      if (primaryPointerDown) {
-        return
-      }
-
+    const endInteractionSnapshot = () => {
       overlayInteractionSnapshotRef.current = null
-      scheduleTrackRender()
+      scheduleRender()
     }
-    const mapCanvasContainer = map.getCanvasContainer()
-    renderOverlayRef.current = scheduleTrackRender
 
-    mapRef.current = map
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
-    map.addControl(new maplibregl.FullscreenControl(), 'top-right')
-    map.addControl(new maplibregl.ScaleControl({ maxWidth: 110 }), 'bottom-right')
-    map.addControl(new MaptoolkitLogoControl({ position: 'bottom-left' }))
-    mapCanvasContainer.addEventListener('pointerdown', handlePrimaryPointerDown)
-    window.addEventListener('pointerup', handlePrimaryPointerRelease, true)
-    window.addEventListener('pointercancel', handlePrimaryPointerRelease, true)
-    map.on('move', scheduleTrackRender)
-    map.on('moveend', handleMapMoveEnd)
-    map.on('resize', scheduleTrackRender)
-
-    map.once('style.load', () => {
-      mapReadyRef.current = true
-      syncAssetMarkers(
-        map,
-        markers,
-        assetsRef.current,
-        activeAssetIdRef.current,
-        onSelectAssetRef,
-        timeModeRef.current,
-      )
-      scheduleTrackRender()
-      fitMapToGlobe(map, false)
-      setMapStatus('ready')
-    })
-
-    map.on('error', (event) => {
-      if (!mapReadyRef.current) {
-        console.error('MapLibre failed to load the Maptoolkit style.', event.error)
-        setMapStatus('error')
+    const recomputeInteractionMode = () => {
+      const { width, height } = getSize()
+      if (activePointers.size === 1) {
+        const [point] = activePointers.values()
+        interactionMode = 'pan'
+        panStart = { x: point.x, y: point.y, view: { ...viewRef.current } }
+        pinchStart = null
+      } else if (activePointers.size >= 2) {
+        const points = [...activePointers.values()]
+        const [first, second] = points
+        const distance = Math.hypot(second.x - first.x, second.y - first.y)
+        const center = pointerCenter()
+        const anchor = unproject(center.x, center.y, viewRef.current, width, height)
+        interactionMode = 'pinch'
+        pinchStart = {
+          distance: Math.max(1, distance),
+          anchorLongitude: anchor.longitude,
+          anchorLatitude: anchor.latitude,
+          view: { ...viewRef.current },
+        }
+        panStart = null
+      } else {
+        interactionMode = null
+        panStart = null
+        pinchStart = null
       }
-    })
-    map.on('mousemove', (event) => {
-      if (coordinateReadoutRef.current) {
-        coordinateReadoutRef.current.textContent = [
-          `Lat ${formatCoordinate(event.lngLat.lat, 'N', 'S', 4)}`,
-          `Lon ${formatCoordinate(event.lngLat.lng, 'E', 'W', 4)}`,
-        ].join(' · ')
+    }
+
+    const handlePointerDown = (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) {
+        return
       }
-    })
-    map.on('mouseout', () => {
+
+      container.setPointerCapture(event.pointerId)
+      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+      if (activePointers.size === 1) {
+        beginInteractionSnapshot()
+      }
+      recomputeInteractionMode()
+    }
+
+    const handlePointerMove = (event) => {
       if (coordinateReadoutRef.current) {
+        const { width, height } = getSize()
+        const rect = container.getBoundingClientRect()
+        const { longitude, latitude } = unproject(
+          event.clientX - rect.left,
+          event.clientY - rect.top,
+          viewRef.current,
+          width,
+          height,
+        )
+        if (Math.abs(latitude) <= 90.5 && Math.abs(longitude) <= 180.5) {
+          coordinateReadoutRef.current.textContent = [
+            `Lat ${formatCoordinate(Math.max(-90, Math.min(90, latitude)), 'N', 'S', 4)}`,
+            `Lon ${formatCoordinate(Math.max(-180, Math.min(180, longitude)), 'E', 'W', 4)}`,
+          ].join(' · ')
+        }
+      }
+
+      if (!activePointers.has(event.pointerId)) {
+        return
+      }
+      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+
+      const { width, height } = getSize()
+
+      if (interactionMode === 'pan' && panStart) {
+        const scale = scaleForZoom(panStart.view.zoom)
+        const [point] = activePointers.values()
+        applyView({
+          centerLongitude: panStart.view.centerLongitude - ((point.x - panStart.x) / scale),
+          centerLatitude: panStart.view.centerLatitude + ((point.y - panStart.y) / scale),
+          zoom: panStart.view.zoom,
+        })
+      } else if (interactionMode === 'pinch' && pinchStart) {
+        const points = [...activePointers.values()]
+        const [first, second] = points
+        const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y))
+        const center = pointerCenter()
+        const zoom = pinchStart.view.zoom + Math.log2(distance / pinchStart.distance)
+        const scale = scaleForZoom(zoom)
+        applyView({
+          centerLongitude: pinchStart.anchorLongitude - ((center.x - (width / 2)) / scale),
+          centerLatitude: pinchStart.anchorLatitude + ((center.y - (height / 2)) / scale),
+          zoom,
+        })
+      }
+    }
+
+    const handlePointerUp = (event) => {
+      if (!activePointers.has(event.pointerId)) {
+        return
+      }
+      activePointers.delete(event.pointerId)
+      if (container.hasPointerCapture?.(event.pointerId)) {
+        container.releasePointerCapture(event.pointerId)
+      }
+      recomputeInteractionMode()
+      if (activePointers.size === 0) {
+        endInteractionSnapshot()
+      }
+    }
+
+    const handlePointerLeaveReadout = (event) => {
+      if (activePointers.size === 0 && coordinateReadoutRef.current) {
         coordinateReadoutRef.current.textContent = 'Move the crosshair over the map'
       }
-    })
+      handlePointerUp(event)
+    }
+
+    const zoomAroundPoint = (screenX, screenY, zoomDelta, duration = 0) => {
+      const { width, height } = getSize()
+      const currentView = viewRef.current
+      const anchor = unproject(screenX, screenY, currentView, width, height)
+      const targetZoom = currentView.zoom + zoomDelta
+      const targetScale = scaleForZoom(targetZoom)
+      const targetView = {
+        centerLongitude: anchor.longitude - ((screenX - (width / 2)) / targetScale),
+        centerLatitude: anchor.latitude + ((screenY - (height / 2)) / targetScale),
+        zoom: targetZoom,
+      }
+
+      if (duration > 0) {
+        easeToView(targetView, duration)
+      } else {
+        applyView(targetView)
+      }
+    }
+
+    const handleWheel = (event) => {
+      event.preventDefault()
+      const rect = container.getBoundingClientRect()
+      const direction = event.deltaY > 0 ? -1 : 1
+      zoomAroundPoint(
+        event.clientX - rect.left,
+        event.clientY - rect.top,
+        direction * WHEEL_ZOOM_STEP,
+      )
+    }
+
+    const handleDoubleClick = (event) => {
+      const rect = container.getBoundingClientRect()
+      zoomAroundPoint(
+        event.clientX - rect.left,
+        event.clientY - rect.top,
+        BUTTON_ZOOM_STEP,
+        EASE_DURATION_MS,
+      )
+    }
+
+    container.addEventListener('pointerdown', handlePointerDown)
+    container.addEventListener('pointermove', handlePointerMove)
+    container.addEventListener('pointerup', handlePointerUp)
+    container.addEventListener('pointercancel', handlePointerLeaveReadout)
+    container.addEventListener('mouseleave', handlePointerLeaveReadout)
+    container.addEventListener('wheel', handleWheel, { passive: false })
+    container.addEventListener('dblclick', handleDoubleClick)
+
+    // Expose imperative handles used by the fit / zoom / fullscreen buttons.
+    container.__missionMapControls = {
+      applyView,
+      easeToView,
+      zoomAroundPoint,
+      getSize,
+      getMinZoom: () => minZoomRef.current,
+    }
+
+    const { width: initialWidth, height: initialHeight } = getSize()
+    minZoomRef.current = computeFitWorldZoom(initialWidth, initialHeight)
+    viewRef.current = clampView(
+      { centerLongitude: 0, centerLatitude: 0, zoom: minZoomRef.current },
+      initialWidth,
+      initialHeight,
+      minZoomRef.current,
+    )
+    mapReadyRef.current = true
+    setMapStatus('ready')
+    renderFrame()
 
     return () => {
-      mapCanvasContainer.removeEventListener('pointerdown', handlePrimaryPointerDown)
-      window.removeEventListener('pointerup', handlePrimaryPointerRelease, true)
-      window.removeEventListener('pointercancel', handlePrimaryPointerRelease, true)
-      if (overlayRenderFrame !== null) {
-        window.cancelAnimationFrame(overlayRenderFrame)
-      }
-      renderOverlayRef.current = null
-      markers.forEach(({ marker, popup }) => {
-        popup.remove()
-        marker.remove()
+      resizeObserver.disconnect()
+      container.removeEventListener('pointerdown', handlePointerDown)
+      container.removeEventListener('pointermove', handlePointerMove)
+      container.removeEventListener('pointerup', handlePointerUp)
+      container.removeEventListener('pointercancel', handlePointerLeaveReadout)
+      container.removeEventListener('mouseleave', handlePointerLeaveReadout)
+      container.removeEventListener('wheel', handleWheel)
+      container.removeEventListener('dblclick', handleDoubleClick)
+      renderFrameRef.current = null
+      markers.forEach(({ element, popup }) => {
+        popup.element.remove()
+        element.remove()
       })
       markers.clear()
       overlayInteractionSnapshotRef.current = null
       mapReadyRef.current = false
-      map.remove()
-      mapRef.current = null
     }
-  }, [])
+  }, [worldPaths])
 
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map || !mapReadyRef.current) {
+  // useLayoutEffect (not useEffect) is required here: this does the actual
+  // imperative DOM write for marker/overlay positions on every asset update.
+  // During fast timeline playback, `assets` changes up to ~60x/second (once
+  // per animation frame). useEffect's "passive effect" flush is scheduled
+  // asynchronously and can interleave out of order with other
+  // requestAnimationFrame callbacks (including the playback loop that
+  // drives these very updates), which let an older position occasionally
+  // get painted after a newer one -- visible as the satellite marker
+  // briefly jumping backward ("vibrating") before snapping forward again,
+  // especially at high playback speeds where updates are most frequent.
+  // useLayoutEffect runs synchronously right after each commit, before the
+  // browser paints, so writes always land in commit order.
+  useLayoutEffect(() => {
+    if (!mapReadyRef.current) {
+      return
+    }
+    renderFrameRef.current?.()
+  }, [activeAssetId, assets, satelliteTracks, timeMode])
+
+  const handleShowWorld = () => {
+    const controls = mapContainerRef.current?.__missionMapControls
+    if (!controls || !mapReadyRef.current) {
+      return
+    }
+    const { width, height } = controls.getSize()
+    const minZoom = computeFitWorldZoom(width, height)
+    controls.easeToView({ centerLongitude: 0, centerLatitude: 0, zoom: minZoom })
+  }
+
+  const handleFitSelectedAssets = () => {
+    const controls = mapContainerRef.current?.__missionMapControls
+    if (!controls || !mapReadyRef.current) {
       return
     }
 
-    syncAssetMarkers(
-      map,
-      markersRef.current,
-      assets,
-      activeAssetId,
-      onSelectAssetRef,
-      timeMode,
-    )
-    renderOverlayRef.current?.()
-  }, [activeAssetId, assets, satelliteTracks, timeMode])
-
-  const handleFitSelectedAssets = () => {
-    if (mapRef.current && mapReadyRef.current) {
-      fitMapToAssets(mapRef.current, assets)
+    if (assets.length === 0) {
+      handleShowWorld()
+      return
     }
+
+    const { width, height } = controls.getSize()
+
+    if (assets.length === 1) {
+      const [asset] = assets
+      controls.easeToView({
+        centerLongitude: normalizeSignedLongitude(asset.longitude),
+        centerLatitude: asset.latitude,
+        zoom: asset.markerType === 'ground-station' ? 6 : 4,
+      })
+      return
+    }
+
+    const longitudes = assets.map((asset) => normalizeSignedLongitude(asset.longitude))
+    const latitudes = assets.map((asset) => asset.latitude)
+    const target = computeFitBoundsView(
+      {
+        minLongitude: Math.min(...longitudes),
+        maxLongitude: Math.max(...longitudes),
+        minLatitude: Math.min(...latitudes),
+        maxLatitude: Math.max(...latitudes),
+      },
+      width,
+      height,
+      { padding: { top: 70, right: 110, bottom: 70, left: 70 }, maxZoom: 6.5, minZoom: controls.getMinZoom() },
+    )
+    controls.easeToView(target)
   }
 
-  const handleShowGlobe = () => {
-    if (mapRef.current && mapReadyRef.current) {
-      fitMapToGlobe(mapRef.current)
+  const handleZoomBy = (delta) => {
+    const controls = mapContainerRef.current?.__missionMapControls
+    if (!controls || !mapReadyRef.current) {
+      return
+    }
+    const { width, height } = controls.getSize()
+    controls.zoomAroundPoint(width / 2, height / 2, delta, EASE_DURATION_MS)
+  }
+
+  const handleToggleFullscreen = () => {
+    if (!mapShellRef.current) {
+      return
+    }
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.()
+    } else {
+      mapShellRef.current.requestFullscreen?.()
     }
   }
 
@@ -672,17 +962,25 @@ export default function MissionMap({
   )
 
   return (
-    <div className="mission-map-shell">
+    <div
+      ref={mapShellRef}
+      className={`mission-map-shell${isCompact ? ' mission-map-shell--compact' : ''}`}
+      style={{ height: `${heightPx}px` }}
+    >
       <div
         ref={mapContainerRef}
         className="mission-map"
-        aria-label="Interactive map of selected mission assets"
-      />
-      <svg
-        ref={trackOverlayRef}
-        className="mission-map-track-overlay"
-        aria-hidden="true"
-      />
+        aria-label="Interactive equirectangular map of selected mission assets"
+      >
+        <svg ref={svgRef} className="mission-map-canvas" aria-hidden="true">
+          <g ref={worldGroupRef}>
+            {worldPaths.map((path) => (
+              <path key={path.id ?? path.d} className="mission-map-world-outline" d={path.d} />
+            ))}
+          </g>
+          <g ref={overlayGroupRef} />
+        </svg>
+      </div>
       <output
         ref={coordinateReadoutRef}
         className="mission-map-coordinate-readout"
@@ -694,10 +992,10 @@ export default function MissionMap({
         <button
           type="button"
           className="mission-map-fit-control"
-          onClick={handleShowGlobe}
+          onClick={handleShowWorld}
           disabled={mapStatus !== 'ready'}
         >
-          Show globe
+          Show whole world
         </button>
         <button
           type="button"
@@ -708,6 +1006,37 @@ export default function MissionMap({
           Fit selected
         </button>
       </div>
+      <div className="mission-map-navigation-controls" role="group" aria-label="Zoom controls">
+        <button
+          type="button"
+          className="mission-map-nav-control"
+          onClick={() => handleZoomBy(BUTTON_ZOOM_STEP)}
+          disabled={mapStatus !== 'ready'}
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          type="button"
+          className="mission-map-nav-control"
+          onClick={() => handleZoomBy(-BUTTON_ZOOM_STEP)}
+          disabled={mapStatus !== 'ready'}
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+        <button
+          type="button"
+          className="mission-map-nav-control"
+          onClick={handleToggleFullscreen}
+          disabled={mapStatus !== 'ready'}
+          aria-label="Toggle fullscreen"
+        >
+          ⛶
+        </button>
+      </div>
+      <div ref={scaleBarRef} className="mission-map-scale-bar" aria-hidden="true" />
+      <span className="mission-map-attribution">World outlines: Natural Earth</span>
       {mapStatus === 'ready' && (hasPropagatedOrbit || hasElevationFootprint) && (
         <div className="mission-map-legend" aria-label="Map overlay legend">
           {hasPropagatedOrbit && (
@@ -719,7 +1048,7 @@ export default function MissionMap({
           {hasElevationFootprint && (
             <span className="mission-map-legend-item">
               <span className="mission-map-legend-circle" aria-hidden="true"></span>
-              Min. elevation footprint ({coverageReferenceSatellite.name})
+              Min. elevation footprint
             </span>
           )}
         </div>
@@ -729,7 +1058,7 @@ export default function MissionMap({
       )}
       {mapStatus === 'error' && (
         <div className="mission-map-state mission-map-state--error" role="alert">
-          Map tiles could not be loaded. Check the Maptoolkit connection.
+          Map outlines could not be loaded.
         </div>
       )}
       {mapStatus === 'ready' && assets.length === 0 && (
