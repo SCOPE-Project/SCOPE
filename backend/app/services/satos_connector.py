@@ -144,40 +144,54 @@ def satos_put_activities(activities: list[ActivityModel]) -> Response:
 def push_activities_to_SatOS(activities: list[Activity]) -> None:
     """
     Push activities to the SatOS API.
-    SatOS Connector to PUT .../activities
+    First puts unique schedule events, then puts activities.
 
-    :param activities: list of Acitivity to update
+    :param activities: list of Activity to update
     """
+    if not activities:
+        return
+
+    unique_events: dict[str, ScheduleEventModel] = {}
+    SatOS_activities: list[ActivityModel] = []
+
+    for activity in activities:
+        if activity.start_event and str(activity.start_event.uuid) not in unique_events:
+            unique_events[str(activity.start_event.uuid)] = activity.start_event
+        if activity.end_event and str(activity.end_event.uuid) not in unique_events:
+            unique_events[str(activity.end_event.uuid)] = activity.end_event
+
+        SatOS_activity = ActivityModel(
+            uuid=activity.uuid,
+            scheduleName=activity.schedule_name,
+            initiator=activity.schedule_name,
+            executor=activity.schedule_name,
+            status=activity.status,
+            name=activity.name or "",
+            startEvent=ScheduleEventRelationModel(
+                eventUuid=activity.start_event.uuid,
+                relativeTime=0,
+            ),
+            endEvent=ScheduleEventRelationModel(
+                eventUuid=activity.end_event.uuid,
+                relativeTime=0,
+            )
+        )
+        SatOS_activities.append(SatOS_activity)
+
+    SatOS_schedule_events = list(unique_events.values())
+
     try:
-        with SatIOSession():
-            SatOS_schedule_events: list[ScheduleEventModel] = []
-            SatOS_activities: list[ActivityModel] = []
-            for activity in activities:
-                SatOS_start_event = activity.start_event
-                SatOS_end_event = activity.end_event
-                SatOS_schedule_events.append(SatOS_start_event)
-                SatOS_schedule_events.append(SatOS_end_event)
-                
-                SatOS_activity = ActivityModel(
-                    uuid=activity.uuid,
-                    scheduleName=activity.schedule_name,
-                    initiator=activity.schedule_name,
-                    executor=activity.schedule_name,
-                    startEvent=ScheduleEventRelationModel(
-                        eventUuid=activity.start_event.uuid,
-                        relativeTime=0,
-                    ),
-                    endEvent=ScheduleEventRelationModel(
-                        eventUuid=activity.end_event.uuid,
-                        relativeTime=0,
-                    )
-                )
-                SatOS_activities.append(SatOS_activity)
-            
-        satos_put_schedule_events(SatOS_schedule_events)
-        satos_put_activities(SatOS_activities)
-    except RuntimeError as e:
-        print(f"Runtime Error: {e}")
+        try:
+            SatIOSession.get_session()
+            satos_put_schedule_events(SatOS_schedule_events)
+            satos_put_activities(SatOS_activities)
+        except LookupError:
+            with SatIOSession():
+                satos_put_schedule_events(SatOS_schedule_events)
+                satos_put_activities(SatOS_activities)
+    except Exception as e:
+        print(f"Error pushing activities to SatOS: {e}")
+        raise
 
 
 # =========================================

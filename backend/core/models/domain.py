@@ -74,6 +74,17 @@ class OverpassBlock:
     high_res_trajectory: List[OverpassProfilePoint]
 
 @dataclass
+class ScheduledLink:
+    link_id: str
+    satellite_name: str
+    groundstation_name: str
+    start_time: datetime
+    end_time: datetime
+    duration_seconds: float
+    max_elevation_deg: float
+    high_res_trajectory: List[OverpassProfilePoint]
+
+@dataclass
 class SatelliteTrajectory:
     satellite_name: str
     track: List[GlobalTrackPoint]

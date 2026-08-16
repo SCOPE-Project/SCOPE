@@ -16,6 +16,7 @@ class Activity:
     status: int
     start_event: ScheduleEventModel
     end_event: ScheduleEventModel
+    name: str = ""
 
 
 @dataclass

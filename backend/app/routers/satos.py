@@ -13,6 +13,8 @@ from app.models.satos import (
     UpdateSatelliteStateRequest,
     UpdateSatelliteStateDTO,
     UpdateSatelliteStateResponse,
+    PushScheduledLinksRequest,
+    PushScheduledLinksResponse,
 )
 from core.models.domain import (
     SatelliteStateInputDefinition,
@@ -87,12 +89,33 @@ def satos_update_satellite_states(request: UpdateSatelliteStateRequest | None = 
         raise HTTPException(status_code=500, detail=f"Failed to update satellite state in SatOS: {e}")
 
 
-#@router.get("/schedule_events", response_model=ScheduleEventsResponse)
-#def satos_get_schedule_events(
-#    schedule_name: str | None = None, 
-#    schedule_event_uuid: str | UUID4 | None = None,
-#    start_time: datetime | None = None,
-#    end_time: datetime | None = None
-#):
-#    return {"schedule_events": satos_connector.satos_get_schedule_events(schedule_name, schedule_event_uuid, start_time, end_time)}
+@router.post("/schedule/push-scheduled-links", response_model=PushScheduledLinksResponse)
+def satos_push_scheduled_links(request: PushScheduledLinksRequest):
+    """
+    Pushes scheduled links to SatOS as activities and schedule events.
+    Ingests a raw list of ScheduledLink objects in the request body.
+    """
+    if not request.scheduled_links:
+        return PushScheduledLinksResponse(
+            status="success",
+            message="No scheduled links provided in request.",
+            pushed_links_count=0,
+            pushed_activities_count=0,
+            activities_uuids=[],
+        )
+
+    domain_links = [link_dto.to_domain() for link_dto in request.scheduled_links]
+
+    try:
+        activities = AssetRepository.push_scheduled_links_to_satos(domain_links)
+        return PushScheduledLinksResponse(
+            status="success",
+            message=f"Successfully pushed {len(activities)} activities for {len(domain_links)} scheduled link(s) to SatOS.",
+            pushed_links_count=len(domain_links),
+            pushed_activities_count=len(activities),
+            activities_uuids=[str(a.uuid) for a in activities],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to push activities to SatOS: {e}")
+
 

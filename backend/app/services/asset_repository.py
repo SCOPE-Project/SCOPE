@@ -1,12 +1,19 @@
 # /services/asset_repository.py
-from pydantic_models.definitions import SatelliteModel
-from core.models.domain import SatelliteInformation, GroundStationInformation
-from pydantic_models.activity import ActivityInfoModel
-from app.services.satos_connector import satos_get_asset, satos_get_asset_list, satos_get_activities_list
-from datetime import datetime
+import uuid
 import warnings
+from datetime import datetime, timezone
 from api_connect.satio_session import SatIOSession
+from pydantic_models.definitions import SatelliteModel
+from pydantic_models.activity import ActivityInfoModel, ActivityStatus
+from pydantic_models.schedule_event import ScheduleEventModel
+from core.models.domain import SatelliteInformation, GroundStationInformation, ScheduledLink
 from app.models.tasks import AssetInformation, AssetSchedule, Activity
+from app.services.satos_connector import (
+    satos_get_asset,
+    satos_get_asset_list,
+    satos_get_activities_list,
+    push_activities_to_SatOS,
+)
 
 class AssetRepository:
     _satellite_infos: dict[str, SatelliteInformation] = {}
@@ -70,7 +77,8 @@ class AssetRepository:
                                 schedule_name=act.schedule_name,
                                 status=act.status,
                                 start_event=act.start_event,
-                                end_event=act.end_event
+                                end_event=act.end_event,
+                                name=getattr(act, "name", "") or "",
                             )
                         )
                     cls._schedules.append(
@@ -328,7 +336,8 @@ class AssetRepository:
                             schedule_name=act.schedule_name,
                             status=act.status,
                             start_event=act.start_event,
-                            end_event=act.end_event
+                            end_event=act.end_event,
+                            name=getattr(act, "name", "") or "",
                         )
                         for act in schedule_information
                     ]
@@ -338,3 +347,112 @@ class AssetRepository:
             return schedule_information
         except Exception as e:
             raise RuntimeError(f"Failed to fetch schedule information for {schedule_name} from SatOS: {e}")
+
+    @classmethod
+    def create_activities_from_scheduled_link(cls, link: ScheduledLink) -> tuple[Activity, Activity]:
+        """
+        Converts a ScheduledLink into 2 ScheduleEventModel objects (AOS and LOS)
+        and 2 Activity objects (one for the satellite, one for the ground station).
+
+        :param link: ScheduledLink domain object
+        :return: (satellite_activity, groundstation_activity)
+        """
+        start_time = link.start_time
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=timezone.utc)
+
+        end_time = link.end_time
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+
+        # 1. Create AOS Event
+        aos_uuid = uuid.uuid4()
+        aos_event = ScheduleEventModel(
+            uuid=aos_uuid,
+            id=f"{link.link_id}_AOS",
+            name=f"AOS: {link.satellite_name} - {link.groundstation_name}",
+            timestamp=start_time,
+            schedule_1=link.satellite_name,
+            schedule_2=link.groundstation_name,
+        )
+
+        # 2. Create LOS Event
+        los_uuid = uuid.uuid4()
+        los_event = ScheduleEventModel(
+            uuid=los_uuid,
+            id=f"{link.link_id}_LOS",
+            name=f"LOS: {link.satellite_name} - {link.groundstation_name}",
+            timestamp=end_time,
+            schedule_1=link.satellite_name,
+            schedule_2=link.groundstation_name,
+        )
+
+        # 3. Create Satellite Activity
+        sat_activity = Activity(
+            uuid=uuid.uuid4(),
+            schedule_name=link.satellite_name,
+            status=int(ActivityStatus.SUSPENDED),
+            start_event=aos_event,
+            end_event=los_event,
+            name=f"Pass {link.satellite_name} - {link.groundstation_name} at {link.start_time.isoformat()}",
+        )
+
+        # 4. Create Ground Station Activity
+        gs_activity = Activity(
+            uuid=uuid.uuid4(),
+            schedule_name=link.groundstation_name,
+            status=int(ActivityStatus.SUSPENDED),
+            start_event=aos_event,
+            end_event=los_event,
+            name=f"Pass {link.satellite_name} - {link.groundstation_name} at {link.start_time.isoformat()}",
+        )
+
+        return sat_activity, gs_activity
+
+    @classmethod
+    def create_activities_from_scheduled_links(cls, links: list[ScheduledLink]) -> list[Activity]:
+        """
+        Converts a list of ScheduledLink objects into a list of Activity objects (2 activities per link).
+
+        :param links: list of ScheduledLink domain objects
+        :return: list of Activity objects (length 2 * len(links))
+        """
+        activities: list[Activity] = []
+        for link in links:
+            sat_act, gs_act = cls.create_activities_from_scheduled_link(link)
+            activities.append(sat_act)
+            activities.append(gs_act)
+        return activities
+
+    @classmethod
+    def push_scheduled_links_to_satos(cls, links: list[ScheduledLink]) -> list[Activity]:
+        """
+        Converts ScheduledLink objects to Activity objects, pushes them to SatOS,
+        synchronizes the local _schedules cache, and returns the created activities.
+
+        :param links: list of ScheduledLink domain objects
+        :return: list of pushed Activity objects
+        """
+        activities = cls.create_activities_from_scheduled_links(links)
+        if not activities:
+            return []
+
+        # Push to SatOS
+        push_activities_to_SatOS(activities)
+
+        # Synchronize local _schedules cache
+        for activity in activities:
+            sched_name = activity.schedule_name
+            existing_sched = next((s for s in cls._schedules if s.name == sched_name), None)
+            if existing_sched:
+                existing_sched.activities = [a for a in existing_sched.activities if a.uuid != activity.uuid]
+                existing_sched.activities.append(activity)
+            else:
+                cls._schedules.append(
+                    AssetSchedule(
+                        name=sched_name,
+                        activities=[activity]
+                    )
+                )
+
+        return activities

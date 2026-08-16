@@ -162,7 +162,7 @@ def run_orekit_engine(
     from org.orekit.frames import FramesFactory
     from org.orekit.utils import IERSConventions
 
-    from orbit_propagation_pipeline.utils.propagation_utils.constants import Constants
+    from core.astrodynamics.constants import Constants
 
     earth_fixed_frame = FramesFactory.getITRF(IERSConventions.IERS_2010, True)
     earth_shape = OneAxisEllipsoid(
