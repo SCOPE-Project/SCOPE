@@ -605,6 +605,7 @@ body {
   flex: 0 0 auto;
   width: 1.9rem;
   height: 1.9rem;
+  padding: 0;
   border-radius: 999px;
   border: 1px solid #b3261e;
   background: #b3261e;
@@ -613,14 +614,23 @@ body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  font-size: 0.8rem;
-  line-height: 1;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .sidebar-collapsed-terminate:hover {
   background: #8f1d17;
   border-color: #8f1d17;
+}
+
+.sidebar-collapsed-terminate-icon {
+  width: 0.65rem;
+  height: 0.65rem;
+  display: block;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-block {
@@ -3590,6 +3600,12 @@ body {
 
 .timeline-now-badge {
   position: absolute;
+  /* The "Now" badge lives inside .timeline-day-row's own now-line copy
+     (each of .timeline-day-row/.timeline-axis-row/.timeline-track-row
+     renders its own now-line/marker-line so the dashed line stays
+     visually continuous across all three -- see the comment above the
+     day-row's now-line JSX), so this offset is just a small inset from
+     that row's own top edge. */
   top: 0.35rem;
   left: 0.35rem;
   padding: 0.14rem 0.35rem;

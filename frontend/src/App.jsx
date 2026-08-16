@@ -98,6 +98,7 @@ export default function App() {
   const timelineLayoutKeyRef = useRef('')
   const timelineProgrammaticScrollRef = useRef(false)
   const timelinePlayheadSliderRef = useRef(null)
+  const timelinePlayheadThumbRef = useRef(null)
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
@@ -1995,6 +1996,79 @@ export default function App() {
     }
   }
 
+  // The datetime thumb above used to be positioned as a fraction of the
+  // playhead SLIDER's own (fixed, always-full-window-width) box -- a
+  // completely different physical scale than the marker line inside the
+  // scrollable/zoomable canvas below, which is positioned as a fraction of
+  // the much wider (at any zoom > 1x) canvas, then cropped/panned by the
+  // canvas's own scroll position. Those two only ever lined up right after
+  // something explicitly re-synced the scroll position to match the ratio
+  // (a slider drag, a marker-line drag, or the live-follow effect) -- the
+  // moment a person freely panned/scrolled the canvas by hand (scrollbar,
+  // trackpad) without touching the playhead, the thumb stayed put at its
+  // window-ratio position while the line drifted wherever the pan left it,
+  // which is exactly the "why is it still disconnected" symptom.
+  //
+  // Fixing this properly means the thumb can no longer be positioned purely
+  // from React state/CSS percentages: it has to track the canvas's actual,
+  // possibly-manually-scrolled scrollLeft on every scroll, not just when
+  // the playhead itself changes. So instead this reads the DOM directly and
+  // imperatively sets the thumb's pixel offset -- mirroring the exact
+  // formula the marker line's own on-screen position resolves to (see the
+  // getTimelineScrollLeftForRatio comment above): canvas-relative pixel
+  // position of the playhead, minus however far the canvas is currently
+  // scrolled. Since the slider sits at the same left edge and width as the
+  // scroll frame, that difference is directly usable as the thumb's `left`
+  // in pixels. This guarantees the thumb and the line are always the same
+  // screen X, regardless of *how* the view got there.
+  const syncTimelinePlayheadThumbPosition = () => {
+    const scrollContainer = timelineScrollRef.current
+    const thumbEl = timelinePlayheadThumbRef.current
+    if (
+      !scrollContainer
+      || !thumbEl
+      || timelineBaseTimestamp === null
+      || timelineDurationMs <= 0
+      || timelineWidthPx <= 0
+    ) {
+      return
+    }
+
+    const ratio = Math.max(
+      0,
+      Math.min(1, (timelinePlayheadTimestamp - timelineBaseTimestamp) / timelineDurationMs),
+    )
+    const halfViewportWidthPx = scrollContainer.clientWidth / 2
+    const canvasRelativeLeftPx = halfViewportWidthPx + (ratio * timelineWidthPx)
+    thumbEl.style.left = `${canvasRelativeLeftPx - scrollContainer.scrollLeft}px`
+  }
+
+  // Re-run the imperative sync above whenever anything that feeds its
+  // formula changes through React state/props (the playhead time itself,
+  // zoom, or a layout change that alters clientWidth). No dependency array:
+  // syncTimelinePlayheadThumbPosition is a plain function recreated every
+  // render (not memoized), so it always closes over this render's latest
+  // values -- same "re-attached every render (cheap)" reasoning as the wheel
+  // listener effect below, and it needs to react to enough different inputs
+  // (any of which can change independently) that a dependency array would
+  // just end up listing nearly all of them anyway.
+  useLayoutEffect(() => {
+    syncTimelinePlayheadThumbPosition()
+  })
+
+  // ...and also on every native scroll of the canvas -- including manual
+  // pans that never touch React state at all (dragging the scrollbar,
+  // trackpad panning), which is the case the effect above can't see.
+  useEffect(() => {
+    const scrollContainer = timelineScrollRef.current
+    if (!scrollContainer) {
+      return undefined
+    }
+
+    scrollContainer.addEventListener('scroll', syncTimelinePlayheadThumbPosition, { passive: true })
+    return () => scrollContainer.removeEventListener('scroll', syncTimelinePlayheadThumbPosition)
+  })
+
   // The playhead slider is a separate control from the scrollable timeline
   // below it: scrolling/panning the timeline (`.timeline-scroll`) never
   // changes the current time value, and clicking the timeline background no
@@ -2020,6 +2094,19 @@ export default function App() {
       + (ratio * (planningWindowEndTimestamp - planningWindowStartTimestamp))
   }
 
+  // Dragging this slider thumb moves the playhead across the FULL planning
+  // window (the slider is a fixed-width overlay, independent of the
+  // timeline canvas's own zoom/scroll below it -- see the comment above
+  // getTimelineScrollLeftForRatio). The marker line and "Now"/label inside
+  // that canvas, though, only show whatever slice of the window is
+  // currently scrolled into view -- so without an explicit scroll here, the
+  // thumb (and its datetime label) jumps to the new time immediately while
+  // the dashed line inside the canvas stays wherever the view was last
+  // scrolled, visually "disconnecting" the two. Calling
+  // scrollTimelineToTimestamp keeps the canvas centered on the same instant
+  // the thumb now represents, exactly like the keyboard-nudge path
+  // (handleTimelinePlayheadKeyDown) and the live-mode follow effect already
+  // do.
   const handleTimelinePlayheadPointerDown = (event) => {
     if (event.button !== undefined && event.button !== 0) {
       return
@@ -2032,7 +2119,9 @@ export default function App() {
 
     const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
     if (nextTimestamp !== null) {
-      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+      const clampedTimestamp = clampToPlanningWindow(nextTimestamp)
+      setTimelinePlayheadTime(clampedTimestamp)
+      scrollTimelineToTimestamp(clampedTimestamp)
     }
   }
 
@@ -2043,7 +2132,9 @@ export default function App() {
 
     const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
     if (nextTimestamp !== null) {
-      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+      const clampedTimestamp = clampToPlanningWindow(nextTimestamp)
+      setTimelinePlayheadTime(clampedTimestamp)
+      scrollTimelineToTimestamp(clampedTimestamp)
     }
   }
 
@@ -3696,6 +3787,7 @@ export default function App() {
                       >
                         {timelinePlayheadWindowRatio !== null && (
                           <div
+                            ref={timelinePlayheadThumbRef}
                             className="timeline-playhead-thumb"
                             role="slider"
                             tabIndex="0"
@@ -3704,7 +3796,6 @@ export default function App() {
                             aria-valuemax={planningWindowEndTimestamp ?? undefined}
                             aria-valuenow={timelinePlayheadTimestamp}
                             aria-valuetext={formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
-                            style={{ left: `${timelinePlayheadWindowRatio * 100}%` }}
                             onPointerDown={handleTimelinePlayheadPointerDown}
                             onPointerMove={handleTimelinePlayheadPointerMove}
                             onPointerUp={handleTimelinePlayheadPointerUp}
@@ -3746,6 +3837,41 @@ export default function App() {
                             {band.label}
                           </div>
                         ))}
+
+                        {/* A position:absolute child's percentage `left`
+                            resolves against its CONTAINING BLOCK's
+                            padding-box -- for a direct child of the padded
+                            .timeline-time-canvas that's the canvas's full
+                            (padding-inclusive) width, which is NOT what the
+                            r*100% values here are computed against. Plain,
+                            non-padded rows like this one (and axis-row,
+                            track-row below) don't have that problem, so the
+                            now-line/marker-line are rendered once per row
+                            instead of once for the whole canvas -- see
+                            getTimelineScrollLeftForRatio's comment for the
+                            full derivation this depends on staying true. */}
+                        {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
+                          <div
+                            className="timeline-now-line"
+                            style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                          >
+                            <span className="timeline-now-badge">Now</span>
+                          </div>
+                        )}
+
+                        {timelinePlayheadOffsetMinutes !== null
+                          && timelinePlayheadOffsetMinutes >= 0
+                          && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
+                          <div
+                            className="timeline-playhead-marker-line"
+                            aria-hidden="true"
+                            style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                            onPointerDown={handleTimelineMarkerLinePointerDown}
+                            onPointerMove={handleTimelineMarkerLinePointerMove}
+                            onPointerUp={handleTimelineMarkerLinePointerUp}
+                            onPointerCancel={handleTimelineMarkerLinePointerUp}
+                          ></div>
+                        )}
                       </div>
 
                       <div className="timeline-axis-row">
@@ -3758,9 +3884,30 @@ export default function App() {
                             <span>{tick.label}</span>
                           </div>
                         ))}
+
+                        {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
+                          <div
+                            className="timeline-now-line"
+                            style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                          ></div>
+                        )}
+
+                        {timelinePlayheadOffsetMinutes !== null
+                          && timelinePlayheadOffsetMinutes >= 0
+                          && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
+                          <div
+                            className="timeline-playhead-marker-line"
+                            aria-hidden="true"
+                            style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                            onPointerDown={handleTimelineMarkerLinePointerDown}
+                            onPointerMove={handleTimelineMarkerLinePointerMove}
+                            onPointerUp={handleTimelineMarkerLinePointerUp}
+                            onPointerCancel={handleTimelineMarkerLinePointerUp}
+                          ></div>
+                        )}
                       </div>
 
-                      {visibleTimelineTracks.map((track, trackIndex) => (
+                      {visibleTimelineTracks.map((track) => (
                           <div
                             key={`${track.id}-row`}
                             className="timeline-track-row"
@@ -3775,29 +3922,6 @@ export default function App() {
                                 style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
                               ></div>
                             ))}
-
-                            {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
-                              <div
-                                className="timeline-now-line"
-                                style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                              >
-                                {trackIndex === 0 && <span className="timeline-now-badge">Now</span>}
-                              </div>
-                            )}
-
-                            {timelinePlayheadOffsetMinutes !== null
-                              && timelinePlayheadOffsetMinutes >= 0
-                              && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
-                              <div
-                                className="timeline-playhead-marker-line"
-                                aria-hidden="true"
-                                style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                                onPointerDown={handleTimelineMarkerLinePointerDown}
-                                onPointerMove={handleTimelineMarkerLinePointerMove}
-                                onPointerUp={handleTimelineMarkerLinePointerUp}
-                                onPointerCancel={handleTimelineMarkerLinePointerUp}
-                              ></div>
-                            )}
 
                             {track.items.map((item) => (
                               (() => {
@@ -3851,6 +3975,27 @@ export default function App() {
                                 )
                               })()
                             ))}
+
+                            {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
+                              <div
+                                className="timeline-now-line"
+                                style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                              ></div>
+                            )}
+
+                            {timelinePlayheadOffsetMinutes !== null
+                              && timelinePlayheadOffsetMinutes >= 0
+                              && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
+                              <div
+                                className="timeline-playhead-marker-line"
+                                aria-hidden="true"
+                                style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                                onPointerDown={handleTimelineMarkerLinePointerDown}
+                                onPointerMove={handleTimelineMarkerLinePointerMove}
+                                onPointerUp={handleTimelineMarkerLinePointerUp}
+                                onPointerCancel={handleTimelineMarkerLinePointerUp}
+                              ></div>
+                            )}
                           </div>
                       ))}
                         </div>
@@ -3958,7 +4103,14 @@ export default function App() {
                   aria-label="Terminate the communication scheduler launch"
                   title="Terminate"
                 >
-                  <span aria-hidden="true">&#x2715;</span>
+                  <svg
+                    className="sidebar-collapsed-terminate-icon"
+                    viewBox="0 0 12 12"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <path d="M3 3 9 9 M9 3 3 9" />
+                  </svg>
                 </button>
               )}
             </div>
