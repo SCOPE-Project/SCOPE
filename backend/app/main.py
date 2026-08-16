@@ -17,7 +17,8 @@ credentials_path = Path("SatOS_credentials/credentials.env")
 
 # Make sure the .env file exists and is filled correctly
 if not load_dotenv(credentials_path):
-    raise Exception("No .env file found or empty")
+    raise Exception(f"No .env file found or empty at {credentials_path}")
+
 
 
 # -----------------------------------
