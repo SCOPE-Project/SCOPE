@@ -185,7 +185,24 @@ const appendPath = (fragment, className, coordinates, attributes = {}) => {
   fragment.append(path)
 }
 
-const renderMapOverlay = (overlayGroup, view, width, height, assets, satelliteTracks, activeAssetId) => {
+// Satellites don't carry a per-asset minimum-elevation setting the way
+// ground stations do (that's a ground-station-only configuration field), so
+// their visibility circle uses the geometric horizon (0 degrees elevation)
+// -- the largest area within which the satellite could theoretically be
+// seen above the local horizon at all.
+const SATELLITE_FOOTPRINT_ELEVATION_DEGREES = 0
+
+const renderMapOverlay = (
+  overlayGroup,
+  view,
+  width,
+  height,
+  assets,
+  satelliteTracks,
+  activeAssetId,
+  showGroundStationVisibility,
+  showSatelliteVisibility,
+) => {
   if (!overlayGroup || width <= 0 || height <= 0) {
     return
   }
@@ -260,7 +277,7 @@ const renderMapOverlay = (overlayGroup, view, width, height, assets, satelliteTr
     )
     : null
 
-  if (referenceSatellite && Number.isFinite(referenceOrbitAltitudeMeters)) {
+  if (showGroundStationVisibility && referenceSatellite && Number.isFinite(referenceOrbitAltitudeMeters)) {
     assets
       .filter((asset) => (
         asset.markerType === 'ground-station'
@@ -295,6 +312,52 @@ const renderMapOverlay = (overlayGroup, view, width, height, assets, satelliteTr
             )
           })
       })
+  }
+
+  // Satellite visibility circles: unlike the ground-station footprints
+  // above (which stay put -- ground stations don't move), these are
+  // "fixed to" each satellite, i.e. re-centered on its current propagated
+  // ground-track position every frame so the circle travels along with the
+  // marker. The radius still comes from the orbit's mean altitude rather
+  // than the live interpolated altitude, for the same reason ground-station
+  // footprints do: it keeps the circle a stable size instead of pulsing on
+  // every timeline tick for eccentric orbits.
+  if (showSatelliteVisibility) {
+    selectedSatelliteAssets.forEach((satellite) => {
+      const satelliteAltitudeMeters = (
+        computeMeanTrackAltitudeMeters(satelliteTracks[satellite.name])
+        ?? satellite.altitude
+      )
+
+      if (!Number.isFinite(satelliteAltitudeMeters)) {
+        return
+      }
+
+      const footprintAngle = calculateElevationFootprintAngle(
+        satelliteAltitudeMeters,
+        SATELLITE_FOOTPRINT_ELEVATION_DEGREES,
+        geocentricEarthRadiusMeters(satellite.latitude),
+      )
+      const ring = buildGeodesicCircle(
+        satellite.latitude,
+        satellite.longitude,
+        footprintAngle,
+      )
+
+      splitCoordinatesAtAntimeridian(ring)
+        .flatMap((segment) => clipPolylineToLatitudeRange(
+          segment,
+          -MAX_LATITUDE,
+          MAX_LATITUDE,
+        ))
+        .forEach((segment) => {
+          appendPath(
+            fragment,
+            'mission-map-satellite-footprint',
+            segment.map(projectPoint),
+          )
+        })
+    })
   }
 
   selectedSatelliteNames.forEach((satelliteName) => {
@@ -477,6 +540,8 @@ export default function MissionMap({
   onSelectAsset,
   timeMode = 'utc',
   heightPx = 380,
+  showGroundStationVisibility = true,
+  showSatelliteVisibility = true,
 }) {
   // Below this height there isn't room for the informational overlays
   // (legend, fit-to-selection buttons, coordinate readout, scale bar, grid
@@ -490,6 +555,7 @@ export default function MissionMap({
   const worldGroupRef = useRef(null)
   const overlayGroupRef = useRef(null)
   const coordinateReadoutRef = useRef(null)
+  const wheelHintRef = useRef(null)
   const scaleBarRef = useRef(null)
   const viewRef = useRef({ centerLongitude: 0, centerLatitude: 0, zoom: 0 })
   const minZoomRef = useRef(computeFitWorldZoom(1, 1))
@@ -503,6 +569,8 @@ export default function MissionMap({
   const activeAssetIdRef = useRef(activeAssetId)
   const timeModeRef = useRef(timeMode)
   const onSelectAssetRef = useRef(onSelectAsset)
+  const showGroundStationVisibilityRef = useRef(showGroundStationVisibility)
+  const showSatelliteVisibilityRef = useRef(showSatelliteVisibility)
   const [mapStatus, setMapStatus] = useState('loading')
   const [worldPaths, setWorldPaths] = useState([])
 
@@ -512,7 +580,36 @@ export default function MissionMap({
     activeAssetIdRef.current = activeAssetId
     timeModeRef.current = timeMode
     onSelectAssetRef.current = onSelectAsset
-  }, [activeAssetId, assets, onSelectAsset, satelliteTracks, timeMode])
+    showGroundStationVisibilityRef.current = showGroundStationVisibility
+    showSatelliteVisibilityRef.current = showSatelliteVisibility
+  }, [
+    activeAssetId,
+    assets,
+    onSelectAsset,
+    satelliteTracks,
+    showGroundStationVisibility,
+    showSatelliteVisibility,
+    timeMode,
+  ])
+
+  // The two visibility-circle toggles change rarely (a person flipping a
+  // switch), unlike assets/satelliteTracks/activeAssetId/timeMode which
+  // change up to ~60x/second during timeline playback and need the
+  // synchronous useLayoutEffect below to stay paint-ordered. A plain
+  // useEffect is deliberately used here instead: it runs in the passive
+  // phase, strictly after the ref-sync effect above has already written
+  // showGroundStationVisibilityRef/showSatelliteVisibilityRef for this same
+  // update, so renderFrame is guaranteed to see the new value instead of
+  // possibly reading it one render behind (which is what happens if a
+  // layout effect reads a ref that a passive effect elsewhere is
+  // responsible for updating -- layout effects always fire before passive
+  // effects within the same commit).
+  useEffect(() => {
+    if (!mapReadyRef.current) {
+      return
+    }
+    renderFrameRef.current?.()
+  }, [showGroundStationVisibility, showSatelliteVisibility])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -569,6 +666,8 @@ export default function MissionMap({
         overlayData.assets,
         overlayData.satelliteTracks,
         overlayData.activeAssetId,
+        showGroundStationVisibilityRef.current,
+        showSatelliteVisibilityRef.current,
       )
       syncAssetMarkers(
         container,
@@ -764,6 +863,8 @@ export default function MissionMap({
       handlePointerUp(event)
     }
 
+    let wheelHintTimeoutId = null
+
     const zoomAroundPoint = (screenX, screenY, zoomDelta, duration = 0) => {
       const { width, height } = getSize()
       const currentView = viewRef.current
@@ -783,7 +884,24 @@ export default function MissionMap({
       }
     }
 
+    // Only treat the wheel gesture as map-zoom when a modifier key is held
+    // (event.ctrlKey is also what browsers set automatically for a trackpad
+    // pinch gesture) or ordinary metaKey+wheel on a mouse. Plain wheel
+    // scrolling is left alone so the page can still scroll normally while
+    // the cursor happens to be over the map -- otherwise a large map panel
+    // traps every scroll gesture that passes over it. Dedicated zoom
+    // in/out buttons remain available regardless.
     const handleWheel = (event) => {
+      if (!event.ctrlKey && !event.metaKey) {
+        if (wheelHintRef.current) {
+          wheelHintRef.current.classList.add('mission-map-wheel-hint--visible')
+          window.clearTimeout(wheelHintTimeoutId)
+          wheelHintTimeoutId = window.setTimeout(() => {
+            wheelHintRef.current?.classList.remove('mission-map-wheel-hint--visible')
+          }, 1400)
+        }
+        return
+      }
       event.preventDefault()
       const rect = container.getBoundingClientRect()
       const direction = event.deltaY > 0 ? -1 : 1
@@ -834,6 +952,7 @@ export default function MissionMap({
     renderFrame()
 
     return () => {
+      window.clearTimeout(wheelHintTimeoutId)
       resizeObserver.disconnect()
       container.removeEventListener('pointerdown', handlePointerDown)
       container.removeEventListener('pointermove', handlePointerMove)
@@ -954,11 +1073,16 @@ export default function MissionMap({
     (satelliteTracks[asset.name] ?? []).length >= 2
   ))
   const hasElevationFootprint = Boolean(
-    coverageReferenceSatellite
+    showGroundStationVisibility
+    && coverageReferenceSatellite
     && assets.some((asset) => (
       asset.markerType === 'ground-station'
       && Number.isFinite(asset.minLinkElevation)
     )),
+  )
+  const hasSatelliteFootprint = Boolean(
+    showSatelliteVisibility
+    && selectedSatelliteAssets.length > 0,
   )
 
   return (
@@ -988,6 +1112,13 @@ export default function MissionMap({
       >
         Move the crosshair over the map
       </output>
+      <span
+        ref={wheelHintRef}
+        className="mission-map-wheel-hint"
+        aria-hidden="true"
+      >
+        Hold Ctrl (⌘ on Mac) + scroll to zoom the map
+      </span>
       <div className="mission-map-fit-controls">
         <button
           type="button"
@@ -1037,7 +1168,7 @@ export default function MissionMap({
       </div>
       <div ref={scaleBarRef} className="mission-map-scale-bar" aria-hidden="true" />
       <span className="mission-map-attribution">World outlines: Natural Earth</span>
-      {mapStatus === 'ready' && (hasPropagatedOrbit || hasElevationFootprint) && (
+      {mapStatus === 'ready' && (hasPropagatedOrbit || hasElevationFootprint || hasSatelliteFootprint) && (
         <div className="mission-map-legend" aria-label="Map overlay legend">
           {hasPropagatedOrbit && (
             <span className="mission-map-legend-item">
@@ -1048,7 +1179,13 @@ export default function MissionMap({
           {hasElevationFootprint && (
             <span className="mission-map-legend-item">
               <span className="mission-map-legend-circle" aria-hidden="true"></span>
-              Min. elevation footprint
+              Ground station visibility
+            </span>
+          )}
+          {hasSatelliteFootprint && (
+            <span className="mission-map-legend-item">
+              <span className="mission-map-legend-circle mission-map-legend-circle--satellite" aria-hidden="true"></span>
+              Satellite visibility
             </span>
           )}
         </div>

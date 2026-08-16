@@ -1107,8 +1107,8 @@ body {
   position: relative;
   width: 0.9rem;
   min-width: 0.9rem;
-  height: 36rem;
-  min-height: 36rem;
+  height: var(--top-panels-height, 36rem);
+  min-height: var(--top-panels-height, 36rem);
   align-self: stretch;
   display: flex;
   align-items: center;
@@ -1159,6 +1159,7 @@ body {
    Timeline panels, which are stacked rather than side-by-side, so it
    resizes height instead of width. */
 .panel-resizer--horizontal {
+  grid-column: 1 / -1;
   width: auto;
   min-width: 0;
   height: 0.9rem;
@@ -1380,8 +1381,8 @@ body {
 .overview-panel,
 .tradeoff-panel {
   min-width: 0;
-  height: 36rem;
-  min-height: 36rem;
+  height: var(--top-panels-height, 36rem);
+  min-height: var(--top-panels-height, 36rem);
   display: flex;
   flex-direction: column;
 }
@@ -2067,7 +2068,7 @@ body {
 
 .map-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(220px, 20%, 290px);
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 35%);
   gap: 0.75rem;
   align-items: start;
 }
@@ -2106,6 +2107,7 @@ body {
    controls stay so a person can still expand the map to inspect it in
    full via the browser Fullscreen API, exempted below via :not(:fullscreen). */
 .mission-map-shell--compact:not(:fullscreen) .mission-map-coordinate-readout,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-wheel-hint,
 .mission-map-shell--compact:not(:fullscreen) .mission-map-fit-controls,
 .mission-map-shell--compact:not(:fullscreen) .mission-map-legend,
 .mission-map-shell--compact:not(:fullscreen) .mission-map-scale-bar,
@@ -2195,6 +2197,16 @@ body {
   stroke: #b9571f;
   stroke-width: 2.2;
   stroke-dasharray: 7 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.mission-map-satellite-footprint {
+  fill: none;
+  stroke: var(--accent-primary);
+  stroke-width: 2.2;
+  stroke-dasharray: 1.5 4.5;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
@@ -2339,6 +2351,34 @@ body {
   pointer-events: none;
 }
 
+/* Shown briefly whenever a plain (non-modifier) wheel gesture passes over
+   the map, since that scroll is now left to the page rather than zooming
+   the map -- this tells the person how to zoom with the wheel instead. */
+.mission-map-wheel-hint {
+  position: absolute;
+  z-index: 4;
+  bottom: 0.65rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(0.3rem);
+  padding: 0.38rem 0.7rem;
+  border-radius: 0.2rem;
+  background: rgba(31, 42, 51, 0.85);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.28);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.mission-map-wheel-hint--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 .mission-map-fit-controls {
   position: absolute;
   z-index: 4;
@@ -2409,6 +2449,12 @@ body {
   border: 1.5px dashed #b9571f;
   border-radius: 50%;
   background: rgba(209, 106, 45, 0.1);
+}
+
+.mission-map-legend-circle--satellite {
+  border-color: var(--accent-primary);
+  border-style: dotted;
+  background: rgba(0, 57, 117, 0.1);
 }
 
 .mission-map-state {
@@ -2509,6 +2555,8 @@ body {
   flex-direction: column;
   gap: 0.9rem;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .map-sidebar-section {
@@ -2525,6 +2573,46 @@ body {
   letter-spacing: 0.06em;
   margin-bottom: 0.55rem;
   color: var(--text-secondary);
+}
+
+.map-layer-toggle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.map-layer-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.map-layer-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.map-layer-toggle-swatch {
+  width: 0.95rem;
+  height: 0.65rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.map-layer-toggle-swatch--ground-station {
+  border: 1.5px dashed #b9571f;
+  background: rgba(209, 106, 45, 0.1);
+}
+
+.map-layer-toggle-swatch--satellite {
+  border: 1.5px dotted var(--accent-primary);
+  background: rgba(0, 57, 117, 0.1);
 }
 
 .map-asset-card-list,

@@ -88,6 +88,7 @@ const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
 export default function App() {
   const splitPanelsRef = useRef(null)
   const planningRowResizeDragCleanupRef = useRef(null)
+  const topPanelsResizeDragCleanupRef = useRef(null)
   const splitDragCleanupRef = useRef(null)
   const timelineScrollRef = useRef(null)
   const timelineScrollFrameRef = useRef(null)
@@ -146,17 +147,23 @@ export default function App() {
   const [dragOverPanelId, setDragOverPanelId] = useState(null)
   // Height (px) of the bottomTop slot -- this is the whole panel's grid
   // row (heading + padding + content), not just its content area; the
-  // bottomBottom slot always flows naturally beneath it. Defaults to a
-  // thin strip so Map View stays a compact overview by default when it
-  // occupies that slot (160px of row - ~88px of heading/padding chrome
-  // leaves roughly the same thin map strip as before this was resizable).
-  const [bottomTopHeightPx, setBottomTopHeightPx] = useState(160)
+  // bottomBottom slot always flows naturally beneath it. 540px is 50%
+  // taller again on top of the previous 360px default (itself 50% taller
+  // than 240px, which was 50% taller than the original 160px default).
+  const [bottomTopHeightPx, setBottomTopHeightPx] = useState(540)
+  // Shared height (px) of the top row (Overview/Trade-Off by default);
+  // both panels stretch to this height and scroll their own content
+  // internally. 346px is 60% of the panels' original fixed 36rem (576px)
+  // height.
+  const [topPanelsHeightPx, setTopPanelsHeightPx] = useState(346)
   const [confirmingSchedule, setConfirmingSchedule] = useState(false)
   const [confirmationProgress, setConfirmationProgress] = useState(0)
   const [confirmationStep, setConfirmationStep] = useState('')
   const [confirmationSuccess, setConfirmationSuccess] = useState(false)
   const [confirmedScheduleCount, setConfirmedScheduleCount] = useState(0)
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
+  const [showGroundStationVisibilityCircles, setShowGroundStationVisibilityCircles] = useState(true)
+  const [showSatelliteVisibilityCircles, setShowSatelliteVisibilityCircles] = useState(true)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
   const [timelineNow, setTimelineNow] = useState(() => Date.now())
   const [timelinePlayheadTime, setTimelinePlayheadTime] = useState(() => Date.now())
@@ -308,6 +315,9 @@ export default function App() {
     }
     if (planningRowResizeDragCleanupRef.current) {
       planningRowResizeDragCleanupRef.current()
+    }
+    if (topPanelsResizeDragCleanupRef.current) {
+      topPanelsResizeDragCleanupRef.current()
     }
   }, [])
 
@@ -2319,6 +2329,48 @@ export default function App() {
     }
   }
 
+  const clampTopPanelsHeightPx = (value) => Math.min(960, Math.max(220, value))
+
+  const handleTopPanelsResizeStart = (event) => {
+    event.preventDefault()
+
+    const startClientY = event.clientY
+    const startHeight = topPanelsHeightPx
+
+    const handlePointerMove = (moveEvent) => {
+      setTopPanelsHeightPx(clampTopPanelsHeightPx(startHeight + (moveEvent.clientY - startClientY)))
+    }
+
+    const stopResize = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopResize)
+      window.removeEventListener('pointercancel', stopResize)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      topPanelsResizeDragCleanupRef.current = null
+    }
+
+    topPanelsResizeDragCleanupRef.current = stopResize
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopResize)
+    window.addEventListener('pointercancel', stopResize)
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  const handleTopPanelsResizeKeyDown = (event) => {
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setTopPanelsHeightPx((current) => clampTopPanelsHeightPx(current - 16))
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setTopPanelsHeightPx((current) => clampTopPanelsHeightPx(current + 16))
+    }
+  }
+
   // bottomTopHeightPx is the whole panel row (heading + padding included);
   // the map canvas itself only gets what's left after that chrome, so it
   // needs to subtract the same overhead the panel heading/padding takes up.
@@ -3046,12 +3098,62 @@ export default function App() {
                         activeAssetId={activeMapAsset?.id ?? null}
                         onSelectAsset={setActiveMapAssetId}
                         timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
+                        showGroundStationVisibility={showGroundStationVisibilityCircles}
+                        showSatelliteVisibility={showSatelliteVisibilityCircles}
                       />
                     </Suspense>
                   </MapErrorBoundary>
                 </div>
 
-                <aside className="map-sidebar">
+                <aside className="map-sidebar" style={{ maxHeight: `${mapViewHeightPx}px` }}>
+                  <div className="map-sidebar-section">
+                    <h3>Map Layers</h3>
+                    <div className="map-layer-toggle-list">
+                      <div className="map-layer-toggle">
+                        <span className="map-layer-toggle-label">
+                          <span
+                            className="map-layer-toggle-swatch map-layer-toggle-swatch--ground-station"
+                            aria-hidden="true"
+                          ></span>
+                          Ground station visibility circles
+                        </span>
+                        <label className="demo-switch">
+                          <input
+                            type="checkbox"
+                            checked={showGroundStationVisibilityCircles}
+                            onChange={() =>
+                              setShowGroundStationVisibilityCircles((current) => !current)
+                            }
+                          />
+                          <span className="demo-switch-track" aria-hidden="true">
+                            <span className="demo-switch-thumb"></span>
+                          </span>
+                        </label>
+                      </div>
+                      <div className="map-layer-toggle">
+                        <span className="map-layer-toggle-label">
+                          <span
+                            className="map-layer-toggle-swatch map-layer-toggle-swatch--satellite"
+                            aria-hidden="true"
+                          ></span>
+                          Satellite visibility circles
+                        </span>
+                        <label className="demo-switch">
+                          <input
+                            type="checkbox"
+                            checked={showSatelliteVisibilityCircles}
+                            onChange={() =>
+                              setShowSatelliteVisibilityCircles((current) => !current)
+                            }
+                          />
+                          <span className="demo-switch-track" aria-hidden="true">
+                            <span className="demo-switch-thumb"></span>
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="map-sidebar-section">
                     <h3>Visible Assets</h3>
                     {visibleMapAssets.length > 0 ? (
@@ -3742,6 +3844,7 @@ export default function App() {
             className="workspace-panels-split"
             style={{
               gridTemplateColumns: `minmax(0, ${overviewPanelWidth}%) 0.9rem minmax(0, calc(${100 - overviewPanelWidth}% - 0.9rem))`,
+              '--top-panels-height': `${topPanelsHeightPx}px`,
             }}
           >
           {panelNodesById[panelSlotAssignment.topLeft]}
@@ -3760,6 +3863,19 @@ export default function App() {
           </div>
 
           {panelNodesById[panelSlotAssignment.topRight]}
+          </div>
+
+          <div
+            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.topLeft] && !expandedSections[panelSlotAssignment.topRight] ? 'panel-resizer--collapsed' : ''}`}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize the height of the overview and trade-off panels"
+            tabIndex={0}
+            onPointerDown={handleTopPanelsResizeStart}
+            onKeyDown={handleTopPanelsResizeKeyDown}
+          >
+            <span className="panel-resizer-line panel-resizer-line--horizontal" aria-hidden="true"></span>
+            <span className="panel-resizer-grip panel-resizer-grip--horizontal" aria-hidden="true"></span>
           </div>
 
           <div
