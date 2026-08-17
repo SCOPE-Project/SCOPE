@@ -55,3 +55,11 @@ def put_schedule_events(session: SatIOSession, schedule_events: list[ScheduleEve
     :param schedule_events: list[ScheduleEventModel], list of schedule events to put
     """
     return session.put(endpoint=prefix, data=[event.model_dump(mode="json") for event in schedule_events])
+
+def delete_schedule_events(session: SatIOSession, schedule_event_uuid: UUID4) -> Response:
+    """
+    Delete activities from the API
+    :param session: SatIOSession
+    :param schedule_event_uuid: UUID4 of the schedule event to delete
+    """
+    return session.delete(endpoint=prefix, params={"schedule_event_uuid": schedule_event_uuid})
