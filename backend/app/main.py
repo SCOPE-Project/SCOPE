@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from app.routers import satos, tasks
+from app.routers import satos, tasks, utilities
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -56,6 +56,7 @@ app.add_middleware(
 
 app.include_router(satos.router)
 app.include_router(tasks.router)
+app.include_router(utilities.router)
 
 
 @app.get("/status")

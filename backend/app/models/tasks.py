@@ -17,6 +17,10 @@ class Activity:
     start_event: ScheduleEventModel
     end_event: ScheduleEventModel
     name: str = ""
+    description: str = ""
+    priority: int = 0
+    initiator: str | None = None
+    executor: str | None = None
 
 
 @dataclass

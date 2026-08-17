@@ -163,10 +163,12 @@ def push_activities_to_SatOS(activities: list[Activity]) -> None:
         SatOS_activity = ActivityModel(
             uuid=activity.uuid,
             scheduleName=activity.schedule_name,
-            initiator=activity.schedule_name,
-            executor=activity.schedule_name,
+            initiator=getattr(activity, "initiator", None) or activity.schedule_name,
+            executor=getattr(activity, "executor", None) or activity.schedule_name,
             status=activity.status,
             name=activity.name or "",
+            description=getattr(activity, "description", "") or "",
+            priority=getattr(activity, "priority", 0) or 0,
             startEvent=ScheduleEventRelationModel(
                 eventUuid=activity.start_event.uuid,
                 relativeTime=0,

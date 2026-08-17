@@ -13,8 +13,8 @@ from app.models.satos import (
     UpdateSatelliteStateRequest,
     UpdateSatelliteStateDTO,
     UpdateSatelliteStateResponse,
-    PushScheduledLinksRequest,
-    PushScheduledLinksResponse,
+    PushActivitiesRequest,
+    PushActivitiesResponse,
 )
 from core.models.domain import (
     SatelliteStateInputDefinition,
@@ -89,31 +89,30 @@ def satos_update_satellite_states(request: UpdateSatelliteStateRequest | None = 
         raise HTTPException(status_code=500, detail=f"Failed to update satellite state in SatOS: {e}")
 
 
-@router.post("/schedule/push-scheduled-links", response_model=PushScheduledLinksResponse)
-def satos_push_scheduled_links(request: PushScheduledLinksRequest):
+@router.post("/schedule/push-activities", response_model=PushActivitiesResponse)
+def satos_push_activities(request: PushActivitiesRequest):
     """
-    Pushes scheduled links to SatOS as activities and schedule events.
-    Ingests a raw list of ScheduledLink objects in the request body.
+    Pushes generic activities to SatOS schedules.
+    Agnostic of the source: accepts human-readable start_time, end_time,
+    and activity parameters (schedule_name, initiator, executor/executer, status, name, description, priority).
+    Event creation and UUID generation are handled internally.
     """
-    if not request.scheduled_links:
-        return PushScheduledLinksResponse(
+    if not request.activities:
+        return PushActivitiesResponse(
             status="success",
-            message="No scheduled links provided in request.",
-            pushed_links_count=0,
+            message="No activities provided in request.",
             pushed_activities_count=0,
             activities_uuids=[],
         )
 
-    domain_links = [link_dto.to_domain() for link_dto in request.scheduled_links]
-
     try:
-        activities = AssetRepository.push_scheduled_links_to_satos(domain_links)
-        return PushScheduledLinksResponse(
+        domain_activities = AssetRepository.create_activities_from_dtos(request.activities)
+        pushed_activities = AssetRepository.push_activities_to_satos(domain_activities)
+        return PushActivitiesResponse(
             status="success",
-            message=f"Successfully pushed {len(activities)} activities for {len(domain_links)} scheduled link(s) to SatOS.",
-            pushed_links_count=len(domain_links),
-            pushed_activities_count=len(activities),
-            activities_uuids=[str(a.uuid) for a in activities],
+            message=f"Successfully pushed {len(pushed_activities)} activit(ies) to SatOS.",
+            pushed_activities_count=len(pushed_activities),
+            activities_uuids=[str(a.uuid) for a in pushed_activities],
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to push activities to SatOS: {e}")

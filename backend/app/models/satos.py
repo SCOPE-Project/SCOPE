@@ -1,9 +1,10 @@
 # app/models/satos.py
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 from pydantic_models.definitions import SatelliteInfoModel, SatelliteModel
-from pydantic_models.activity import ActivityInfoModel
+from pydantic_models.activity import ActivityInfoModel, ActivityStatus
 from pydantic_models.schedule_event import ScheduleEventModel
-from typing import Union
+from typing import Union, Optional
+from datetime import datetime
 from core.models.domain import SatelliteInformation, GroundStationInformation
 
 class AssetListResponse(BaseModel):
@@ -121,6 +122,38 @@ class PushScheduledLinksResponse(BaseModel):
     status: str
     message: str
     pushed_links_count: int
+    pushed_activities_count: int
+    activities_uuids: list[str] = []
+
+
+# ==========================================
+# Generic Activities Push DTOs
+# ==========================================
+
+class ActivityDTO(BaseModel):
+    schedule_name: str
+    start_time: datetime
+    end_time: datetime
+    name: str = ""
+    description: str = ""
+    priority: int = 0
+    status: int = int(ActivityStatus.SUSPENDED)
+    initiator: Optional[str] = None
+    executor: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+ActivityInputDTO = ActivityDTO
+
+
+class PushActivitiesRequest(BaseModel):
+    activities: list[ActivityDTO] = []
+
+
+class PushActivitiesResponse(BaseModel):
+    status: str
+    message: str
     pushed_activities_count: int
     activities_uuids: list[str] = []
 

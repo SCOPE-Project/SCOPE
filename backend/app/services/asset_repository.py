@@ -8,6 +8,7 @@ from pydantic_models.activity import ActivityInfoModel, ActivityStatus
 from pydantic_models.schedule_event import ScheduleEventModel
 from core.models.domain import SatelliteInformation, GroundStationInformation, ScheduledLink
 from app.models.tasks import AssetInformation, AssetSchedule, Activity
+from app.models.satos import ActivityDTO
 from app.services.satos_connector import (
     satos_get_asset,
     satos_get_asset_list,
@@ -425,15 +426,67 @@ class AssetRepository:
         return activities
 
     @classmethod
-    def push_scheduled_links_to_satos(cls, links: list[ScheduledLink]) -> list[Activity]:
+    def create_activity_from_dto(cls, dto: ActivityDTO) -> Activity:
         """
-        Converts ScheduledLink objects to Activity objects, pushes them to SatOS,
-        synchronizes the local _schedules cache, and returns the created activities.
+        Converts an ActivityDTO into 2 ScheduleEventModel objects (start and end)
+        and 1 Activity domain object.
+        """
+        start_time = dto.start_time
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=timezone.utc)
 
-        :param links: list of ScheduledLink domain objects
+        end_time = dto.end_time
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+
+        event_prefix = dto.name if dto.name else f"Activity_{dto.schedule_name}"
+        short_id = uuid.uuid4().hex[:8]
+
+        start_event = ScheduleEventModel(
+            uuid=uuid.uuid4(),
+            id=f"{event_prefix}_START_{short_id}",
+            name=f"{dto.name} - Start" if dto.name else f"Start: {dto.schedule_name}",
+            timestamp=start_time,
+            schedule_1=dto.schedule_name,
+        )
+
+        end_event = ScheduleEventModel(
+            uuid=uuid.uuid4(),
+            id=f"{event_prefix}_END_{short_id}",
+            name=f"{dto.name} - End" if dto.name else f"End: {dto.schedule_name}",
+            timestamp=end_time,
+            schedule_1=dto.schedule_name,
+        )
+
+        return Activity(
+            uuid=uuid.uuid4(),
+            schedule_name=dto.schedule_name,
+            status=dto.status,
+            start_event=start_event,
+            end_event=end_event,
+            name=dto.name,
+            description=dto.description,
+            priority=dto.priority,
+            initiator=dto.initiator or dto.schedule_name,
+            executor=dto.executor or dto.schedule_name,
+        )
+
+    @classmethod
+    def create_activities_from_dtos(cls, dtos: list[ActivityDTO]) -> list[Activity]:
+        """
+        Converts a list of ActivityDTOs into a list of Activity domain objects.
+        """
+        return [cls.create_activity_from_dto(dto) for dto in dtos]
+
+    @classmethod
+    def push_activities_to_satos(cls, activities: list[Activity]) -> list[Activity]:
+        """
+        Pushes Activity objects to SatOS, synchronizes the local _schedules cache,
+        and returns the created activities.
+
+        :param activities: list of Activity domain objects
         :return: list of pushed Activity objects
         """
-        activities = cls.create_activities_from_scheduled_links(links)
         if not activities:
             return []
 
@@ -456,3 +509,16 @@ class AssetRepository:
                 )
 
         return activities
+
+    @classmethod
+    def push_scheduled_links_to_satos(cls, links: list[ScheduledLink]) -> list[Activity]:
+        """
+        Converts ScheduledLink objects to Activity objects, pushes them to SatOS,
+        synchronizes the local _schedules cache, and returns the created activities.
+
+        :param links: list of ScheduledLink domain objects
+        :return: list of pushed Activity objects
+        """
+        activities = cls.create_activities_from_scheduled_links(links)
+        return cls.push_activities_to_satos(activities)
+

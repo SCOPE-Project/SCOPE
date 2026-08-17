@@ -152,9 +152,46 @@ def test_push_scheduled_links_to_satos_updates_local_cache(mock_push):
     assert sched_names == {"Sat-1", "GS-1"}
 
 
-def test_router_push_scheduled_links_empty():
+def test_create_activity_from_dto():
+    from app.models.satos import ActivityDTO
+
+    start_time = datetime(2026, 8, 16, 14, 0, 0, tzinfo=timezone.utc)
+    end_time = datetime(2026, 8, 16, 14, 30, 0, tzinfo=timezone.utc)
+    dto = ActivityDTO(
+        schedule_name="Sat-Alpha",
+        start_time=start_time,
+        end_time=end_time,
+        name="Payload Observation Run",
+        description="Capture high resolution images",
+        priority=5,
+        status=2,
+        initiator="MissionControl",
+        executor="Sat-Alpha",
+    )
+
+    activity = AssetRepository.create_activity_from_dto(dto)
+
+    assert activity.schedule_name == "Sat-Alpha"
+    assert activity.name == "Payload Observation Run"
+    assert activity.description == "Capture high resolution images"
+    assert activity.priority == 5
+    assert activity.status == 2
+    assert activity.initiator == "MissionControl"
+    assert activity.executor == "Sat-Alpha"
+    assert isinstance(activity.uuid, uuid.UUID)
+
+    assert activity.start_event is not None
+    assert activity.start_event.timestamp == start_time
+    assert activity.start_event.schedule_1 == "Sat-Alpha"
+
+    assert activity.end_event is not None
+    assert activity.end_event.timestamp == end_time
+    assert activity.end_event.schedule_1 == "Sat-Alpha"
+
+
+def test_utilities_router_push_scheduled_links_empty():
     client = TestClient(app)
-    response = client.post("/satos/schedule/push-scheduled-links", json={"scheduled_links": []})
+    response = client.post("/utilities/schedule/push-scheduled-links", json={"scheduled_links": []})
     assert response.status_code == 200
     data = response.json()
     assert data["pushed_links_count"] == 0
@@ -162,10 +199,8 @@ def test_router_push_scheduled_links_empty():
 
 
 @patch("app.services.asset_repository.AssetRepository.push_scheduled_links_to_satos")
-def test_router_push_scheduled_links_success(mock_push_repo):
+def test_utilities_router_push_scheduled_links_success(mock_push_repo):
     link = create_sample_scheduled_link(link_id="link_001", sat_name="Sat-A", gs_name="GS-A")
-    link_dto = ScheduledLinkDTO.from_domain(link)
-
     mock_act1 = Activity(
         uuid=uuid.uuid4(),
         schedule_name="Sat-A",
@@ -199,7 +234,7 @@ def test_router_push_scheduled_links_success(mock_push_repo):
             }
         ]
     }
-    response = client.post("/satos/schedule/push-scheduled-links", json=payload)
+    response = client.post("/utilities/schedule/push-scheduled-links", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -208,10 +243,109 @@ def test_router_push_scheduled_links_success(mock_push_repo):
     assert len(data["activities_uuids"]) == 2
 
 
+def test_satos_router_push_activities_empty():
+    client = TestClient(app)
+    response = client.post("/satos/schedule/push-activities", json={"activities": []})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["pushed_activities_count"] == 0
+    assert data["activities_uuids"] == []
+
+
+@patch("app.services.asset_repository.AssetRepository.push_activities_to_satos")
+def test_satos_router_push_activities_success(mock_push_repo):
+    act_uuid1 = uuid.uuid4()
+    act_uuid2 = uuid.uuid4()
+    mock_act1 = Activity(
+        uuid=act_uuid1,
+        schedule_name="Sat-Beta",
+        status=2,
+        start_event=MagicMock(),
+        end_event=MagicMock(),
+        name="Imaging",
+        description="Target observation",
+        priority=3,
+        initiator="Operator",
+        executor="Sat-Beta",
+    )
+    mock_act2 = Activity(
+        uuid=act_uuid2,
+        schedule_name="Sat-Beta",
+        status=2,
+        start_event=MagicMock(),
+        end_event=MagicMock(),
+        name="Downlink",
+        description="Downlink observation data",
+        priority=2,
+        initiator="Operator",
+        executor="Sat-Beta",
+    )
+    mock_push_repo.return_value = [mock_act1, mock_act2]
+
+    client = TestClient(app)
+    payload = {
+        "activities": [
+            {
+                "schedule_name": "Sat-Beta",
+                "start_time": "2026-08-17T10:00:00Z",
+                "end_time": "2026-08-17T10:15:00Z",
+                "name": "Imaging",
+                "description": "Target observation",
+                "priority": 3,
+                "status": 2,
+                "initiator": "Operator",
+                "executor": "Sat-Beta",
+            },
+            {
+                "schedule_name": "Sat-Beta",
+                "start_time": "2026-08-17T10:20:00Z",
+                "end_time": "2026-08-17T10:30:00Z",
+                "name": "Downlink",
+                "description": "Downlink observation data",
+                "priority": 2,
+                "status": 2,
+                "initiator": "Operator",
+                "executor": "Sat-Beta",
+            },
+        ]
+    }
+    response = client.post("/satos/schedule/push-activities", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["pushed_activities_count"] == 2
+    assert data["activities_uuids"] == [str(act_uuid1), str(act_uuid2)]
+
+
+
 def test_cli_hard_fail_on_missing_input_file():
     """Verify CLI script hard fails with exit code 1 when input file does not exist."""
     res = subprocess.run(
         [sys.executable, "scripts/push_scheduled_links.py", "--input-file", "non_existent_file_999.json"],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 1
+    assert "HARD FAIL" in res.stderr
+
+
+def test_cli_push_activities_dry_run_default_config():
+    """Verify push_activities CLI runs successfully in dry-run mode with default config."""
+    res = subprocess.run(
+        [sys.executable, "scripts/push_activities.py", "--dry-run"],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0
+    assert "[DRY RUN] Completed" in res.stdout
+    assert "Found 2 activity record(s) to process" in res.stdout
+
+
+def test_cli_push_activities_hard_fail_on_missing_file():
+    """Verify push_activities CLI hard fails with exit code 1 when input file does not exist."""
+    res = subprocess.run(
+        [sys.executable, "scripts/push_activities.py", "--input-file", "non_existent_file_999.json"],
         capture_output=True,
         text=True,
     )

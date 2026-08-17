@@ -1,0 +1,26 @@
+{
+  "activities": [
+    {
+      "schedule_name": "Sat1_Group1",
+      "start_time": "2026-08-17T12:00:00Z",
+      "end_time": "2026-08-17T12:15:00Z",
+      "name": "Imaging",
+      "description": "Imaging of target area.",
+      "priority": 1,
+      "status": 2,
+      "initiator": "PL MissionPlanner",
+      "executor": "Sat1_Group1"
+    },
+    {
+      "schedule_name": "Sat2_Group1",
+      "start_time": "2026-08-17T12:30:00Z",
+      "end_time": "2026-08-17T12:45:00Z",
+      "name": "Imaging",
+      "description": "Imaging of target area.",
+      "priority": 2,
+      "status": 2,
+      "initiator": "PL MissionPlanner",
+      "executor": "Sat2_Group1"
+    }
+  ]
+}
