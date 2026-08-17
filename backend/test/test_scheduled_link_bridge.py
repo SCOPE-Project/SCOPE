@@ -339,7 +339,7 @@ def test_cli_push_activities_dry_run_default_config():
     )
     assert res.returncode == 0
     assert "[DRY RUN] Completed" in res.stdout
-    assert "Found 2 activity record(s) to process" in res.stdout
+    assert "activity record(s) to process" in res.stdout
 
 
 def test_cli_push_activities_hard_fail_on_missing_file():

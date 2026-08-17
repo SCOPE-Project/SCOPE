@@ -21,6 +21,16 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
+from dotenv import load_dotenv
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Load SatOS credentials from credentials.env
+credentials_path = backend_dir / "SatOS_credentials" / "credentials.env"
+if credentials_path.exists():
+    load_dotenv(credentials_path)
+
 from app.models.satos import ActivityDTO
 from app.services.asset_repository import AssetRepository
 

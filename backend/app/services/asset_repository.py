@@ -1,6 +1,7 @@
 # /services/asset_repository.py
 import uuid
 import warnings
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from api_connect.satio_session import SatIOSession
 from pydantic_models.definitions import SatelliteModel
@@ -14,6 +15,8 @@ from app.services.satos_connector import (
     satos_get_asset_list,
     satos_get_activities_list,
     push_activities_to_SatOS,
+    satos_delete_activities,
+    satos_clear_schedules,
 )
 
 class AssetRepository:
@@ -521,4 +524,50 @@ class AssetRepository:
         """
         activities = cls.create_activities_from_scheduled_links(links)
         return cls.push_activities_to_satos(activities)
+
+    @classmethod
+    def delete_activities_from_satos(cls, activity_uuids: Sequence[uuid.UUID | str]) -> list[str]:
+        """
+        Deletes activities by their UUIDs from SatOS and synchronizes local schedule caches.
+
+        :param activity_uuids: sequence of activity UUIDs (UUID objects or strings)
+        :return: list of deleted activity UUID strings
+        """
+        if not activity_uuids:
+            return []
+
+        deleted_uuids = satos_delete_activities(activity_uuids)
+        deleted_set = set(str(u) for u in deleted_uuids)
+
+        # Synchronize _schedules cache
+        for sched in cls._schedules:
+            sched.activities = [a for a in sched.activities if str(a.uuid) not in deleted_set]
+
+        # Synchronize _raw_schedules cache
+        for sched_name, acts in cls._raw_schedules.items():
+            cls._raw_schedules[sched_name] = [a for a in acts if str(a.uuid) not in deleted_set]
+
+        return deleted_uuids
+
+    @classmethod
+    def clear_schedules_in_satos(cls, schedule_names: Sequence[str]) -> dict[str, list[str]]:
+        """
+        Clears all activities for each specified schedule in SatOS and synchronizes local caches.
+
+        :param schedule_names: sequence of schedule names to clear
+        :return: dictionary mapping each schedule_name to list of deleted activity UUID strings
+        """
+        if not schedule_names:
+            return {}
+
+        cleared_summary = satos_clear_schedules(schedule_names)
+
+        for sched_name in schedule_names:
+            # Clear local caches for this schedule
+            cls._raw_schedules[sched_name] = []
+            existing_sched = next((s for s in cls._schedules if s.name == sched_name), None)
+            if existing_sched:
+                existing_sched.activities = []
+
+        return cleared_summary
 

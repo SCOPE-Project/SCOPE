@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import UUID4
+from pydantic import UUID4, UUID7
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from app.services import satos_connector
 from app.services.asset_repository import AssetRepository
@@ -15,6 +15,9 @@ from app.models.satos import (
     UpdateSatelliteStateResponse,
     PushActivitiesRequest,
     PushActivitiesResponse,
+    DeleteActivityResponse,
+    DeleteActivitiesRequest,
+    DeleteActivitiesResponse,
 )
 from core.models.domain import (
     SatelliteStateInputDefinition,
@@ -34,6 +37,70 @@ def satos_get_asset(asset_name: str):
 @router.get("/activities/list", response_model=ActivitiesListResponse)
 def satos_get_activities_list(schedule_name: str):
     return {"activities": satos_connector.satos_get_activities_list(schedule_name)}
+
+@router.delete("/activities/{activity_uuid}", response_model=DeleteActivityResponse)
+def satos_delete_activity(activity_uuid: UUID4 | UUID7):
+    """
+    Deletes a single activity by UUID from SatOS and updates the local repository cache.
+    """
+    try:
+        deleted = AssetRepository.delete_activities_from_satos([activity_uuid])
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Activity {activity_uuid} not found or could not be deleted.")
+        return DeleteActivityResponse(
+            status="success",
+            message=f"Successfully deleted activity {activity_uuid}.",
+            deleted_activity=str(activity_uuid),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete activity {activity_uuid} from SatOS: {e}")
+
+@router.post("/activities/delete", response_model=DeleteActivitiesResponse)
+def satos_delete_activities(request: DeleteActivitiesRequest):
+    """
+    Deletes multiple activities by UUID and/or clears entire schedules by schedule names.
+    Updates the local repository caches accordingly.
+    """
+    if not request.activity_uuids and not request.schedule_names:
+        return DeleteActivitiesResponse(
+            status="success",
+            message="No activity UUIDs or schedule names provided in request.",
+            deleted_count=0,
+            deleted_activities=[],
+            schedules_cleared={},
+        )
+
+    try:
+        all_deleted_uuids: list[str] = []
+        schedules_cleared_map: dict[str, list[str]] = {}
+
+        # 1. Clear requested schedules
+        if request.schedule_names:
+            schedules_cleared_map = AssetRepository.clear_schedules_in_satos(request.schedule_names)
+            for act_list in schedules_cleared_map.values():
+                all_deleted_uuids.extend(act_list)
+
+        # 2. Delete individually requested activity UUIDs (excluding already deleted)
+        if request.activity_uuids:
+            remaining_uuids = [
+                u for u in request.activity_uuids
+                if str(u) not in set(all_deleted_uuids)
+            ]
+            if remaining_uuids:
+                deleted_individual = AssetRepository.delete_activities_from_satos(remaining_uuids)
+                all_deleted_uuids.extend(deleted_individual)
+
+        return DeleteActivitiesResponse(
+            status="success",
+            message=f"Successfully deleted {len(all_deleted_uuids)} activit(ies) across {len(request.schedule_names)} schedule(s) and individual UUID request(s).",
+            deleted_count=len(all_deleted_uuids),
+            deleted_activities=all_deleted_uuids,
+            schedules_cleared=schedules_cleared_map,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete activities from SatOS: {e}")
 
 @router.post("/satellites/update-satellite-state", response_model=UpdateSatelliteStateResponse)
 def satos_update_satellite_states(request: UpdateSatelliteStateRequest | None = None):

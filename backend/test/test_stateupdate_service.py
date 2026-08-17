@@ -23,7 +23,7 @@ from core.models.domain import SatelliteStateInputDefinition, UpdateSatelliteSta
 def test_loads_bundled_default_config() -> None:
     config = load_update_state_config(DEFAULT_UPDATE_STATE_CONFIG_PATH)
 
-    assert config.epoch_utc == datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+    assert config.epoch_utc == datetime(2026, 8, 17, 12, tzinfo=timezone.utc)
     assert len(config.satellites) == 3
     assert [satellite.name for satellite in config.satellites] == [
         "Sat1_Group1",

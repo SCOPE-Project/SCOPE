@@ -1,18 +1,20 @@
 import json
+import uuid
 from pathlib import Path
+from collections.abc import Sequence
 from requests import Response
 from datetime import datetime, timezone
 from api_connect.satio_session import SatIOSession
 from api_connect.satellites import get_satellite_list, get_satellite, post_satellite
-from api_connect.activities import get_activity_list, put_activities
-from api_connect.schedule_events import get_schedule_events, put_schedule_events
+from api_connect.activities import get_activity_list, get_activities, put_activities, delete_activity
+from api_connect.schedule_events import get_schedule_events, put_schedule_events, delete_schedule_events
 
 from pydantic_models.definitions import SatelliteInfoModel, SatelliteModel
 from pydantic_models.activity import ActivityInfoModel, ActivityModel
 from pydantic_models.schedule_event import ScheduleEventModel
 from pydantic_models.schedule_event_relation import ScheduleEventRelationModel
 
-from pydantic import UUID4
+from pydantic import UUID4, UUID7
 from app.models.tasks import Activity
 from core.models.domain import SatelliteStateInputDefinition, SatelliteState, UpdateSatelliteStateConfig
 from core.astrodynamics.coordinates import generate_satellite_states
@@ -57,33 +59,6 @@ def satos_get_asset(asset_name: str) -> SatelliteModel:
         with SatIOSession() as session:
             return get_satellite(session, satellite_name=asset_name)
 
-## /satos/schedule_events
-#def satos_get_schedule_events(
-#    schedule_name: str | None = None, 
-#    schedule_event_uuid: str | UUID4 | None = None,
-#    start_time: datetime | None = None,
-#    end_time: datetime | None = None
-#) -> list[ScheduleEventModel]:
-#    """
-#    Get schedule events from the SatOS API.
-#    SatOS Connector to GET .../schedule_events
-#
-#    :param schedule_name: Name of the schedule
-#    :param schedule_event_uuid: str or UUID4 of the schedule event
-#    :param start_time: Fetch events after this time
-#    :param end_time: Fetch events before this time
-#    :return: list of ScheduleEventModel
-#    """
-#    with SatIOSession() as session:
-#        return get_schedule_events(
-#            session, 
-#            schedule_name=schedule_name, 
-#            schedule_event_uuid=schedule_event_uuid, 
-#            start_time=start_time, 
-#            end_time=end_time
-#        )
-#
-
 # /satos/activities/list
 def satos_get_activities_list(schedule_name: str) -> list[ActivityInfoModel]:
     """
@@ -105,7 +80,187 @@ def satos_get_activities_list(schedule_name: str) -> list[ActivityInfoModel]:
     except LookupError:
         with SatIOSession() as session:
             return get_activity_list(session, schedule_name)
-        
+
+# GET /satos/schedule_events
+def satos_get_schedule_events(schedule_name: str) -> list[ScheduleEventModel]:
+    """
+    Get schedule events from the SatOS API for a given schedule
+    SatOS Connector to GET .../schedule_events
+
+    :param schedule_name: Name of schedule
+    :return: list of ScheduleEventModel
+    --- 
+    Non-Implemented parameters are:
+    param schedule_event_uuid
+    param start_time
+    param end_time
+    """
+    try:
+        session = SatIOSession.get_session()
+        return get_schedule_events(session, schedule_name=schedule_name)
+    except LookupError:
+        with SatIOSession() as session:
+            return get_schedule_events(session, schedule_name)
+
+# DELETE /satos/schedule_events/{schedule_event_uuid}
+def satos_delete_schedule_event(schedule_event_uuid: UUID4 | UUID7 | uuid.UUID | str) -> Response:
+    """
+    Delete a schedule event from the SatOS API.
+    SatOS Connector to DELETE .../schedule_events/{schedule_event_uuid}
+
+    :param schedule_event_uuid: UUID of the schedule event to delete
+    :return: Response object from SatOS API
+    """
+    try:
+        session = SatIOSession.get_session()
+        resp = delete_schedule_events(session, schedule_event_uuid)
+        resp.raise_for_status()
+        return resp
+    except LookupError:
+        with SatIOSession() as session:
+            resp = delete_schedule_events(session, schedule_event_uuid)
+            resp.raise_for_status()
+            return resp
+
+# DELETE /satos/activities/{activity_uuid}
+def satos_delete_activity(activity_uuid: UUID4 | UUID7 | uuid.UUID | str) -> Response:
+    """
+    Delete an activity and its anchored start/end schedule events from the SatOS API.
+    SatOS Connector to DELETE .../activities/{activity_uuid}
+
+    :param activity_uuid: UUID of the activity to delete
+    :return: Response object from SatOS API
+    """
+    def _execute(session: SatIOSession) -> Response:
+        # 1. Fetch activity to discover anchored event UUIDs
+        event_uuids = set()
+        try:
+            act_models = get_activities(session, activity_uuid=activity_uuid)
+            if act_models:
+                for am in act_models:
+                    if am.startEvent and am.startEvent.eventUuid:
+                        event_uuids.add(am.startEvent.eventUuid)
+                    if am.endEvent and am.endEvent.eventUuid:
+                        event_uuids.add(am.endEvent.eventUuid)
+        except Exception:
+            pass
+
+        # 2. Delete the activity
+        resp = delete_activity(session, activity_uuid)
+        resp.raise_for_status()
+
+        # 3. Delete anchored start and end schedule events
+        for ev_uuid in event_uuids:
+            try:
+                ev_resp = delete_schedule_events(session, ev_uuid)
+                ev_resp.raise_for_status()
+            except Exception:
+                pass
+
+        return resp
+
+    try:
+        session = SatIOSession.get_session()
+        return _execute(session)
+    except LookupError:
+        with SatIOSession() as session:
+            return _execute(session)
+
+
+def satos_delete_activities(activity_uuids: Sequence[UUID4 | UUID7 | uuid.UUID | str]) -> list[str]:
+    """
+    Delete multiple activities and their anchored start/end schedule events by their UUIDs from SatOS.
+    Reuses an active or newly initialized SatIOSession across requests.
+
+    :param activity_uuids: sequence of UUIDs (UUID4, UUID7, UUID, or string representations)
+    :return: list of successfully deleted activity UUID strings
+    """
+    if not activity_uuids:
+        return []
+
+    def _execute_deletions(session: SatIOSession) -> list[str]:
+        res = []
+        all_event_uuids = set()
+
+        # 1. Discover anchored schedule event UUIDs
+        for act_uuid in activity_uuids:
+            try:
+                act_models = get_activities(session, activity_uuid=act_uuid)
+                if act_models:
+                    for am in act_models:
+                        if am.startEvent and am.startEvent.eventUuid:
+                            all_event_uuids.add(am.startEvent.eventUuid)
+                        if am.endEvent and am.endEvent.eventUuid:
+                            all_event_uuids.add(am.endEvent.eventUuid)
+            except Exception:
+                pass
+
+        # 2. Delete activities
+        for act_uuid in activity_uuids:
+            resp = delete_activity(session, act_uuid)
+            resp.raise_for_status()
+            res.append(str(act_uuid))
+
+        # 3. Delete anchored schedule events
+        for ev_uuid in all_event_uuids:
+            try:
+                ev_resp = delete_schedule_events(session, ev_uuid)
+                ev_resp.raise_for_status()
+            except Exception:
+                pass
+
+        return res
+
+    try:
+        session = SatIOSession.get_session()
+        return _execute_deletions(session)
+    except LookupError:
+        with SatIOSession() as session:
+            return _execute_deletions(session)
+
+
+def satos_clear_schedules(schedule_names: Sequence[str]) -> dict[str, list[str]]:
+    """
+    Clear all activities and all schedule events for each specified schedule in SatOS.
+    1. Queries get_activity_list for each schedule and deletes all returned activities.
+    2. Queries get_schedule_events for each schedule and deletes all returned schedule events (including detached ones).
+
+    :param schedule_names: sequence of schedule names to clear
+    :return: dictionary mapping each schedule_name to the list of deleted activity UUID strings
+    """
+    if not schedule_names:
+        return {}
+
+    def _execute_clear(session: SatIOSession) -> dict[str, list[str]]:
+        summary = {}
+        for sched_name in schedule_names:
+            # 1. Delete all activities in the schedule
+            activities = get_activity_list(session, schedule_name=sched_name)
+            deleted_for_sched = []
+            for act in activities:
+                resp = delete_activity(session, act.uuid)
+                resp.raise_for_status()
+                deleted_for_sched.append(str(act.uuid))
+            summary[sched_name] = deleted_for_sched
+
+            # 2. Delete ALL schedule events in the schedule (including detached ones)
+            events = get_schedule_events(session, schedule_name=sched_name)
+            for event in events:
+                try:
+                    ev_resp = delete_schedule_events(session, event.uuid)
+                    ev_resp.raise_for_status()
+                except Exception:
+                    pass
+
+        return summary
+
+    try:
+        session = SatIOSession.get_session()
+        return _execute_clear(session)
+    except LookupError:
+        with SatIOSession() as session:
+            return _execute_clear(session)
+
 # PUT /satos/schedule_events
 def satos_put_schedule_events(schedule_events: list[ScheduleEventModel]) -> Response:
     """

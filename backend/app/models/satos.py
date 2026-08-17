@@ -1,5 +1,5 @@
 # app/models/satos.py
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, UUID4, UUID7
 from pydantic_models.definitions import SatelliteInfoModel, SatelliteModel
 from pydantic_models.activity import ActivityInfoModel, ActivityStatus
 from pydantic_models.schedule_event import ScheduleEventModel
@@ -19,6 +19,21 @@ class ScheduleEventsResponse(BaseModel):
 class ActivitiesListResponse(BaseModel):
     activities: list[ActivityInfoModel]
 
+class DeleteActivityResponse(BaseModel):
+    status: str = "success"
+    message: str
+    deleted_activity: str
+
+class DeleteActivitiesRequest(BaseModel):
+    activity_uuids: list[Union[UUID4, UUID7, str]] = []
+    schedule_names: list[str] = []
+
+class DeleteActivitiesResponse(BaseModel):
+    status: str = "success"
+    message: str
+    deleted_count: int
+    deleted_activities: list[str] = []
+    schedules_cleared: dict[str, list[str]] = {}
 
 # ==========================================
 # Satellite State Simulation / Update DTOs
