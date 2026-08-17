@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:run": "vitest run",
-    "check:backend-compat": "node ./scripts/backend-compatibility-check.mjs"
+    "check:backend-compat": "node ./scripts/backend-compatibility-check.mjs",
+    "build:world-outlines": "node ./scripts/build-world-outlines.mjs"
   },
   "dependencies": {
     "react": "^19.2.6",
@@ -20,11 +21,14 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "d3-geo": "^3.1.1",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
+    "topojson-client": "^3.1.0",
     "vite": "^8.0.12",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "world-atlas": "^2.0.2"
   }
 }
