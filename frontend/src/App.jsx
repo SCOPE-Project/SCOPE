@@ -7,10 +7,14 @@ import {
 const BACKEND_BASE_URL = 'http://localhost:8000'
 const MissionMap = lazy(() => import('./components/MissionMap.jsx'))
 const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
+// Only one preset survives: "Reset View" puts the whole planning window back on
+// screen. Everything between it and TIMELINE_MAX_ZOOM_MULTIPLIER is reached
+// with Ctrl/Cmd + wheel.
 const TIMELINE_ZOOM_LEVELS = [
   { id: 'fit', label: 'Fit', multiplier: 1 },
   { id: 'detail', label: 'Detail', multiplier: 5.2 },
 ]
+const TIMELINE_DEFAULT_ZOOM_LEVEL = 'fit'
 // The three layers used to BE the timeline's rows. Since rows became
 // asset-centric they are pure filters over which kind of bar is drawn.
 const TIMELINE_LAYERS = [
@@ -34,6 +38,16 @@ const PANEL_LABELS = {
   timeline: 'Timeline',
   dataVolume: 'Data Volume',
 }
+
+// The Trade-Off panel is deprecated: its selection moved into the Overview
+// table, which now carries a Select column per trade-off row. The panel and
+// everything it needs (tradeOffPanelNode, the card band, getOptionLinkBudget,
+// showTradeOffCard, ...) is deliberately left intact and still builds -- flip
+// this flag back to true to get the card view and its top-right slot back.
+// activeTradeOffCardIndex stays meaningful either way: it is what the timeline
+// auto-expand and the red comparison curve in the Data Volume panel key off,
+// and the Overview trade-off pill sets it.
+const TRADE_OFF_PANEL_ENABLED = false
 
 // Demo assumptions for the on-board data budget. Nothing in the backend
 // supplies these yet, so they are user-editable in the Data Volume toolbar and
@@ -238,7 +252,6 @@ export default function App() {
   const timelineLayoutKeyRef = useRef('')
   const timelineProgrammaticScrollRef = useRef(false)
   const timelinePlayheadSliderRef = useRef(null)
-  const timelinePlayheadThumbRef = useRef(null)
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
@@ -289,17 +302,23 @@ export default function App() {
   // Which panel currently occupies which of the 5 layout slots. The top row
   // (topLeft/topRight) sits side by side with a width-resizer between them;
   // the bottom column (bottomTop/bottomMiddle/bottomBottom) is stacked with a
-  // height-resizer between each pair. bottomTop and bottomBottom get explicit
-  // pixel heights, bottomMiddle takes whatever is left -- the timeline lives
-  // there by default and grows with the number of expanded asset groups. Dragging a panel's handle onto another panel swaps their
+  // height-resizer between each pair.
+  //
+  // Every divider in this layout obeys the same rule: dragging it moves the
+  // divider itself and resizes the panel BEFORE it (above for horizontal, left
+  // for vertical). For that to hold, each slot that has a divider below it
+  // needs an explicit pixel height -- a slot sized `auto` pins its own bottom
+  // edge to its content, so its divider could never follow the pointer. Hence
+  // bottomTop and bottomMiddle are pixel-sized and only the LAST slot, which
+  // has no divider below it, grows with its content. Dragging a panel's handle onto another panel swaps their
   // slots, regardless of row — this does not persist across reloads.
-  const [panelSlotAssignment, setPanelSlotAssignment] = useState({
+  const [panelSlotAssignment, setPanelSlotAssignment] = useState(() => ({
     topLeft: 'overview',
-    topRight: 'tradeOff',
+    ...(TRADE_OFF_PANEL_ENABLED ? { topRight: 'tradeOff' } : {}),
     bottomTop: 'mapView',
     bottomMiddle: 'timeline',
     bottomBottom: 'dataVolume',
-  })
+  }))
   const [draggedPanelId, setDraggedPanelId] = useState(null)
   const [dragOverPanelId, setDragOverPanelId] = useState(null)
   // Height (px) of the bottomTop slot -- this is the whole panel's grid
@@ -308,7 +327,7 @@ export default function App() {
   // taller again on top of the previous 360px default (itself 50% taller
   // than 240px, which was 50% taller than the original 160px default).
   const [bottomTopHeightPx, setBottomTopHeightPx] = useState(540)
-  const [bottomBottomHeightPx, setBottomBottomHeightPx] = useState(320)
+  const [bottomMiddleHeightPx, setBottomMiddleHeightPx] = useState(620)
   // Demo assumptions behind the data-volume curves, editable in that panel.
   const [dataStartFillGb, setDataStartFillGb] = useState(DEFAULT_DATA_START_FILL_GB)
   const [dataGenerationMbps, setDataGenerationMbps] = useState(DEFAULT_DATA_GENERATION_MBPS)
@@ -334,7 +353,7 @@ export default function App() {
   const [timelineLive, setTimelineLive] = useState(true)
   const [timelinePlaying, setTimelinePlaying] = useState(false)
   const [timelinePlaybackSpeed, setTimelinePlaybackSpeed] = useState(1)
-  const [timelineZoomLevel, setTimelineZoomLevel] = useState('detail')
+  const [timelineZoomLevel, setTimelineZoomLevel] = useState(TIMELINE_DEFAULT_ZOOM_LEVEL)
   // null means "use the preset multiplier from timelineZoomLevel"; a number
   // means the person has zoomed continuously with Ctrl/⌘ + scroll (mirroring
   // the map's Ctrl-gated wheel zoom) and that exact value overrides the
@@ -349,6 +368,13 @@ export default function App() {
   // scheduled for the asset, and selecting a trade-off expands exactly the
   // groups that matter (see the auto-expand effect below).
   const [expandedTimelineGroups, setExpandedTimelineGroups] = useState({})
+  // The two section headers (Satellites / Ground Stations) collapse the whole
+  // block. Unlike the asset groups these start OPEN -- collapsed sections would
+  // leave the timeline showing nothing at all after the scheduler run.
+  const [expandedTimelineSections, setExpandedTimelineSections] = useState({
+    satellites: true,
+    groundStations: true,
+  })
   // Purely navigational: clicking a bar marks a link (both of its instances)
   // and scrolls the Trade-Off panel to the matching option. It never changes
   // selectedTradeOffOption -- the timeline shows and navigates, it does not decide.
@@ -1512,8 +1538,9 @@ export default function App() {
     setTimelineLive(true)
     setTimelinePlaying(false)
     setTimelinePlaybackSpeed(1)
-    setTimelineZoomLevel('detail')
+    setTimelineZoomLevel(TIMELINE_DEFAULT_ZOOM_LEVEL)
     setExpandedTimelineGroups({})
+    setExpandedTimelineSections({ satellites: true, groundStations: true })
     setMarkedTimelineLinkId(null)
     setMarkedTradeOffOptionId(null)
     setTimelineLayers({
@@ -1774,6 +1801,7 @@ export default function App() {
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
     setExpandedTimelineGroups({})
+    setExpandedTimelineSections({ satellites: true, groundStations: true })
     setMarkedTimelineLinkId(null)
     setMarkedTradeOffOptionId(null)
     setConfirmationSuccess(false)
@@ -2165,21 +2193,34 @@ export default function App() {
     .filter((section) => section.groups.length > 0)
   // A single flat row list drives BOTH the label column and the scrollable
   // canvas, so the two halves of the grid cannot drift apart vertically.
-  const timelineRenderRows = timelineSections.flatMap((section) => [
-    { type: 'section', key: `section-${section.id}`, label: section.label },
-    ...section.groups.flatMap((group) => {
-      const groupRenderRow = { type: 'group', key: `group-${group.id}`, group }
+  const timelineRenderRows = timelineSections.flatMap((section) => {
+    const sectionRenderRow = {
+      type: 'section',
+      key: `section-${section.id}`,
+      section,
+      label: section.label,
+    }
 
-      if (!expandedTimelineGroups[group.id]) {
-        return [groupRenderRow]
-      }
+    if (!expandedTimelineSections[section.id]) {
+      return [sectionRenderRow]
+    }
 
-      return [
-        groupRenderRow,
-        ...group.rows.map((row) => ({ type: 'link', key: `link-${row.id}`, group, row })),
-      ]
-    }),
-  ])
+    return [
+      sectionRenderRow,
+      ...section.groups.flatMap((group) => {
+        const groupRenderRow = { type: 'group', key: `group-${group.id}`, group }
+
+        if (!expandedTimelineGroups[group.id]) {
+          return [groupRenderRow]
+        }
+
+        return [
+          groupRenderRow,
+          ...group.rows.map((row) => ({ type: 'link', key: `link-${row.id}`, group, row })),
+        ]
+      }),
+    ]
+  })
 
   // Expanding a group changes the ROW COUNT but nothing about the horizontal
   // scale, so the scroll-recentering effects below key off "are there rows at
@@ -2189,7 +2230,7 @@ export default function App() {
 
   const getTimelineRowHeight = (renderRow) => {
     if (renderRow.type === 'section') {
-      return '1.55rem'
+      return '1.85rem'
     }
 
     const laneCount = renderRow.type === 'group'
@@ -2289,9 +2330,13 @@ export default function App() {
     // Q4/Q9: only satellites whose timeline group is expanded, ground station
     // groups do not count. The auto-expand on trade-off cards therefore pulls
     // exactly the relevant satellite into this view.
-    const satelliteGroups = (
-      timelineModel.sections.find((section) => section.id === 'satellites')?.groups ?? []
-    ).filter((group) => expandedTimelineGroups[group.id])
+    // A group hidden behind a collapsed section is not "expanded" as far as
+    // this view is concerned -- otherwise curves would appear for satellites
+    // you cannot see in the timeline.
+    const satelliteGroups = expandedTimelineSections.satellites
+      ? (timelineModel.sections.find((section) => section.id === 'satellites')?.groups ?? [])
+        .filter((group) => expandedTimelineGroups[group.id])
+      : []
 
     const series = satelliteGroups.map((group) => {
       const baseSeries = buildDataLevelSeries({
@@ -2415,6 +2460,12 @@ export default function App() {
       return
     }
 
+    setExpandedTimelineSections((current) => (
+      (current.satellites && current.groundStations)
+        ? current
+        : { satellites: true, groundStations: true }
+    ))
+
     setExpandedTimelineGroups((current) => {
       let changed = false
       const next = { ...current }
@@ -2500,53 +2551,15 @@ export default function App() {
   // scroll frame, that difference is directly usable as the thumb's `left`
   // in pixels. This guarantees the thumb and the line are always the same
   // screen X, regardless of *how* the view got there.
-  const syncTimelinePlayheadThumbPosition = () => {
-    const scrollContainer = timelineScrollRef.current
-    const thumbEl = timelinePlayheadThumbRef.current
-    if (
-      !scrollContainer
-      || !thumbEl
-      || timelineBaseTimestamp === null
-      || timelineDurationMs <= 0
-      || timelineWidthPx <= 0
-    ) {
-      return
-    }
-
-    const ratio = Math.max(
-      0,
-      Math.min(1, (timelinePlayheadTimestamp - timelineBaseTimestamp) / timelineDurationMs),
-    )
-    const halfViewportWidthPx = scrollContainer.clientWidth / 2
-    const canvasRelativeLeftPx = halfViewportWidthPx + (ratio * timelineWidthPx)
-    thumbEl.style.left = `${canvasRelativeLeftPx - scrollContainer.scrollLeft}px`
-  }
-
-  // Re-run the imperative sync above whenever anything that feeds its
-  // formula changes through React state/props (the playhead time itself,
-  // zoom, or a layout change that alters clientWidth). No dependency array:
-  // syncTimelinePlayheadThumbPosition is a plain function recreated every
-  // render (not memoized), so it always closes over this render's latest
-  // values -- same "re-attached every render (cheap)" reasoning as the wheel
-  // listener effect below, and it needs to react to enough different inputs
-  // (any of which can change independently) that a dependency array would
-  // just end up listing nearly all of them anyway.
-  useLayoutEffect(() => {
-    syncTimelinePlayheadThumbPosition()
-  })
-
-  // ...and also on every native scroll of the canvas -- including manual
-  // pans that never touch React state at all (dragging the scrollbar,
-  // trackpad panning), which is the case the effect above can't see.
-  useEffect(() => {
-    const scrollContainer = timelineScrollRef.current
-    if (!scrollContainer) {
-      return undefined
-    }
-
-    scrollContainer.addEventListener('scroll', syncTimelinePlayheadThumbPosition, { passive: true })
-    return () => scrollContainer.removeEventListener('scroll', syncTimelinePlayheadThumbPosition)
-  })
+  // The thumb is positioned on exactly the scale its drag handler reads from:
+  // a fraction of the SLIDER's own width across the planning window
+  // (timelinePlayheadWindowRatio), set as a percentage in the JSX below.
+  //
+  // It used to be positioned from the CANVAS instead -- canvas-relative pixels
+  // minus scrollLeft -- which is a different scale entirely, since the canvas
+  // is zoomed and scrolled. Input and output disagreeing is what forced the
+  // drag handlers to scroll the canvas along to paper over the mismatch, and
+  // that is the coupling being removed here.
 
   // The playhead slider is a separate control from the scrollable timeline
   // below it: scrolling/panning the timeline (`.timeline-scroll`) never
@@ -2573,19 +2586,13 @@ export default function App() {
       + (ratio * (planningWindowEndTimestamp - planningWindowStartTimestamp))
   }
 
-  // Dragging this slider thumb moves the playhead across the FULL planning
-  // window (the slider is a fixed-width overlay, independent of the
-  // timeline canvas's own zoom/scroll below it -- see the comment above
-  // getTimelineScrollLeftForRatio). The marker line and "Now"/label inside
-  // that canvas, though, only show whatever slice of the window is
-  // currently scrolled into view -- so without an explicit scroll here, the
-  // thumb (and its datetime label) jumps to the new time immediately while
-  // the dashed line inside the canvas stays wherever the view was last
-  // scrolled, visually "disconnecting" the two. Calling
-  // scrollTimelineToTimestamp keeps the canvas centered on the same instant
-  // the thumb now represents, exactly like the keyboard-nudge path
-  // (handleTimelinePlayheadKeyDown) and the live-mode follow effect already
-  // do.
+  // Playhead and canvas are deliberately independent: moving the playhead
+  // never scrolls the timeline, and scrolling the timeline never moves the
+  // playhead. The slider spans the full planning window while the canvas shows
+  // whatever slice is scrolled into view, so the dashed marker line simply
+  // leaves the viewport when you drag the thumb past the visible range -- that
+  // is the honest depiction of two independent positions, not a glitch. Live
+  // mode is the one exception, and it is an opt-in follow mode.
   const handleTimelinePlayheadPointerDown = (event) => {
     if (event.button !== undefined && event.button !== 0) {
       return
@@ -2598,9 +2605,7 @@ export default function App() {
 
     const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
     if (nextTimestamp !== null) {
-      const clampedTimestamp = clampToPlanningWindow(nextTimestamp)
-      setTimelinePlayheadTime(clampedTimestamp)
-      scrollTimelineToTimestamp(clampedTimestamp)
+      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
     }
   }
 
@@ -2611,9 +2616,7 @@ export default function App() {
 
     const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
     if (nextTimestamp !== null) {
-      const clampedTimestamp = clampToPlanningWindow(nextTimestamp)
-      setTimelinePlayheadTime(clampedTimestamp)
-      scrollTimelineToTimestamp(clampedTimestamp)
+      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
     }
   }
 
@@ -2827,7 +2830,6 @@ export default function App() {
     setTimelineLive(false)
     setTimelinePlaying(false)
     setTimelinePlayheadTime(nextTimestamp)
-    scrollTimelineToTimestamp(nextTimestamp)
   }
 
   // Plays the timeline forward from wherever the playhead currently sits, at
@@ -2835,6 +2837,13 @@ export default function App() {
   // "now" (unlike Live/"Now" mode, which breaks/stalls when the planning
   // window doesn't contain the real current time). See the playback useEffect
   // below for the actual per-frame stepping.
+  // Back to the whole planning window at 1x. Free zooming via Ctrl+wheel has no
+  // other way home now that the Fit/Detail presets are gone.
+  const handleResetTimelineView = () => {
+    setTimelineZoomLevel(TIMELINE_DEFAULT_ZOOM_LEVEL)
+    setTimelineCustomZoomMultiplier(null)
+  }
+
   const handleTimelinePlaybackToggle = () => {
     if (timelinePlaying) {
       setTimelinePlaying(false)
@@ -3128,19 +3137,17 @@ export default function App() {
   // exactly from asset count, since the panel is a manual, user-driven
   // resize -- the drag simply has more room to go as far as they need.
   const clampBottomTopHeightPx = (value) => Math.min(2400, Math.max(140, value))
-  const clampBottomBottomHeightPx = (value) => Math.min(1600, Math.max(120, value))
+  const clampBottomMiddleHeightPx = (value) => Math.min(2400, Math.max(140, value))
 
-  // Drag direction is inverted here: this resizer sits ABOVE the slot it
-  // sizes, so pulling it up has to make that slot taller.
   const handleBottomRowResizeStart = (event) => {
     event.preventDefault()
 
     const startClientY = event.clientY
-    const startHeight = bottomBottomHeightPx
+    const startHeight = bottomMiddleHeightPx
 
     const handlePointerMove = (moveEvent) => {
-      setBottomBottomHeightPx(
-        clampBottomBottomHeightPx(startHeight - (moveEvent.clientY - startClientY)),
+      setBottomMiddleHeightPx(
+        clampBottomMiddleHeightPx(startHeight + (moveEvent.clientY - startClientY)),
       )
     }
 
@@ -3165,12 +3172,12 @@ export default function App() {
   const handleBottomRowResizeKeyDown = (event) => {
     if (event.key === 'ArrowUp') {
       event.preventDefault()
-      setBottomBottomHeightPx((current) => clampBottomBottomHeightPx(current + 16))
+      setBottomMiddleHeightPx((current) => clampBottomMiddleHeightPx(current - 16))
     }
 
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      setBottomBottomHeightPx((current) => clampBottomBottomHeightPx(current - 16))
+      setBottomMiddleHeightPx((current) => clampBottomMiddleHeightPx(current + 16))
     }
   }
 
@@ -3264,8 +3271,11 @@ export default function App() {
   // the top row, or swapped to bottomBottom), since there's no divider
   // controlling its size in those positions.
   const MAP_PANEL_CHROME_OVERHEAD_PX = 88
-  const mapViewHeightPx = panelSlotAssignment.bottomTop === 'mapView'
-    ? Math.max(40, bottomTopHeightPx - MAP_PANEL_CHROME_OVERHEAD_PX)
+  const mapViewSlotHeightPx = panelSlotAssignment.bottomTop === 'mapView'
+    ? bottomTopHeightPx
+    : (panelSlotAssignment.bottomMiddle === 'mapView' ? bottomMiddleHeightPx : null)
+  const mapViewHeightPx = mapViewSlotHeightPx !== null
+    ? Math.max(40, mapViewSlotHeightPx - MAP_PANEL_CHROME_OVERHEAD_PX)
     : 380
 
   const handlePanelDragStart = (panelId) => (event) => {
@@ -3386,6 +3396,12 @@ export default function App() {
       current.timeline ? current : { ...current, timeline: true }
     ))
 
+    setExpandedTimelineSections((current) => (
+      (current.satellites && current.groundStations)
+        ? current
+        : { satellites: true, groundStations: true }
+    ))
+
     setExpandedTimelineGroups((current) => {
       const next = { ...current }
 
@@ -3445,6 +3461,13 @@ export default function App() {
       volumeGb: (rateMbps * durationSeconds) / 8000,
       maxElevation: option.maxElevation ?? row?.maxElevation ?? null,
     }
+  }
+
+  const toggleTimelineSection = (sectionId) => {
+    setExpandedTimelineSections((current) => ({
+      ...current,
+      [sectionId]: !current[sectionId],
+    }))
   }
 
   const toggleTimelineGroup = (groupId) => {
@@ -3914,6 +3937,13 @@ export default function App() {
                         {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
                       </span>
                     )}
+                    {tradeOffsCalculated && (
+                      <span className="overview-header-cell overview-header-cell--data">
+                        <span>Data</span>
+                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                      </span>
+                    )}
+                    {tradeOffsCalculated && <span>Select</span>}
                   </div>
                   {overviewRows.length === 0 ? (
                     <>
@@ -3927,6 +3957,8 @@ export default function App() {
                         <span>Pending</span>
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
                       </div>
                       <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
                         <span>OP-002</span>
@@ -3938,22 +3970,32 @@ export default function App() {
                         <span>Pending</span>
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
                       </div>
                     </>
                   ) : (
                     <>
                       {overviewRows.map((row) => {
+                        const rowOption = getOptionForOverpassId(row.overpassId)
                         const isRecommendedRow = tradeOffsCalculated
                           && row.tradeOffId !== '—'
                           && row.tradeOffScore !== '—'
-                          && tradeOffCards
-                            .flatMap((card) => card.options)
-                            .find((option) => option.overpassId === row.overpassId)?.recommended
+                          && rowOption?.recommended
+                        // The Trade-Off panel used to own this; the Overview is
+                        // the only place it lives now.
+                        const isSelectableRow = tradeOffsCalculated
+                          && !row.scheduleBlocked
+                          && row.tradeOffId !== '—'
+                          && rowOption !== null
+                        const isSelectedRow = isSelectableRow
+                          && selectedTradeOffOption === rowOption.optionId
+                        const rowBudget = rowOption ? getOptionLinkBudget(rowOption) : null
 
                         return (
                           <div
                             key={row.overpassId}
-                            className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
+                            className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${isSelectedRow ? 'overview-list-row--selected' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
                           >
                             <span className="overview-overpass-cell">
                               <span>{row.overpassId}</span>
@@ -3995,6 +4037,27 @@ export default function App() {
                                 : <span className="overview-tradeoff-cell">—</span>
                             )}
                             {tradeOffsCalculated && <span className="overview-score-cell">{row.tradeOffScore}</span>}
+                            {tradeOffsCalculated && (
+                              <span className="overview-data-cell">
+                                {rowBudget ? formatGb(rowBudget.volumeGb) : '—'}
+                              </span>
+                            )}
+                            {tradeOffsCalculated && (
+                              <span className="overview-select-cell">
+                                {isSelectableRow ? (
+                                  <button
+                                    type="button"
+                                    className={`overview-select-button ${isSelectedRow ? 'overview-select-button--selected' : ''}`}
+                                    onClick={() => handleSelectTradeOffOption(rowOption)}
+                                    aria-pressed={isSelectedRow}
+                                  >
+                                    {isSelectedRow ? 'Selected' : 'Select'}
+                                  </button>
+                                ) : (
+                                  <span className="overview-select-empty">—</span>
+                                )}
+                              </span>
+                            )}
                           </div>
                         )
                       })}
@@ -4466,19 +4529,17 @@ export default function App() {
                     </div>
                     <div className="timeline-toggle-group" role="group" aria-label="Timeline view controls">
                       <div className="timeline-zoom-control" role="group" aria-label="Timeline zoom">
-                        {TIMELINE_ZOOM_LEVELS.map((level) => (
-                          <button
-                            key={level.id}
-                            type="button"
-                            className={`timeline-zoom-option ${timelineZoomLevel === level.id && timelineCustomZoomMultiplier === null ? 'timeline-zoom-option--active' : ''}`}
-                            onClick={() => {
-                              setTimelineZoomLevel(level.id)
-                              setTimelineCustomZoomMultiplier(null)
-                            }}
-                          >
-                            {level.label}
-                          </button>
-                        ))}
+                        <button
+                          type="button"
+                          className="timeline-zoom-option timeline-zoom-reset"
+                          onClick={handleResetTimelineView}
+                          disabled={
+                            timelineZoomLevel === TIMELINE_DEFAULT_ZOOM_LEVEL
+                            && timelineCustomZoomMultiplier === null
+                          }
+                        >
+                          Reset View
+                        </button>
                       </div>
                     </div>
                     <div className="timeline-toggle-group" role="group" aria-label="Timeline playback">
@@ -4529,13 +4590,31 @@ export default function App() {
                         }
 
                         if (renderRow.type === 'section') {
+                          const sectionExpanded = Boolean(
+                            expandedTimelineSections[renderRow.section.id],
+                          )
+
                           return (
                             <div
                               key={`${renderRow.key}-label`}
                               className="timeline-label-cell timeline-label-cell--section"
                               style={rowStyle}
                             >
-                              <span className="timeline-section-name">{renderRow.label}</span>
+                              <button
+                                type="button"
+                                className="timeline-section-toggle"
+                                onClick={() => toggleTimelineSection(renderRow.section.id)}
+                                aria-expanded={sectionExpanded}
+                                aria-label={`${sectionExpanded ? 'Collapse' : 'Expand'} ${renderRow.label}`}
+                              >
+                                <span className="timeline-group-chevron" aria-hidden="true">
+                                  {renderSectionChevron(sectionExpanded)}
+                                </span>
+                                <span className="timeline-section-name">{renderRow.label}</span>
+                                <span className="timeline-section-count">
+                                  {renderRow.section.groups.length}
+                                </span>
+                              </button>
                             </div>
                           )
                         }
@@ -4598,8 +4677,8 @@ export default function App() {
                       >
                         {timelinePlayheadWindowRatio !== null && (
                           <div
-                            ref={timelinePlayheadThumbRef}
                             className="timeline-playhead-thumb"
+                            style={{ left: `${timelinePlayheadWindowRatio * 100}%` }}
                             role="slider"
                             tabIndex="0"
                             aria-label="Current time shown on the map"
@@ -4661,15 +4740,6 @@ export default function App() {
                             instead of once for the whole canvas -- see
                             getTimelineScrollLeftForRatio's comment for the
                             full derivation this depends on staying true. */}
-                        {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
-                          <div
-                            className="timeline-now-line"
-                            style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                          >
-                            <span className="timeline-now-badge">Now</span>
-                          </div>
-                        )}
-
                         {timelinePlayheadOffsetMinutes !== null
                           && timelinePlayheadOffsetMinutes >= 0
                           && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
@@ -4695,13 +4765,6 @@ export default function App() {
                             <span>{tick.label}</span>
                           </div>
                         ))}
-
-                        {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
-                          <div
-                            className="timeline-now-line"
-                            style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                          ></div>
-                        )}
 
                         {timelinePlayheadOffsetMinutes !== null
                           && timelinePlayheadOffsetMinutes >= 0
@@ -4752,13 +4815,6 @@ export default function App() {
                             ))}
 
                             {rowItems.map((item) => renderTimelineBar(item))}
-
-                            {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
-                              <div
-                                className="timeline-now-line"
-                                style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                              ></div>
-                            )}
 
                             {timelinePlayheadOffsetMinutes !== null
                               && timelinePlayheadOffsetMinutes >= 0
@@ -5058,13 +5114,6 @@ export default function App() {
                                 </button>
                               ))}
 
-                              {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
-                                <div
-                                  className="timeline-now-line"
-                                  style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                                ></div>
-                              )}
-
                               {timelinePlayheadOffsetMinutes !== null
                                 && timelinePlayheadOffsetMinutes >= 0
                                 && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
@@ -5359,33 +5408,42 @@ export default function App() {
             ref={splitPanelsRef}
             className="workspace-panels-split"
             style={{
-              gridTemplateColumns: `minmax(0, ${overviewPanelWidth}%) 0.9rem minmax(0, calc(${100 - overviewPanelWidth}% - 0.9rem))`,
+              // Without a second panel in the top row there is nothing to
+              // split, so the remaining panel takes the full width and the
+              // vertical resizer disappears with it.
+              gridTemplateColumns: panelSlotAssignment.topRight
+                ? `minmax(0, ${overviewPanelWidth}%) 0.9rem minmax(0, calc(${100 - overviewPanelWidth}% - 0.9rem))`
+                : 'minmax(0, 1fr)',
               '--top-panels-height': `${topPanelsHeightPx}px`,
             }}
           >
           {panelNodesById[panelSlotAssignment.topLeft]}
 
-          <div
-            className={`panel-resizer ${!expandedSections[panelSlotAssignment.topLeft] && !expandedSections[panelSlotAssignment.topRight] ? 'panel-resizer--collapsed' : ''}`}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize the top-row panels"
-            tabIndex={0}
-            onPointerDown={handlePanelResizeStart}
-            onKeyDown={handlePanelResizeKeyDown}
-          >
-            <span className="panel-resizer-line" aria-hidden="true"></span>
-            <span className="panel-resizer-grip" aria-hidden="true"></span>
+          {panelSlotAssignment.topRight && (
+            <>
+              <div
+                className={`panel-resizer ${!expandedSections[panelSlotAssignment.topLeft] && !expandedSections[panelSlotAssignment.topRight] ? 'panel-resizer--collapsed' : ''}`}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize the top-row panels"
+                tabIndex={0}
+                onPointerDown={handlePanelResizeStart}
+                onKeyDown={handlePanelResizeKeyDown}
+              >
+                <span className="panel-resizer-line" aria-hidden="true"></span>
+                <span className="panel-resizer-grip" aria-hidden="true"></span>
+              </div>
+
+              {panelNodesById[panelSlotAssignment.topRight]}
+            </>
+          )}
           </div>
 
-          {panelNodesById[panelSlotAssignment.topRight]}
-          </div>
-
           <div
-            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.topLeft] && !expandedSections[panelSlotAssignment.topRight] ? 'panel-resizer--collapsed' : ''}`}
+            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.topLeft] && !(panelSlotAssignment.topRight && expandedSections[panelSlotAssignment.topRight]) ? 'panel-resizer--collapsed' : ''}`}
             role="separator"
             aria-orientation="horizontal"
-            aria-label="Resize the height of the overview and trade-off panels"
+            aria-label="Resize the height of the top row"
             tabIndex={0}
             onPointerDown={handleTopPanelsResizeStart}
             onKeyDown={handleTopPanelsResizeKeyDown}
@@ -5397,7 +5455,15 @@ export default function App() {
           <div
             className="planning-views-row"
             style={{
-              gridTemplateRows: `${bottomTopHeightPx}px 0.9rem auto 0.9rem ${bottomBottomHeightPx}px`,
+              // A collapsed panel falls back to `auto` -- holding a fixed
+              // height open for a collapsed panel would just leave a gap.
+              gridTemplateRows: [
+                expandedSections[panelSlotAssignment.bottomTop] ? `${bottomTopHeightPx}px` : 'auto',
+                '0.9rem',
+                expandedSections[panelSlotAssignment.bottomMiddle] ? `${bottomMiddleHeightPx}px` : 'auto',
+                '0.9rem',
+                'auto',
+              ].join(' '),
             }}
           >
           {panelNodesById[panelSlotAssignment.bottomTop]}
@@ -5421,7 +5487,7 @@ export default function App() {
             className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.bottomMiddle] && !expandedSections[panelSlotAssignment.bottomBottom] ? 'panel-resizer--collapsed' : ''}`}
             role="separator"
             aria-orientation="horizontal"
-            aria-label={`Resize the ${PANEL_LABELS[panelSlotAssignment.bottomBottom]} panel`}
+            aria-label={`Resize the ${PANEL_LABELS[panelSlotAssignment.bottomMiddle]} panel`}
             tabIndex={0}
             onPointerDown={handleBottomRowResizeStart}
             onKeyDown={handleBottomRowResizeKeyDown}

@@ -1151,6 +1151,45 @@ body {
   min-width: 0;
 }
 
+/* The first two slots of the bottom column have a dragged pixel height (only
+   the last slot grows with its content), so whatever panel lands in one has to
+   fill that box exactly and scroll inside it -- otherwise its content would
+   spill past the divider below. Children 1 and 3 are the panels; 2 and 4 are
+   the dividers. */
+.planning-views-row > .panel:nth-child(1),
+.planning-views-row > .panel:nth-child(3) {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.planning-views-row > .panel:nth-child(1) > .panel-collapsible-content,
+.planning-views-row > .panel:nth-child(3) > .panel-collapsible-content {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Collapsed panels shrink to their heading instead of stretching. */
+.planning-views-row > .panel--collapsed:nth-child(1),
+.planning-views-row > .panel--collapsed:nth-child(3) {
+  align-self: start;
+}
+
+/* With the panel body scrolling, the zoom/playback controls would scroll out of
+   reach on the way down the asset rows. Pin them. (The hour axis sits inside
+   the horizontally scrolling canvas and cannot be pinned the same way -- it
+   scrolls with the rows.) */
+.planning-views-row > .panel:nth-child(1) .timeline-toolbar,
+.planning-views-row > .panel:nth-child(3) .timeline-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--bg-panel-strong);
+  padding-top: 0.15rem;
+}
+
 .panel-resizer {
   position: relative;
   width: 0.9rem;
@@ -1578,8 +1617,8 @@ body {
 }
 
 .overview-list-grid--with-tradeoffs {
-  grid-template-columns: 0.78fr 0.56fr 0.56fr 0.58fr 0.58fr 0.38fr 0.38fr 0.5fr 0.34fr;
-  min-width: 760px;
+  grid-template-columns: 0.74fr 0.52fr 0.52fr 0.54fr 0.54fr 0.36fr 0.36fr 0.46fr 0.32fr 0.36fr 0.5fr;
+  min-width: 950px;
 }
 
 .overview-list-header,
@@ -3891,6 +3930,55 @@ body {
   transition: width 0.32s ease;
 }
 
+
+/* The Overview took over selection when the Trade-Off panel was deprecated. */
+.overview-select-cell {
+  display: flex;
+  align-items: center;
+}
+
+.overview-select-button {
+  width: 100%;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.overview-select-button:hover {
+  border-color: var(--accent-primary);
+}
+
+.overview-select-button:focus-visible {
+  outline: 2px solid rgba(185, 87, 31, 0.55);
+  outline-offset: 1px;
+}
+
+.overview-select-button--selected {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+  cursor: default;
+}
+
+.overview-select-empty {
+  color: var(--text-muted);
+}
+
+.overview-data-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-list-row--selected {
+  background: rgba(0, 57, 117, 0.06);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
 /* --- Trade-Off option facts ------------------------------------------- */
 
 .tradeoff-option-facts {
@@ -3953,13 +4041,40 @@ body {
    heights below must stay symmetrical between the two halves. */
 
 .timeline-label-cell--section {
-  justify-content: flex-end;
-  min-height: 1.55rem;
-  padding: 0 0.68rem 0.16rem 0;
+  justify-content: center;
+  min-height: 1.85rem;
+  padding: 0 0.45rem 0 0;
   border-top: 0;
 }
 
+.timeline-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.16rem 0.28rem 0.16rem 0.12rem;
+  border: 0;
+  border-radius: 0.2rem;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.timeline-section-toggle:hover {
+  background: rgba(0, 57, 117, 0.07);
+}
+
+.timeline-section-toggle:focus-visible {
+  outline: 2px solid rgba(185, 87, 31, 0.5);
+  outline-offset: 1px;
+}
+
 .timeline-section-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.63rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -3967,8 +4082,20 @@ body {
   color: var(--text-muted);
 }
 
+.timeline-section-count {
+  flex: none;
+  min-width: 1.15rem;
+  padding: 0.03rem 0.3rem;
+  border-radius: 999px;
+  background: #dde5ee;
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-align: center;
+}
+
 .timeline-track-row--section {
-  min-height: 1.55rem;
+  min-height: 1.85rem;
   border-top: 0;
   background: transparent;
 }
@@ -4156,21 +4283,6 @@ body {
    so it inherits the exact same width, 50% inline padding and scroll geometry
    as the timeline -- that is what makes a mirrored scrollLeft land on the same
    instant in both panels. */
-
-/* The panel sits in a fixed-height grid row, so its content has to scroll once
-   more satellites are expanded than fit. */
-.data-volume-panel {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  align-self: stretch;
-  overflow: hidden;
-}
-
-.data-volume-panel .panel-collapsible-content {
-  min-height: 0;
-  overflow-y: auto;
-}
 
 .data-volume-toolbar {
   display: flex;
