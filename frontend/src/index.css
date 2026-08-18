@@ -4074,6 +4074,217 @@ body {
   text-transform: uppercase;
 }
 
+/* --- Data Volume panel ------------------------------------------------ */
+/* The chart canvas deliberately reuses .timeline-scroll / .timeline-time-canvas
+   so it inherits the exact same width, 50% inline padding and scroll geometry
+   as the timeline -- that is what makes a mirrored scrollLeft land on the same
+   instant in both panels. */
+
+/* The panel sits in a fixed-height grid row, so its content has to scroll once
+   more satellites are expanded than fit. */
+.data-volume-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  align-self: stretch;
+  overflow: hidden;
+}
+
+.data-volume-panel .panel-collapsible-content {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.data-volume-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1.1rem;
+  padding: 0 0 0.85rem;
+}
+
+.data-volume-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.data-volume-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.42rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.24rem;
+  background: #fff;
+}
+
+.data-volume-input-wrap input {
+  width: 4.4rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-volume-input-wrap input:focus {
+  outline: none;
+}
+
+.data-volume-input-wrap:focus-within {
+  border-color: rgba(185, 87, 31, 0.6);
+  box-shadow: 0 0 0 2px rgba(185, 87, 31, 0.16);
+}
+
+.data-volume-unit {
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.data-volume-toolbar-copy {
+  flex: 1 1 18rem;
+  min-width: 0;
+  align-self: center;
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.data-volume-label-cell {
+  justify-content: center;
+  gap: 0.12rem;
+  min-height: 7.2rem;
+}
+
+.data-volume-axis-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.data-volume-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.data-volume-flag {
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.data-volume-flag--overflow {
+  border: 1px solid rgba(178, 49, 42, 0.4);
+  background: #fbdedd;
+  color: #8f2b25;
+}
+
+.data-volume-flag--starved {
+  border: 1px solid rgba(140, 79, 24, 0.35);
+  background: #f5e6d8;
+  color: #8c4f18;
+}
+
+.data-volume-row {
+  position: relative;
+  min-width: 0;
+  height: 7.2rem;
+  border-top: 1px solid var(--line-soft);
+  background: #fcfdfe;
+}
+
+.data-volume-chart {
+  position: absolute;
+  inset: 0.5rem 0 0.35rem;
+  width: 100%;
+  height: calc(100% - 0.85rem);
+  overflow: visible;
+  pointer-events: none;
+}
+
+.data-volume-curve {
+  fill: none;
+  stroke: #2563c9;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* The comparison path: what the marked (not selected) trade-off option would
+   do to this satellite's buffer. */
+.data-volume-curve--alternative {
+  stroke: #d0342c;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Neutral on purpose: red is taken by the alternative curve. */
+.data-volume-capacity-line {
+  stroke: rgba(90, 109, 128, 0.55);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Invisible hover target over each downlink so the step can carry a tooltip
+   without drawing a second bar on top of the curve. */
+.data-volume-step {
+  position: absolute;
+  top: 0.5rem;
+  bottom: 0.35rem;
+  min-width: 0.35rem;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid rgba(37, 99, 201, 0.28);
+  border-right: 1px solid rgba(37, 99, 201, 0.28);
+  background: rgba(37, 99, 201, 0.07);
+  cursor: pointer;
+  z-index: 3;
+}
+
+.data-volume-step:hover,
+.data-volume-step:focus-visible {
+  background: rgba(37, 99, 201, 0.16);
+  outline: none;
+  z-index: 6;
+}
+
+.data-volume-step .timeline-bar-tooltip {
+  top: 0.2rem;
+}
+
+.data-volume-step:hover .timeline-bar-tooltip,
+.data-volume-step:focus-visible .timeline-bar-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.data-volume-scroll-frame {
+  padding-top: 0;
+}
+
+.data-volume-panel .timeline-label-column {
+  padding-top: 0;
+}
+
 @media (max-width: 980px) {
   .app-header {
     align-items: flex-start;

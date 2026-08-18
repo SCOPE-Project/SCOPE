@@ -1,5 +1,8 @@
 import { Component, lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { interpolateTrackPosition } from './components/mapGeometry.js'
+import {
+  computeMeanTrackAltitudeMeters,
+  interpolateTrackPosition,
+} from './components/mapGeometry.js'
 
 const BACKEND_BASE_URL = 'http://localhost:8000'
 const MissionMap = lazy(() => import('./components/MissionMap.jsx'))
@@ -21,13 +24,142 @@ const TIMELINE_MAX_ZOOM_MULTIPLIER = 24
 const TIMELINE_PLAYBACK_SPEEDS = [1, 2, 4, 8, 16, 32, 64, 128]
 const DEFAULT_PLANNING_TIME_MODE = 'utc'
 // Panel identity is separate from panel position: PANEL_LABELS/panelSlotAssignment
-// let every panel (Overview, Trade-Off, Map View, Timeline) be dragged into any of
-// the 4 layout slots, while collapse state etc. stays keyed to the panel itself.
+// let every panel (Overview, Trade-Off, Map View, Timeline, Data Volume) be
+// dragged into any of the 5 layout slots, while collapse state etc. stays keyed
+// to the panel itself.
 const PANEL_LABELS = {
   overview: 'Overview',
   tradeOff: 'Trade-Off',
   mapView: 'Map View',
   timeline: 'Timeline',
+  dataVolume: 'Data Volume',
+}
+
+// Demo assumptions for the on-board data budget. Nothing in the backend
+// supplies these yet, so they are user-editable in the Data Volume toolbar and
+// shared by every satellite.
+const DEFAULT_DATA_START_FILL_GB = 40
+const DEFAULT_DATA_GENERATION_MBPS = 100
+const DEFAULT_DATA_CAPACITY_GB = 100
+// Downlink rate model: rate falls off with the square of the slant range, so a
+// high-elevation (short range) pass downlinks faster. Normalised so that a
+// zenith pass from a 550 km orbit hits DEMO_PEAK_DOWNLINK_MBPS.
+const DEMO_PEAK_DOWNLINK_MBPS = 640
+const DEMO_REFERENCE_ALTITUDE_M = 550000
+const EARTH_RADIUS_M = 6371008.8
+// Decimal gigabytes: 1 GB = 8000 Mbit, so Mbit/s -> GB/ms is /8000/1000.
+const MBPS_TO_GB_PER_MS = 1 / 8000 / 1000
+
+// Slant range to a satellite seen at `elevationDegrees` above the horizon.
+const computeSlantRangeMeters = (elevationDegrees, altitudeMeters) => {
+  const elevationRadians = (Math.max(0, Math.min(90, elevationDegrees)) * Math.PI) / 180
+  const orbitRadius = EARTH_RADIUS_M + Math.max(1, altitudeMeters)
+  const horizontal = EARTH_RADIUS_M * Math.cos(elevationRadians)
+
+  return Math.sqrt((orbitRadius * orbitRadius) - (horizontal * horizontal))
+    - (EARTH_RADIUS_M * Math.sin(elevationRadians))
+}
+
+// Demo downlink rate: free-space loss goes with the square of the distance, so
+// a high-elevation pass (short slant range) downlinks faster. Normalised so a
+// zenith pass from the reference altitude reaches the peak rate. This is a
+// stand-in until the backend supplies real link budgets.
+const getDemoDownlinkMbps = (maxElevationDeg, altitudeMeters) => {
+  const elevation = Number.isFinite(maxElevationDeg) ? maxElevationDeg : 30
+  const altitude = Number.isFinite(altitudeMeters) && altitudeMeters > 0
+    ? altitudeMeters
+    : DEMO_REFERENCE_ALTITUDE_M
+  const slantRange = computeSlantRangeMeters(elevation, altitude)
+
+  if (!Number.isFinite(slantRange) || slantRange <= 0) {
+    return DEMO_PEAK_DOWNLINK_MBPS / 4
+  }
+
+  const rate = DEMO_PEAK_DOWNLINK_MBPS
+    * ((DEMO_REFERENCE_ALTITUDE_M / slantRange) ** 2)
+
+  return Math.max(4, Math.min(DEMO_PEAK_DOWNLINK_MBPS, rate))
+}
+
+// Walks the planning window once, filling at the generation rate and draining
+// during each pass, clamping at both 0 and the capacity. Returns the polyline
+// plus flags for the two interesting failure modes: the buffer ran full (data
+// would have been lost) or ran dry mid-pass (the link went unused).
+const buildDataLevelSeries = ({
+  startTimestamp,
+  endTimestamp,
+  startLevelGb,
+  capacityGb,
+  generationGbPerMs,
+  passes,
+}) => {
+  const points = []
+  let level = Math.max(0, Math.min(capacityGb, startLevelGb))
+  let cursor = startTimestamp
+  let overflowed = false
+  let starved = false
+
+  points.push({ timestamp: cursor, level })
+
+  const advanceTo = (targetTimestamp, ratePerMs) => {
+    if (targetTimestamp <= cursor) {
+      return
+    }
+
+    const projected = level + (ratePerMs * (targetTimestamp - cursor))
+
+    if (ratePerMs > 0 && projected > capacityGb) {
+      const crossTimestamp = cursor + ((capacityGb - level) / ratePerMs)
+      points.push({ timestamp: crossTimestamp, level: capacityGb })
+      points.push({ timestamp: targetTimestamp, level: capacityGb })
+      level = capacityGb
+      overflowed = true
+    } else if (ratePerMs < 0 && projected < 0) {
+      const crossTimestamp = cursor + ((0 - level) / ratePerMs)
+      points.push({ timestamp: crossTimestamp, level: 0 })
+      points.push({ timestamp: targetTimestamp, level: 0 })
+      level = 0
+      starved = true
+    } else {
+      level = projected
+      points.push({ timestamp: targetTimestamp, level })
+    }
+
+    cursor = targetTimestamp
+  }
+
+  const steps = []
+
+  passes.forEach((pass) => {
+    const passStart = Math.max(cursor, pass.startTimestamp)
+    const passEnd = Math.min(endTimestamp, pass.endTimestamp)
+
+    if (passEnd <= passStart) {
+      return
+    }
+
+    advanceTo(passStart, generationGbPerMs)
+    const levelBefore = level
+    advanceTo(passEnd, generationGbPerMs - pass.downlinkGbPerMs)
+
+    steps.push({
+      ...pass,
+      startTimestamp: passStart,
+      endTimestamp: passEnd,
+      levelBefore,
+      levelAfter: level,
+      // Generation keeps running during the pass, so the downlinked amount is
+      // not simply the drop in level.
+      transferredGb: Math.max(
+        0,
+        levelBefore + (generationGbPerMs * (passEnd - passStart)) - level,
+      ),
+    })
+  })
+
+  advanceTo(endTimestamp, generationGbPerMs)
+
+  return { points, steps, overflowed, starved }
 }
 
 class MapErrorBoundary extends Component {
@@ -98,6 +230,7 @@ const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
 export default function App() {
   const splitPanelsRef = useRef(null)
   const planningRowResizeDragCleanupRef = useRef(null)
+  const bottomRowResizeDragCleanupRef = useRef(null)
   const topPanelsResizeDragCleanupRef = useRef(null)
   const splitDragCleanupRef = useRef(null)
   const timelineScrollRef = useRef(null)
@@ -110,6 +243,11 @@ export default function App() {
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
   const tradeOffOptionListRef = useRef(null)
+  const dataVolumeScrollRef = useRef(null)
+  // Guards the two-way scroll mirror below from ping-ponging: whichever
+  // container the user actually scrolled writes to the other, and the write
+  // itself must not bounce back.
+  const scrollSyncLockRef = useRef(false)
   const timelineWheelHintRef = useRef(null)
   const timelineWheelHintTimeoutRef = useRef(null)
   const schedulerAbortControllerRef = useRef(null)
@@ -147,16 +285,19 @@ export default function App() {
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
   const [overviewPanelWidth, setOverviewPanelWidth] = useState(58)
-  // Which panel currently occupies which of the 4 layout slots. The top row
+  // Which panel currently occupies which of the 5 layout slots. The top row
   // (topLeft/topRight) sits side by side with a width-resizer between them;
-  // the bottom row (bottomTop/bottomBottom) is stacked with a height-resizer
-  // between them. Dragging a panel's handle onto another panel swaps their
+  // the bottom column (bottomTop/bottomMiddle/bottomBottom) is stacked with a
+  // height-resizer between each pair. bottomTop and bottomBottom get explicit
+  // pixel heights, bottomMiddle takes whatever is left -- the timeline lives
+  // there by default and grows with the number of expanded asset groups. Dragging a panel's handle onto another panel swaps their
   // slots, regardless of row — this does not persist across reloads.
   const [panelSlotAssignment, setPanelSlotAssignment] = useState({
     topLeft: 'overview',
     topRight: 'tradeOff',
     bottomTop: 'mapView',
-    bottomBottom: 'timeline',
+    bottomMiddle: 'timeline',
+    bottomBottom: 'dataVolume',
   })
   const [draggedPanelId, setDraggedPanelId] = useState(null)
   const [dragOverPanelId, setDragOverPanelId] = useState(null)
@@ -166,6 +307,11 @@ export default function App() {
   // taller again on top of the previous 360px default (itself 50% taller
   // than 240px, which was 50% taller than the original 160px default).
   const [bottomTopHeightPx, setBottomTopHeightPx] = useState(540)
+  const [bottomBottomHeightPx, setBottomBottomHeightPx] = useState(320)
+  // Demo assumptions behind the data-volume curves, editable in that panel.
+  const [dataStartFillGb, setDataStartFillGb] = useState(DEFAULT_DATA_START_FILL_GB)
+  const [dataGenerationMbps, setDataGenerationMbps] = useState(DEFAULT_DATA_GENERATION_MBPS)
+  const [dataCapacityGb, setDataCapacityGb] = useState(DEFAULT_DATA_CAPACITY_GB)
   // Shared height (px) of the top row (Overview/Trade-Off by default);
   // both panels stretch to this height and scroll their own content
   // internally. 346px is 60% of the panels' original fixed 36rem (576px)
@@ -216,6 +362,7 @@ export default function App() {
     overview: true,
     tradeOff: true,
     timeline: true,
+    dataVolume: true,
   })
 
   useEffect(() => {
@@ -346,6 +493,9 @@ export default function App() {
     }
     if (planningRowResizeDragCleanupRef.current) {
       planningRowResizeDragCleanupRef.current()
+    }
+    if (bottomRowResizeDragCleanupRef.current) {
+      bottomRowResizeDragCleanupRef.current()
     }
     if (topPanelsResizeDragCleanupRef.current) {
       topPanelsResizeDragCleanupRef.current()
@@ -1377,7 +1527,11 @@ export default function App() {
       overview: true,
       tradeOff: true,
       timeline: true,
+      dataVolume: true,
     })
+    setDataStartFillGb(DEFAULT_DATA_START_FILL_GB)
+    setDataGenerationMbps(DEFAULT_DATA_GENERATION_MBPS)
+    setDataCapacityGb(DEFAULT_DATA_CAPACITY_GB)
     setConfirmingSchedule(false)
     setConfirmationProgress(0)
     setConfirmationStep('')
@@ -2041,6 +2195,140 @@ export default function App() {
 
     return `${Math.max(2.8, (laneCount ?? 1) * 2.68 + 0.44)}rem`
   }
+
+  // --- Data Volume -----------------------------------------------------
+  // The curve answers "how does the chosen schedule drain this satellite's
+  // buffer", so it is built from the SELECTED links (finalScheduleRows), not
+  // from every extracted window, and it shares the timeline's exact time span
+  // so a step always sits under its link.
+  const getSatelliteAltitudeMeters = (satelliteName) => {
+    const altitude = computeMeanTrackAltitudeMeters(satelliteTracks[satelliteName])
+    return Number.isFinite(altitude) && altitude > 0 ? altitude : DEMO_REFERENCE_ALTITUDE_M
+  }
+
+  const buildSatellitePasses = (rows, satelliteName) => rows
+    .filter((row) => row.satId === satelliteName && !row.scheduleBlocked)
+    .map((row) => {
+      const startTimestamp = toTimestamp(row.startTime)
+      const endTimestamp = toTimestamp(row.endTime)
+
+      if (
+        startTimestamp === null
+        || endTimestamp === null
+        || endTimestamp <= startTimestamp
+      ) {
+        return null
+      }
+
+      const downlinkMbps = getDemoDownlinkMbps(
+        row.maxElevationDeg,
+        getSatelliteAltitudeMeters(satelliteName),
+      )
+
+      return {
+        id: row.overpassId,
+        label: row.overpassId,
+        gsId: row.gsId,
+        maxElevation: row.maxElevation,
+        tradeOffId: row.tradeOffId && row.tradeOffId !== '—' ? row.tradeOffId : null,
+        startTimestamp,
+        endTimestamp,
+        downlinkMbps,
+        downlinkGbPerMs: downlinkMbps * MBPS_TO_GB_PER_MS,
+      }
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.startTimestamp - right.startTimestamp)
+
+  // The red comparison curve: the option currently marked in the Trade-Off
+  // panel, swapped in for the one that actually drives the schedule. Only one
+  // at a time, and only when it genuinely differs from the current selection.
+  const markedTradeOffCard = markedTradeOffOptionId
+    ? tradeOffCards.find(
+      (card) => card.options.some((option) => option.optionId === markedTradeOffOptionId),
+    ) ?? null
+    : null
+  const markedTradeOffOption = markedTradeOffCard?.options
+    .find((option) => option.optionId === markedTradeOffOptionId) ?? null
+  const effectiveOptionOfMarkedCard = markedTradeOffCard
+    ? getSelectedTradeOffForGroup(markedTradeOffCard)
+    : null
+  const hasDistinctAlternative = Boolean(
+    markedTradeOffOption
+    && effectiveOptionOfMarkedCard
+    && markedTradeOffOption.optionId !== effectiveOptionOfMarkedCard.optionId,
+  )
+  const alternativeScheduleRows = hasDistinctAlternative
+    ? [
+      ...finalScheduleRows.filter(
+        (row) => row.overpassId !== effectiveOptionOfMarkedCard.overpassId,
+      ),
+      ...overviewRows.filter((row) => row.overpassId === markedTradeOffOption.overpassId),
+    ]
+    : []
+
+  const dataVolumeCapacityGb = Math.max(1, Number(dataCapacityGb) || 0)
+  const dataVolumeStartLevelGb = Math.max(
+    0,
+    Math.min(dataVolumeCapacityGb, Number(dataStartFillGb) || 0),
+  )
+  const dataVolumeGenerationGbPerMs = Math.max(0, Number(dataGenerationMbps) || 0)
+    * MBPS_TO_GB_PER_MS
+
+  const dataVolumeModel = (() => {
+    if (!timelineModel) {
+      return null
+    }
+
+    const startTimestamp = timelineModel.baseDate.getTime()
+    const endTimestamp = timelineModel.endDate.getTime()
+
+    // Q4/Q9: only satellites whose timeline group is expanded, ground station
+    // groups do not count. The auto-expand on trade-off cards therefore pulls
+    // exactly the relevant satellite into this view.
+    const satelliteGroups = (
+      timelineModel.sections.find((section) => section.id === 'satellites')?.groups ?? []
+    ).filter((group) => expandedTimelineGroups[group.id])
+
+    const series = satelliteGroups.map((group) => {
+      const baseSeries = buildDataLevelSeries({
+        startTimestamp,
+        endTimestamp,
+        startLevelGb: dataVolumeStartLevelGb,
+        capacityGb: dataVolumeCapacityGb,
+        generationGbPerMs: dataVolumeGenerationGbPerMs,
+        passes: buildSatellitePasses(finalScheduleRows, group.name),
+      })
+
+      const alternative = (hasDistinctAlternative && markedTradeOffOption.satId === group.name)
+        ? buildDataLevelSeries({
+          startTimestamp,
+          endTimestamp,
+          startLevelGb: dataVolumeStartLevelGb,
+          capacityGb: dataVolumeCapacityGb,
+          generationGbPerMs: dataVolumeGenerationGbPerMs,
+          passes: buildSatellitePasses(alternativeScheduleRows, group.name),
+        })
+        : null
+
+      return {
+        id: group.id,
+        name: group.name,
+        ...baseSeries,
+        alternative,
+        alternativeLabel: alternative ? markedTradeOffOption.overpassId : null,
+      }
+    })
+
+    return {
+      startTimestamp,
+      endTimestamp,
+      durationMs: Math.max(1, endTimestamp - startTimestamp),
+      capacityGb: dataVolumeCapacityGb,
+      series,
+      expandedSatelliteCount: satelliteGroups.length,
+    }
+  })()
   const timelineBaseTimestamp = timelineModel?.baseDate.getTime() ?? null
   const timelineDurationMs = timelineModel ? timelineModel.totalMinutes * 60000 : 0
   const timelinePlayheadOffsetMinutes = timelineBaseTimestamp !== null
@@ -2448,6 +2736,47 @@ export default function App() {
     return () => scrollContainer.removeEventListener('wheel', handleTimelineWheel)
   })
 
+  // The Data Volume canvas is the same width, the same 50% inline padding and
+  // the same time span as the timeline canvas, so a mirrored scrollLeft puts
+  // both at the same instant. Zoom needs no mirroring at all -- both read
+  // timelineWidthPx, so zooming either one moves both.
+  useEffect(() => {
+    const timelineContainer = timelineScrollRef.current
+    const dataContainer = dataVolumeScrollRef.current
+
+    if (!timelineContainer || !dataContainer) {
+      return undefined
+    }
+
+    const mirror = (source, target) => () => {
+      if (scrollSyncLockRef.current) {
+        return
+      }
+
+      scrollSyncLockRef.current = true
+      target.scrollLeft = source.scrollLeft
+      window.requestAnimationFrame(() => {
+        scrollSyncLockRef.current = false
+      })
+    }
+
+    const onTimelineScroll = mirror(timelineContainer, dataContainer)
+    const onDataScroll = mirror(dataContainer, timelineContainer)
+
+    timelineContainer.addEventListener('scroll', onTimelineScroll, { passive: true })
+    dataContainer.addEventListener('scroll', onDataScroll, { passive: true })
+    dataContainer.addEventListener('wheel', handleTimelineWheel, { passive: false })
+
+    // Align once on mount/relayout so the two do not start out offset.
+    dataContainer.scrollLeft = timelineContainer.scrollLeft
+
+    return () => {
+      timelineContainer.removeEventListener('scroll', onTimelineScroll)
+      dataContainer.removeEventListener('scroll', onDataScroll)
+      dataContainer.removeEventListener('wheel', handleTimelineWheel)
+    }
+  })
+
   const handleTimelinePlayheadKeyDown = (event) => {
     if (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null) {
       return
@@ -2790,6 +3119,51 @@ export default function App() {
   // exactly from asset count, since the panel is a manual, user-driven
   // resize -- the drag simply has more room to go as far as they need.
   const clampBottomTopHeightPx = (value) => Math.min(2400, Math.max(140, value))
+  const clampBottomBottomHeightPx = (value) => Math.min(1600, Math.max(120, value))
+
+  // Drag direction is inverted here: this resizer sits ABOVE the slot it
+  // sizes, so pulling it up has to make that slot taller.
+  const handleBottomRowResizeStart = (event) => {
+    event.preventDefault()
+
+    const startClientY = event.clientY
+    const startHeight = bottomBottomHeightPx
+
+    const handlePointerMove = (moveEvent) => {
+      setBottomBottomHeightPx(
+        clampBottomBottomHeightPx(startHeight - (moveEvent.clientY - startClientY)),
+      )
+    }
+
+    const stopResize = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopResize)
+      window.removeEventListener('pointercancel', stopResize)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      bottomRowResizeDragCleanupRef.current = null
+    }
+
+    bottomRowResizeDragCleanupRef.current = stopResize
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopResize)
+    window.addEventListener('pointercancel', stopResize)
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  const handleBottomRowResizeKeyDown = (event) => {
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setBottomBottomHeightPx((current) => clampBottomBottomHeightPx(current + 16))
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setBottomBottomHeightPx((current) => clampBottomBottomHeightPx(current - 16))
+    }
+  }
 
   const handlePlanningRowResizeStart = (event) => {
     event.preventDefault()
@@ -4368,11 +4742,263 @@ export default function App() {
           </section>
   )
 
+  // Same time span, same canvas width, same 50% inline padding as the timeline
+  // canvas -- that is what lets a single scrollLeft value be mirrored between
+  // the two panels and keeps every step directly under its link.
+  const dataVolumeYMaxGb = dataVolumeCapacityGb * 1.06
+
+  const buildDataVolumePolyline = (points) => {
+    if (!dataVolumeModel || points.length === 0) {
+      return ''
+    }
+
+    return points
+      .map((point) => {
+        const x = ((point.timestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 1000
+        const y = 100 - ((point.level / dataVolumeYMaxGb) * 100)
+        return `${x.toFixed(2)},${y.toFixed(2)}`
+      })
+      .join(' ')
+  }
+
+  const formatGb = (value) => `${value >= 100 ? Math.round(value) : value.toFixed(1)} GB`
+
+  const dataVolumePanelNode = (
+          <section
+            className={`panel data-volume-panel ${expandedSections.dataVolume ? '' : 'panel--collapsed'}${getPanelDragClassName('dataVolume')}`}
+            {...getPanelDropZoneProps('dataVolume')}
+          >
+            <div
+              className={`panel-heading panel-heading--data-volume ${expandedSections.dataVolume ? '' : 'panel-heading--collapsed'}`}
+              {...getPanelHeadingDragProps('dataVolume')}
+            >
+              <div className="panel-heading-lead">
+                {renderPanelDragHandle('dataVolume')}
+                <div className="panel-heading-title">
+                  <h2>Data Volume</h2>
+                </div>
+              </div>
+              <div className="panel-heading-actions">
+                <button
+                  type="button"
+                  className="panel-collapse-toggle"
+                  onClick={() => toggleSection('dataVolume')}
+                  aria-expanded={expandedSections.dataVolume}
+                  aria-controls="data-volume-panel-content"
+                  aria-label={expandedSections.dataVolume ? 'Collapse data volume view' : 'Expand data volume view'}
+                >
+                  <span className="section-toggle-icon" aria-hidden="true">
+                    {renderSectionChevron(expandedSections.dataVolume)}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {expandedSections.dataVolume && (
+              <div id="data-volume-panel-content" className="panel-collapsible-content">
+                <div className="data-volume-toolbar">
+                  <label className="data-volume-field">
+                    <span>Initial fill</span>
+                    <span className="data-volume-input-wrap">
+                      <input
+                        type="number"
+                        min="0"
+                        step="10"
+                        value={dataStartFillGb}
+                        onChange={(event) => setDataStartFillGb(event.target.value)}
+                      />
+                      <span className="data-volume-unit">GB</span>
+                    </span>
+                  </label>
+                  <label className="data-volume-field">
+                    <span>Generation</span>
+                    <span className="data-volume-input-wrap">
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={dataGenerationMbps}
+                        onChange={(event) => setDataGenerationMbps(event.target.value)}
+                      />
+                      <span className="data-volume-unit">Mbit/s</span>
+                    </span>
+                  </label>
+                  <label className="data-volume-field">
+                    <span>Capacity</span>
+                    <span className="data-volume-input-wrap">
+                      <input
+                        type="number"
+                        min="1"
+                        step="10"
+                        value={dataCapacityGb}
+                        onChange={(event) => setDataCapacityGb(event.target.value)}
+                      />
+                      <span className="data-volume-unit">GB</span>
+                    </span>
+                  </label>
+                  <span className="data-volume-toolbar-copy">
+                    Demo model: downlink rate scales with 1/range² from each pass's maximum elevation and the satellite's mean orbit altitude.
+                  </span>
+                </div>
+
+                {!schedulerLaunched && (
+                  <p className="timeline-empty-copy">
+                    Launch Communication Scheduler to initialize the data budget view.
+                  </p>
+                )}
+
+                {schedulerLaunched && !dataVolumeModel && (
+                  <p className="timeline-empty-copy">No planning window is active yet.</p>
+                )}
+
+                {schedulerLaunched && dataVolumeModel && dataVolumeModel.series.length === 0 && (
+                  <p className="timeline-empty-copy">
+                    Expand a satellite group in the timeline to show its on-board data budget here.
+                  </p>
+                )}
+
+                {schedulerLaunched && dataVolumeModel && dataVolumeModel.series.length > 0 && (
+                  <div className="timeline-layout">
+                    <div className="timeline-label-column">
+                      <div className="timeline-label-cell timeline-label-cell--axis"></div>
+                      {dataVolumeModel.series.map((series) => (
+                        <div
+                          key={`${series.id}-label`}
+                          className="timeline-label-cell data-volume-label-cell"
+                        >
+                          <span className="timeline-link-name">{series.name}</span>
+                          <span className="data-volume-axis-label">
+                            {formatGb(dataVolumeModel.capacityGb)} capacity
+                          </span>
+                          <span className="data-volume-flags">
+                            {series.overflowed && (
+                              <span className="data-volume-flag data-volume-flag--overflow">Buffer full</span>
+                            )}
+                            {series.starved && (
+                              <span className="data-volume-flag data-volume-flag--starved">Link idle</span>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="timeline-scroll-frame data-volume-scroll-frame">
+                      <div
+                        ref={dataVolumeScrollRef}
+                        className="timeline-scroll"
+                        tabIndex="0"
+                        role="region"
+                        aria-label="On-board data volume over the planning window"
+                      >
+                        <div
+                          className="timeline-time-canvas"
+                          style={{ width: `${timelineWidthPx}px` }}
+                        >
+                          <div className="timeline-axis-row">
+                            {timelineModel.ticks.map((tick) => (
+                              <div
+                                key={`data-tick-${tick.offsetMinutes}`}
+                                className={`timeline-axis-marker ${tick.offsetMinutes % 120 === 0 ? 'timeline-axis-marker--major' : ''}`}
+                                style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                              >
+                                <span>{tick.label}</span>
+                              </div>
+                            ))}
+                          </div>
+
+                          {dataVolumeModel.series.map((series) => (
+                            <div key={`${series.id}-row`} className="data-volume-row">
+                              {timelineModel.ticks.map((tick) => (
+                                <div
+                                  key={`${series.id}-grid-${tick.offsetMinutes}`}
+                                  className={`timeline-grid-line ${tick.offsetMinutes % 120 === 0 ? 'timeline-grid-line--major' : ''}`}
+                                  style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                                ></div>
+                              ))}
+
+                              <svg
+                                className="data-volume-chart"
+                                viewBox="0 0 1000 100"
+                                preserveAspectRatio="none"
+                                aria-hidden="true"
+                              >
+                                <line
+                                  className="data-volume-capacity-line"
+                                  x1="0"
+                                  x2="1000"
+                                  y1={100 - ((dataVolumeModel.capacityGb / dataVolumeYMaxGb) * 100)}
+                                  y2={100 - ((dataVolumeModel.capacityGb / dataVolumeYMaxGb) * 100)}
+                                />
+                                {series.alternative && (
+                                  <polyline
+                                    className="data-volume-curve data-volume-curve--alternative"
+                                    points={buildDataVolumePolyline(series.alternative.points)}
+                                  />
+                                )}
+                                <polyline
+                                  className="data-volume-curve"
+                                  points={buildDataVolumePolyline(series.points)}
+                                />
+                              </svg>
+
+                              {series.steps.map((step) => (
+                                <button
+                                  key={`${series.id}-${step.id}`}
+                                  type="button"
+                                  className="data-volume-step"
+                                  style={{
+                                    left: `${((step.startTimestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
+                                    width: `${((step.endTimestamp - step.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
+                                  }}
+                                  aria-label={`${step.label}: ${Math.round(step.downlinkMbps)} megabit per second, ${formatGb(step.transferredGb)} downlinked.`}
+                                >
+                                  <span className="timeline-bar-tooltip" role="tooltip">
+                                    <span className="timeline-bar-tooltip-inner">
+                                      <strong>{step.label}</strong>
+                                      <span>{series.name} → {step.gsId}</span>
+                                      <span>Rate: {Math.round(step.downlinkMbps)} Mbit/s</span>
+                                      <span>Downlinked: {formatGb(step.transferredGb)}</span>
+                                      <span>Buffer: {formatGb(step.levelBefore)} → {formatGb(step.levelAfter)}</span>
+                                      {step.maxElevation && <span>Max elevation: {step.maxElevation}</span>}
+                                    </span>
+                                  </span>
+                                </button>
+                              ))}
+
+                              {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
+                                <div
+                                  className="timeline-now-line"
+                                  style={{ left: `${(timelineModel.nowOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                                ></div>
+                              )}
+
+                              {timelinePlayheadOffsetMinutes !== null
+                                && timelinePlayheadOffsetMinutes >= 0
+                                && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
+                                <div
+                                  className="timeline-playhead-marker-line"
+                                  aria-hidden="true"
+                                  style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                                ></div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+  )
+
   const panelNodesById = {
     overview: overviewPanelNode,
     tradeOff: tradeOffPanelNode,
     mapView: mapViewPanelNode,
     timeline: timelinePanelNode,
+    dataVolume: dataVolumePanelNode,
   }
 
   const pageContent = (
@@ -4678,19 +5304,34 @@ export default function App() {
           <div
             className="planning-views-row"
             style={{
-              gridTemplateRows: `${bottomTopHeightPx}px 0.9rem auto`,
+              gridTemplateRows: `${bottomTopHeightPx}px 0.9rem auto 0.9rem ${bottomBottomHeightPx}px`,
             }}
           >
           {panelNodesById[panelSlotAssignment.bottomTop]}
 
           <div
-            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.bottomTop] && !expandedSections[panelSlotAssignment.bottomBottom] ? 'panel-resizer--collapsed' : ''}`}
+            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.bottomTop] && !expandedSections[panelSlotAssignment.bottomMiddle] ? 'panel-resizer--collapsed' : ''}`}
             role="separator"
             aria-orientation="horizontal"
-            aria-label="Resize the map view and timeline panels"
+            aria-label={`Resize the ${PANEL_LABELS[panelSlotAssignment.bottomTop]} panel`}
             tabIndex={0}
             onPointerDown={handlePlanningRowResizeStart}
             onKeyDown={handlePlanningRowResizeKeyDown}
+          >
+            <span className="panel-resizer-line panel-resizer-line--horizontal" aria-hidden="true"></span>
+            <span className="panel-resizer-grip panel-resizer-grip--horizontal" aria-hidden="true"></span>
+          </div>
+
+          {panelNodesById[panelSlotAssignment.bottomMiddle]}
+
+          <div
+            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.bottomMiddle] && !expandedSections[panelSlotAssignment.bottomBottom] ? 'panel-resizer--collapsed' : ''}`}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label={`Resize the ${PANEL_LABELS[panelSlotAssignment.bottomBottom]} panel`}
+            tabIndex={0}
+            onPointerDown={handleBottomRowResizeStart}
+            onKeyDown={handleBottomRowResizeKeyDown}
           >
             <span className="panel-resizer-line panel-resizer-line--horizontal" aria-hidden="true"></span>
             <span className="panel-resizer-grip panel-resizer-grip--horizontal" aria-hidden="true"></span>
