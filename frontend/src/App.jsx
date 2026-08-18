@@ -242,7 +242,8 @@ export default function App() {
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
-  const tradeOffOptionListRef = useRef(null)
+  const tradeOffCardListRef = useRef(null)
+  const timelinePanelRef = useRef(null)
   const dataVolumeScrollRef = useRef(null)
   // Guards the two-way scroll mirror below from ping-ponging: whichever
   // container the user actually scrolled writes to the other, and the write
@@ -629,6 +630,8 @@ export default function App() {
               satId: row.satId,
               gsId: row.gsId,
               duration: row.duration,
+              durationSeconds: row.durationSeconds,
+              maxElevationDeg: row.maxElevationDeg,
               startTime: row.startTime,
               endTime: row.endTime,
               maxElevation: row.maxElevation,
@@ -2453,17 +2456,23 @@ export default function App() {
     focusTimelineOnTradeOffCard(tradeOffCards[index])
   }
 
-  // Bring the option marked from the timeline into view inside the Trade-Off
-  // panel. Marking is not selection, so this only scrolls and highlights.
+  // All cards now sit side by side in a horizontal band, so activating one
+  // from outside (Overview pill, timeline click) has to bring it into view --
+  // the card is the scroll target, the marked option inside it the fallback.
   useEffect(() => {
-    if (!markedTradeOffOptionId) {
+    const cardList = tradeOffCardListRef.current
+
+    if (!cardList) {
       return
     }
 
-    const optionNode = tradeOffOptionListRef.current
-      ?.querySelector(`[data-option-id="${markedTradeOffOptionId}"]`)
+    const optionNode = markedTradeOffOptionId
+      ? cardList.querySelector(`[data-option-id="${markedTradeOffOptionId}"]`)
+      : null
+    const cardNode = cardList.querySelector(`[data-card-index="${activeTradeOffCardIndex}"]`)
+    const target = optionNode ?? cardNode
 
-    optionNode?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
   }, [markedTradeOffOptionId, activeTradeOffCardIndex])
 
   // The datetime thumb above used to be positioned as a fraction of the
@@ -3025,7 +3034,7 @@ export default function App() {
     planningWindowEndTimestamp,
   ])
 
-  const activeTradeOffCard = tradeOffCards[activeTradeOffCardIndex] ?? null
+  const formatGb = (value) => `${value >= 100 ? Math.round(value) : value.toFixed(1)} GB`
   const renderAssetWarning = (message) => (
     <span className="asset-warning" aria-label={message}>
       <svg
@@ -3362,10 +3371,80 @@ export default function App() {
     </span>
   )
 
-  const handleSelectTradeOffOption = (optionId) => {
-    setSelectedTradeOffOption(optionId)
+  // Selecting is the one action here that actually commits, so it takes you to
+  // where the consequence shows: timeline panel open, the involved asset groups
+  // expanded, scrolled to the link. The navigational marking is cleared -- its
+  // red comparison curve showed an alternative you have just decided about.
+  const handleSelectTradeOffOption = (option) => {
+    setSelectedTradeOffOption(option.optionId)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
+    setMarkedTimelineLinkId(null)
+    setMarkedTradeOffOptionId(null)
+
+    setExpandedSections((current) => (
+      current.timeline ? current : { ...current, timeline: true }
+    ))
+
+    setExpandedTimelineGroups((current) => {
+      const next = { ...current }
+
+      if (option.satId) {
+        next[`satellite:${option.satId}`] = true
+      }
+
+      if (option.gsId) {
+        next[`ground_station:${option.gsId}`] = true
+      }
+
+      return next
+    })
+
+    const startTimestamp = toTimestamp(option.startTime)
+
+    // One frame later: the panel and the asset groups have to be expanded
+    // before there is anything to scroll to.
+    window.requestAnimationFrame(() => {
+      timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+      if (startTimestamp !== null) {
+        scrollTimelineToTimestamp(startTimestamp, 'smooth')
+      }
+    })
+  }
+
+  // Q1(a): the link's capacity -- what this pass could downlink at its demo
+  // rate for its whole duration, independent of how full the buffer happens to
+  // be at that moment.
+  const getOptionLinkBudget = (option) => {
+    const row = overviewRows.find((entry) => entry.overpassId === option.overpassId) ?? null
+    const startTimestamp = toTimestamp(option.startTime)
+    const endTimestamp = toTimestamp(option.endTime)
+    const durationSeconds = Number.isFinite(option.durationSeconds)
+      ? option.durationSeconds
+      : (Number.isFinite(row?.durationSeconds)
+        ? row.durationSeconds
+        : ((startTimestamp !== null && endTimestamp !== null)
+          ? (endTimestamp - startTimestamp) / 1000
+          : null))
+
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      return null
+    }
+
+    const maxElevationDeg = Number.isFinite(option.maxElevationDeg)
+      ? option.maxElevationDeg
+      : row?.maxElevationDeg
+    const rateMbps = getDemoDownlinkMbps(
+      maxElevationDeg,
+      getSatelliteAltitudeMeters(option.satId),
+    )
+
+    return {
+      rateMbps,
+      volumeGb: (rateMbps * durationSeconds) / 8000,
+      maxElevation: option.maxElevation ?? row?.maxElevation ?? null,
+    }
   }
 
   const toggleTimelineGroup = (groupId) => {
@@ -3375,38 +3454,54 @@ export default function App() {
     }))
   }
 
-  // Navigation only. A click marks the link (and its twin in the other asset
-  // section), jumps the Trade-Off panel to the card holding this option and
-  // marks the option there -- selectedTradeOffOption is deliberately NOT
-  // touched, so nothing is decided or un-confirmed by navigating. Clicking the
-  // same bar again is the way back.
-  const handleTimelineItemClick = (item) => {
-    if (item.kind !== 'link') {
+  // Navigation only, shared by the timeline bars and the Overview trade-off
+  // pill: marking a link marks both of its timeline instances, activates the
+  // card holding its option and marks the option there.
+  // selectedTradeOffOption is deliberately NOT touched, so nothing is decided
+  // or un-confirmed by navigating. Marking the same link again is the way back.
+  const markLinkForNavigation = (linkId, optionId) => {
+    if (!linkId) {
       return
     }
 
-    if (markedTimelineLinkId === item.linkId) {
+    if (markedTimelineLinkId === linkId) {
       setMarkedTimelineLinkId(null)
       setMarkedTradeOffOptionId(null)
       return
     }
 
-    setMarkedTimelineLinkId(item.linkId)
+    setMarkedTimelineLinkId(linkId)
 
-    if (!item.optionId) {
+    if (!optionId) {
       setMarkedTradeOffOptionId(null)
       return
     }
 
     const cardIndex = tradeOffCards.findIndex(
-      (card) => card.options.some((option) => option.optionId === item.optionId),
+      (card) => card.options.some((option) => option.optionId === optionId),
     )
 
     if (cardIndex !== -1) {
       showTradeOffCard(cardIndex)
     }
 
-    setMarkedTradeOffOptionId(item.optionId)
+    setMarkedTradeOffOptionId(optionId)
+  }
+
+  const handleTimelineItemClick = (item) => {
+    if (item.kind !== 'link') {
+      return
+    }
+
+    markLinkForNavigation(item.linkId, item.optionId)
+  }
+
+  const getOptionForOverpassId = (overpassId) => tradeOffCards
+    .flatMap((card) => card.options)
+    .find((option) => option.overpassId === overpassId) ?? null
+
+  const handleOverviewTradeOffClick = (row) => {
+    markLinkForNavigation(row.overpassId, getOptionForOverpassId(row.overpassId)?.optionId ?? null)
   }
 
   const renderTimelineBar = (item) => {
@@ -3884,7 +3979,19 @@ export default function App() {
                             <span>{row.duration}</span>
                             {tradeOffsCalculated && (
                               row.tradeOffId !== '—'
-                                ? <span className="overview-tradeoff-cell">{renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)}</span>
+                                ? (
+                                  <span className="overview-tradeoff-cell">
+                                    <button
+                                      type="button"
+                                      className={`overview-tradeoff-button ${markedTimelineLinkId === row.overpassId ? 'overview-tradeoff-button--marked' : ''}`}
+                                      onClick={() => handleOverviewTradeOffClick(row)}
+                                      aria-pressed={markedTimelineLinkId === row.overpassId}
+                                      title={`Show ${row.tradeOffId} and mark ${row.overpassId}`}
+                                    >
+                                      {renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)}
+                                    </button>
+                                  </span>
+                                )
                                 : <span className="overview-tradeoff-cell">—</span>
                             )}
                             {tradeOffsCalculated && <span className="overview-score-cell">{row.tradeOffScore}</span>}
@@ -3962,100 +4069,87 @@ export default function App() {
                   <p>No trade-off groups were identified for the current selection.</p>
                 )}
                 {tradeOffsCalculated && tradeOffCards.length > 0 && (
-                  <div className="tradeoff-card-list">
-                {tradeOffCards.length > 1 && (
-                  <div className="tradeoff-browser">
-                    <div className="tradeoff-browser-tabs">
-                      {tradeOffCards.map((card, index) => (
-                        <button
-                          key={`${card.id}-tab`}
-                          type="button"
-                          className={`tradeoff-browser-tab ${index === activeTradeOffCardIndex ? 'tradeoff-browser-tab--active' : ''}`}
-                          style={{ '--tradeoff-accent': getTradeOffAccentColor(card.colorIndex) }}
-                          onClick={() => showTradeOffCard(index)}
-                        >
-                          {card.title}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {activeTradeOffCard && (
+                  <div className="tradeoff-card-list" ref={tradeOffCardListRef}>
+                {tradeOffCards.map((card, index) => (
                   <article
-                    key={activeTradeOffCard.id}
-                    className="tradeoff-card"
-                    style={{ '--tradeoff-accent': getTradeOffAccentColor(activeTradeOffCard.colorIndex) }}
+                    key={card.id}
+                    data-card-index={index}
+                    className={`tradeoff-card ${index === activeTradeOffCardIndex ? 'tradeoff-card--active' : ''}`}
+                    style={{ '--tradeoff-accent': getTradeOffAccentColor(card.colorIndex) }}
+                    onClick={() => {
+                      if (index !== activeTradeOffCardIndex) {
+                        showTradeOffCard(index)
+                      }
+                    }}
                   >
                     <div className="tradeoff-card-header">
                       <div className="tradeoff-card-titleblock">
-                        <h3>{renderTradeOffPill(activeTradeOffCard.title, activeTradeOffCard.colorIndex)}</h3>
-                        <p className="tradeoff-card-resource">{activeTradeOffCard.resourceLabel}</p>
+                        <h3>{renderTradeOffPill(card.title, card.colorIndex)}</h3>
+                        <p className="tradeoff-card-resource">{card.resourceLabel}</p>
                       </div>
                     </div>
                     <p className="tradeoff-reason">
-                      <span className="tradeoff-reason-label">Reason:</span> {activeTradeOffCard.reason}
+                      <span className="tradeoff-reason-label">Reason:</span> {card.reason}
                     </p>
 
-                    <div className="tradeoff-option-list" ref={tradeOffOptionListRef}>
-                      {activeTradeOffCard.options.map((option) => (
-                        <div
-                          key={option.optionId}
-                          data-option-id={option.optionId}
-                          className={[
-                            'tradeoff-option',
-                            selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : '',
-                            markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
-                          ].filter(Boolean).join(' ')}
-                          style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
-                        >
-                          <div className="tradeoff-option-header">
-                            <span className="tradeoff-option-id">{option.overpassId}</span>
-                            <div className="tradeoff-meta tradeoff-meta--option">
-                              {markedTradeOffOptionId === option.optionId && (
-                                <span className="tradeoff-marked-flag">From timeline</span>
-                              )}
-                              {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
-                              <span className="tradeoff-score">{option.score}</span>
-                            </div>
-                          </div>
+                    <div className="tradeoff-option-list">
+                      {card.options.map((option) => {
+                        const budget = getOptionLinkBudget(option)
 
-                          <button
-                            type="button"
-                            className="tradeoff-select-button"
-                            onClick={() => handleSelectTradeOffOption(option.optionId)}
+                        return (
+                          <div
+                            key={option.optionId}
+                            data-option-id={option.optionId}
+                            className={[
+                              'tradeoff-option',
+                              selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : '',
+                              markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
+                            ].filter(Boolean).join(' ')}
+                            style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
                           >
-                            {selectedTradeOffOption === option.optionId ? 'Selected' : 'Select'}
-                          </button>
-                        </div>
-                      ))}
+                            <div className="tradeoff-option-header">
+                              <span className="tradeoff-option-id">{option.overpassId}</span>
+                              <div className="tradeoff-meta tradeoff-meta--option">
+                                {markedTradeOffOptionId === option.optionId && (
+                                  <span className="tradeoff-marked-flag">Marked</span>
+                                )}
+                                {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
+                                <span className="tradeoff-score">{option.score}</span>
+                              </div>
+                            </div>
+
+                            <dl className="tradeoff-option-facts">
+                              <div className="tradeoff-option-fact">
+                                <dt>Ground Station</dt>
+                                <dd>{option.gsId ?? '—'}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>Duration</dt>
+                                <dd>{option.duration ?? '—'}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>Data</dt>
+                                <dd>{budget ? formatGb(budget.volumeGb) : '—'}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>Max Elev.</dt>
+                                <dd>{option.maxElevation ?? budget?.maxElevation ?? '—'}</dd>
+                              </div>
+                            </dl>
+
+                            <button
+                              type="button"
+                              className="tradeoff-select-button"
+                              onClick={() => handleSelectTradeOffOption(option)}
+                            >
+                              {selectedTradeOffOption === option.optionId ? 'Selected' : 'Select'}
+                            </button>
+                          </div>
+                        )
+                      })}
                     </div>
                   </article>
-                )}
-                {tradeOffCards.length > 1 && (
-                  <div className="tradeoff-browser-nav tradeoff-browser-nav--bottom">
-                    <button
-                      type="button"
-                      className="tradeoff-browser-button"
-                      disabled={activeTradeOffCardIndex === 0}
-                      onClick={() => showTradeOffCard(Math.max(0, activeTradeOffCardIndex - 1))}
-                      aria-label="Previous trade-off card"
-                    >
-                      ‹
-                    </button>
-                    <span className="tradeoff-browser-status">
-                      {activeTradeOffCardIndex + 1} / {tradeOffCards.length}
-                    </span>
-                    <button
-                      type="button"
-                      className="tradeoff-browser-button"
-                      disabled={activeTradeOffCardIndex >= tradeOffCards.length - 1}
-                      onClick={() => showTradeOffCard(Math.min(tradeOffCards.length - 1, activeTradeOffCardIndex + 1))}
-                      aria-label="Next trade-off card"
-                    >
-                      ›
-                    </button>
-                  </div>
-                )}
+                ))}
                   </div>
                 )}
               </div>
@@ -4293,6 +4387,7 @@ export default function App() {
 
   const timelinePanelNode = (
           <section
+            ref={timelinePanelRef}
             className={`panel timeline-panel ${expandedSections.timeline ? '' : 'panel--collapsed'}${getPanelDragClassName('timeline')}`}
             {...getPanelDropZoneProps('timeline')}
           >
@@ -4760,8 +4855,6 @@ export default function App() {
       })
       .join(' ')
   }
-
-  const formatGb = (value) => `${value >= 100 ? Math.round(value) : value.toFixed(1)} GB`
 
   const dataVolumePanelNode = (
           <section
