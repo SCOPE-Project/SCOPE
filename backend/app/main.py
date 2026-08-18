@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from app.routers import satos, tasks, utilities
+from app.routers import satos, tasks, utilities, schedule
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 credentials_path = Path("SatOS_credentials/credentials.env")
+if not credentials_path.exists():
+    credentials_path = Path(__file__).resolve().parent.parent / "SatOS_credentials" / "credentials.env"
 
 # Make sure the .env file exists and is filled correctly
 if not load_dotenv(credentials_path):
@@ -56,6 +58,7 @@ app.add_middleware(
 
 app.include_router(satos.router)
 app.include_router(tasks.router)
+app.include_router(schedule.router)
 app.include_router(utilities.router)
 
 

@@ -31,12 +31,12 @@ credentials_path = backend_dir / "SatOS_credentials" / "credentials.env"
 if credentials_path.exists():
     load_dotenv(credentials_path)
 
-from core.models.domain import ScheduledLink, OverpassProfilePoint
+from core.models.domain import LinkBlock, OverpassProfilePoint
 from app.services.asset_repository import AssetRepository
 
 
-def load_links_from_json(json_path: Path) -> list[ScheduledLink]:
-    """Load ScheduledLink objects from a JSON file."""
+def load_links_from_json(json_path: Path) -> list[LinkBlock]:
+    """Load LinkBlock objects from a JSON file."""
     if not json_path.exists():
         print(f"HARD FAIL: Input file '{json_path}' does not exist.", file=sys.stderr)
         sys.exit(1)
@@ -52,7 +52,7 @@ def load_links_from_json(json_path: Path) -> list[ScheduledLink]:
         print(f"HARD FAIL: No scheduled links found in JSON file '{json_path}'.", file=sys.stderr)
         sys.exit(1)
 
-    links: list[ScheduledLink] = []
+    links: list[LinkBlock] = []
     for idx, item in enumerate(links_raw):
         try:
             start_time = datetime.fromisoformat(item["start_time"])
@@ -79,7 +79,7 @@ def load_links_from_json(json_path: Path) -> list[ScheduledLink]:
                 )
 
             links.append(
-                ScheduledLink(
+                LinkBlock(
                     link_id=item.get("link_id", f"link_{idx}"),
                     satellite_name=item["satellite_name"],
                     groundstation_name=item["groundstation_name"],
@@ -118,7 +118,7 @@ def main() -> None:
     scheduled_links = load_links_from_json(args.input_file)
     print(f"Found {len(scheduled_links)} scheduled link(s) to process.")
 
-    activities = AssetRepository.create_activities_from_scheduled_links(scheduled_links)
+    activities = AssetRepository.create_activities_from_link_blocks(scheduled_links)
     print(f"Generated {len(activities)} Activity record(s) (2 per link):")
 
     for act in activities:

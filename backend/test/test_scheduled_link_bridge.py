@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 from core.models.domain import (
-    ScheduledLink,
+    LinkBlock,
     OverpassProfilePoint,
 )
 from core.repository.propagation_repository import PropagationResultRepository
@@ -34,7 +34,7 @@ def create_sample_scheduled_link(
     link_id: str = "link_001",
     sat_name: str = "Satellite-Alpha",
     gs_name: str = "GS-Kiruna",
-) -> ScheduledLink:
+) -> LinkBlock:
     start_time = datetime(2026, 8, 16, 12, 0, 0, tzinfo=timezone.utc)
     end_time = datetime(2026, 8, 16, 12, 10, 0, tzinfo=timezone.utc)
     point = OverpassProfilePoint(
@@ -46,7 +46,7 @@ def create_sample_scheduled_link(
         azimuth_deg=180.0,
         range_m=700000.0,
     )
-    return ScheduledLink(
+    return LinkBlock(
         link_id=link_id,
         satellite_name=sat_name,
         groundstation_name=gs_name,
@@ -60,7 +60,7 @@ def create_sample_scheduled_link(
 
 def test_create_activities_from_single_scheduled_link():
     link = create_sample_scheduled_link()
-    sat_activity, gs_activity = AssetRepository.create_activities_from_scheduled_link(link)
+    sat_activity, gs_activity = AssetRepository.create_activities_from_link_block(link)
 
     expected_name = f"Pass {link.satellite_name} - {link.groundstation_name} at {link.start_time.isoformat()}"
 
@@ -102,7 +102,7 @@ def test_create_activities_from_multiple_scheduled_links():
     link1 = create_sample_scheduled_link(link_id="link_001", sat_name="Sat-1", gs_name="GS-1")
     link2 = create_sample_scheduled_link(link_id="link_002", sat_name="Sat-2", gs_name="GS-2")
 
-    activities = AssetRepository.create_activities_from_scheduled_links([link1, link2])
+    activities = AssetRepository.create_activities_from_link_blocks([link1, link2])
 
     assert len(activities) == 4
     schedule_names = [a.schedule_name for a in activities]
@@ -117,7 +117,7 @@ def test_push_activities_to_satos_deduplication(mock_session, mock_put_events, m
     mock_put_activities.return_value = MagicMock(status_code=200)
 
     link = create_sample_scheduled_link()
-    activities = AssetRepository.create_activities_from_scheduled_links([link])
+    activities = AssetRepository.create_activities_from_link_blocks([link])
     assert len(activities) == 2
 
     # Call satos_connector.push_activities_to_SatOS directly

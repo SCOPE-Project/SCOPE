@@ -76,7 +76,7 @@ class UpdateSatelliteStateResponse(BaseModel):
 # Scheduled Links Push DTOs
 # ==========================================
 
-from core.models.domain import ScheduledLink, OverpassProfilePoint
+from core.models.domain import LinkBlock, OverpassProfilePoint
 from app.models.propagation import OverpassProfilePointDTO
 
 
@@ -90,8 +90,8 @@ class ScheduledLinkDTO(BaseModel):
     max_elevation_deg: float
     high_res_trajectory: list[OverpassProfilePointDTO] = []
 
-    def to_domain(self) -> ScheduledLink:
-        return ScheduledLink(
+    def to_domain(self) -> LinkBlock:
+        return LinkBlock(
             link_id=self.link_id,
             satellite_name=self.satellite_name,
             groundstation_name=self.groundstation_name,
@@ -114,7 +114,7 @@ class ScheduledLinkDTO(BaseModel):
         )
 
     @classmethod
-    def from_domain(cls, domain: ScheduledLink) -> "ScheduledLinkDTO":
+    def from_domain(cls, domain: LinkBlock) -> "ScheduledLinkDTO":
         return cls(
             link_id=domain.link_id,
             satellite_name=domain.satellite_name,

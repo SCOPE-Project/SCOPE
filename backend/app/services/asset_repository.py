@@ -7,7 +7,7 @@ from api_connect.satio_session import SatIOSession
 from pydantic_models.definitions import SatelliteModel
 from pydantic_models.activity import ActivityInfoModel, ActivityStatus
 from pydantic_models.schedule_event import ScheduleEventModel
-from core.models.domain import SatelliteInformation, GroundStationInformation, ScheduledLink
+from core.models.domain import SatelliteInformation, GroundStationInformation, LinkBlock
 from app.models.tasks import AssetInformation, AssetSchedule, Activity
 from app.models.satos import ActivityDTO
 from app.services.satos_connector import (
@@ -352,13 +352,14 @@ class AssetRepository:
         except Exception as e:
             raise RuntimeError(f"Failed to fetch schedule information for {schedule_name} from SatOS: {e}")
 
+
     @classmethod
-    def create_activities_from_scheduled_link(cls, link: ScheduledLink) -> tuple[Activity, Activity]:
+    def create_activities_from_link_block(cls, link: LinkBlock) -> tuple[Activity, Activity]:
         """
-        Converts a ScheduledLink into 2 ScheduleEventModel objects (AOS and LOS)
+        Converts a LinkBlock into 2 ScheduleEventModel objects (AOS and LOS)
         and 2 Activity objects (one for the satellite, one for the ground station).
 
-        :param link: ScheduledLink domain object
+        :param link: LinkBlock domain object
         :return: (satellite_activity, groundstation_activity)
         """
         start_time = link.start_time
@@ -414,16 +415,16 @@ class AssetRepository:
         return sat_activity, gs_activity
 
     @classmethod
-    def create_activities_from_scheduled_links(cls, links: list[ScheduledLink]) -> list[Activity]:
+    def create_activities_from_link_blocks(cls, links: list[LinkBlock]) -> list[Activity]:
         """
-        Converts a list of ScheduledLink objects into a list of Activity objects (2 activities per link).
+        Converts a list of LinkBlock objects into a list of Activity objects (2 activities per link).
 
-        :param links: list of ScheduledLink domain objects
+        :param links: list of LinkBlock domain objects
         :return: list of Activity objects (length 2 * len(links))
         """
         activities: list[Activity] = []
         for link in links:
-            sat_act, gs_act = cls.create_activities_from_scheduled_link(link)
+            sat_act, gs_act = cls.create_activities_from_link_block(link)
             activities.append(sat_act)
             activities.append(gs_act)
         return activities
@@ -514,16 +515,18 @@ class AssetRepository:
         return activities
 
     @classmethod
-    def push_scheduled_links_to_satos(cls, links: list[ScheduledLink]) -> list[Activity]:
+    def push_scheduled_links_to_satos(cls, links: list[LinkBlock]) -> list[Activity]:
         """
-        Converts ScheduledLink objects to Activity objects, pushes them to SatOS,
+        Converts LinkBlock objects to Activity objects, pushes them to SatOS,
         synchronizes the local _schedules cache, and returns the created activities.
 
-        :param links: list of ScheduledLink domain objects
+        :param links: list of LinkBlock domain objects
         :return: list of pushed Activity objects
         """
-        activities = cls.create_activities_from_scheduled_links(links)
+        activities = cls.create_activities_from_link_blocks(links)
         return cls.push_activities_to_satos(activities)
+
+    push_link_blocks_to_satos = push_scheduled_links_to_satos
 
     @classmethod
     def delete_activities_from_satos(cls, activity_uuids: Sequence[uuid.UUID | str]) -> list[str]:
