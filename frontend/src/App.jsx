@@ -8,6 +8,13 @@ const TIMELINE_ZOOM_LEVELS = [
   { id: 'fit', label: 'Fit', multiplier: 1 },
   { id: 'detail', label: 'Detail', multiplier: 5.2 },
 ]
+// The three layers used to BE the timeline's rows. Since rows became
+// asset-centric they are pure filters over which kind of bar is drawn.
+const TIMELINE_LAYERS = [
+  { id: 'current', label: 'Current Schedule' },
+  { id: 'potential', label: 'Potential Links' },
+  { id: 'proposed', label: 'Proposed Schedule' },
+]
 const TIMELINE_WHEEL_ZOOM_STEP = 0.6
 const TIMELINE_MIN_ZOOM_MULTIPLIER = 1
 const TIMELINE_MAX_ZOOM_MULTIPLIER = 24
@@ -102,6 +109,7 @@ export default function App() {
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
+  const tradeOffOptionListRef = useRef(null)
   const timelineWheelHintRef = useRef(null)
   const timelineWheelHintTimeoutRef = useRef(null)
   const schedulerAbortControllerRef = useRef(null)
@@ -190,6 +198,15 @@ export default function App() {
     potential: true,
     proposed: true,
   })
+  // Asset groups start collapsed: the header row already aggregates what is
+  // scheduled for the asset, and selecting a trade-off expands exactly the
+  // groups that matter (see the auto-expand effect below).
+  const [expandedTimelineGroups, setExpandedTimelineGroups] = useState({})
+  // Purely navigational: clicking a bar marks a link (both of its instances)
+  // and scrolls the Trade-Off panel to the matching option. It never changes
+  // selectedTradeOffOption -- the timeline shows and navigates, it does not decide.
+  const [markedTimelineLinkId, setMarkedTimelineLinkId] = useState(null)
+  const [markedTradeOffOptionId, setMarkedTradeOffOptionId] = useState(null)
   const [expandedSections, setExpandedSections] = useState({
     timeWindow: true,
     satellites: true,
@@ -388,6 +405,8 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
+    setMarkedTimelineLinkId(null)
+    setMarkedTradeOffOptionId(null)
     setConfirmingSchedule(false)
     setConfirmationProgress(0)
     setConfirmationStep('')
@@ -1016,9 +1035,17 @@ export default function App() {
     return bands
   }
 
+  // Timeline rows are asset-centric: one collapsible group per satellite and
+  // per ground station, a header row per group that aggregates what is
+  // actually scheduled for that asset, and one sub-row per counterpart it
+  // actually has overpasses with. Every link therefore appears TWICE (once
+  // under its satellite, once under its ground station); both instances share
+  // a `linkId` so marking one marks the other.
   const buildTimelineModel = (rows, groups, currentTimestamp, currentScheduleItems, planningWindow) => {
     const timeMode = planningWindow?.timeMode ?? DEFAULT_PLANNING_TIME_MODE
-    const selectedOptions = groups.map((group) => getSelectedTradeOffForGroup(group))
+    const selectedOptions = groups
+      .map((group) => getSelectedTradeOffForGroup(group))
+      .filter(Boolean)
     const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
     const optionByOverpassId = new Map(
       groups
@@ -1026,8 +1053,11 @@ export default function App() {
         .map((option) => [option.overpassId, option]),
     )
 
-    const potentialSourceItems = rows
-      .filter((row) => !row.scheduleBlocked)
+    // One bar per overpass instead of one bar per layer. With per-counterpart
+    // rows a "potential" and a "proposed" copy of the same overpass would land
+    // on the exact same pixels of the exact same row, so the layer toggles now
+    // filter which KIND of bar is drawn rather than which track exists.
+    const linkSourceItems = rows
       .map((row) => {
         const startTimestamp = toTimestamp(row.startTime)
         const endTimestamp = toTimestamp(row.endTime)
@@ -1041,19 +1071,47 @@ export default function App() {
         }
 
         const linkedOption = optionByOverpassId.get(row.overpassId)
+        const hasTradeOff = Boolean(row.tradeOffId && row.tradeOffId !== '—')
+        const partOfProposal = tradeOffsCalculated
+          && !row.scheduleBlocked
+          && (!hasTradeOff || selectedOverpassIds.has(row.overpassId))
+        // Q9/Q12: once trade-offs exist, every option that is not the one
+        // actually driving the schedule is damped -- per group, so the
+        // recommended option of an untouched group stays legible.
+        const dimmed = tradeOffsCalculated
+          && hasTradeOff
+          && !selectedOverpassIds.has(row.overpassId)
+
+        let variant = 'neutral'
+        if (row.scheduleBlocked) {
+          variant = 'blocked'
+        } else if (hasTradeOff) {
+          variant = selectedOverpassIds.has(row.overpassId) ? 'selected' : 'candidate'
+        } else if (tradeOffsCalculated) {
+          variant = 'fixed'
+        }
 
         return {
-          id: `potential-${row.overpassId}`,
+          kind: 'link',
+          linkId: row.overpassId,
+          satId: row.satId,
+          gsId: row.gsId,
           label: row.overpassId,
-          startTime: row.startTime,
-          endTime: row.endTime,
-          detail: row.tradeOffId && row.tradeOffId !== '—'
+          detail: hasTradeOff
             ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
             : `${row.satId} → ${row.gsId}`,
-          variant: row.tradeOffId && row.tradeOffId !== '—' ? 'candidate' : 'neutral',
+          startTime: row.startTime,
+          endTime: row.endTime,
           startTimestamp,
           endTimestamp,
-          tradeOffId: row.tradeOffId ?? null,
+          layer: partOfProposal ? 'proposed' : 'potential',
+          variant,
+          dimmed,
+          blocked: Boolean(row.scheduleBlocked),
+          blockMessage: row.scheduleBlocked
+            ? `${row.overpassId} is blocked because ${row.scheduleBlockLabel ?? 'a scheduled activity'} on ${row.scheduleBlockAsset ?? 'the current schedule'} has priority.`
+            : null,
+          tradeOffId: hasTradeOff ? row.tradeOffId : null,
           tradeOffScore: row.tradeOffScore ?? null,
           tradeOffColorIndex: row.tradeOffColorIndex ?? null,
           optionId: linkedOption?.optionId ?? null,
@@ -1062,47 +1120,7 @@ export default function App() {
       })
       .filter(Boolean)
 
-    const proposedSourceItems = (tradeOffsCalculated ? rows : [])
-      .filter((row) => !row.scheduleBlocked)
-      .filter((row) => row.tradeOffId === '—' || selectedOverpassIds.has(row.overpassId))
-      .map((row) => {
-        const startTimestamp = toTimestamp(row.startTime)
-        const endTimestamp = toTimestamp(row.endTime)
-
-        if (
-          startTimestamp === null
-          || endTimestamp === null
-          || endTimestamp <= startTimestamp
-        ) {
-          return null
-        }
-
-        const chosenOption = selectedOptions.find((option) => option.overpassId === row.overpassId)
-
-        return {
-          id: `proposed-${row.overpassId}`,
-          label: row.overpassId,
-          startTime: row.startTime,
-          endTime: row.endTime,
-          detail: row.tradeOffId && row.tradeOffId !== '—'
-            ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
-            : `${row.satId} → ${row.gsId}`,
-          variant: chosenOption
-            ? chosenOption.optionId === selectedTradeOffOption
-              ? 'selected'
-              : 'recommended'
-            : 'fixed',
-          startTimestamp,
-          endTimestamp,
-          tradeOffId: row.tradeOffId ?? null,
-          tradeOffScore: row.tradeOffScore ?? null,
-          tradeOffColorIndex: row.tradeOffColorIndex ?? null,
-          optionId: chosenOption?.optionId ?? null,
-          recommended: chosenOption?.recommended ?? false,
-        }
-      })
-      .filter(Boolean)
-
+    const blockedRows = rows.filter((row) => row.scheduleBlocked)
     const currentSourceItems = currentScheduleItems
       .map((item) => {
         const startTimestamp = toTimestamp(item.startTime)
@@ -1116,29 +1134,39 @@ export default function App() {
           return null
         }
 
+        // A SatOS activity that pushes an overpass out of the plan is drawn in
+        // the asset's header row as a blocking bar -- that is the red bar in
+        // the agreed layout sketch.
+        const blocking = blockedRows.some(
+          (row) => row.scheduleBlockAsset === item.detail && row.scheduleBlockLabel === item.label,
+        )
+
         return {
+          kind: 'activity',
           id: item.id,
+          linkId: null,
+          assetName: item.detail,
           label: item.label,
+          detail: item.detail,
           startTime: item.startTime,
           endTime: item.endTime,
-          detail: item.detail,
-          variant: 'current',
           startTimestamp,
           endTimestamp,
-          optionId: null,
+          layer: 'current',
+          variant: blocking ? 'blocking' : 'current',
+          dimmed: false,
+          blocked: false,
+          blockMessage: null,
           tradeOffId: null,
           tradeOffScore: null,
           tradeOffColorIndex: null,
+          optionId: null,
           recommended: false,
         }
       })
       .filter(Boolean)
 
-    const allTimestampItems = [
-      ...currentSourceItems,
-      ...potentialSourceItems,
-      ...proposedSourceItems,
-    ]
+    const allTimestampItems = [...currentSourceItems, ...linkSourceItems]
     const planningStartTimestamp = toTimestamp(planningWindow?.startTime)
     const planningEndTimestamp = toTimestamp(planningWindow?.endTime)
 
@@ -1181,9 +1209,78 @@ export default function App() {
       durationMinutes: Math.max(5, (item.endTimestamp - item.startTimestamp) / 60000),
     })
 
-    const currentItems = layoutTimelineItems(currentSourceItems.map(mapToTimelineItem))
-    const potentialItems = layoutTimelineItems(potentialSourceItems.map(mapToTimelineItem))
-    const proposedItems = layoutTimelineItems(proposedSourceItems.map(mapToTimelineItem))
+    const layerVisible = (layer) => timelineLayers[layer] !== false
+    const visibleLinkItems = linkSourceItems.filter((item) => layerVisible(item.layer))
+    const visibleActivityItems = currentSourceItems.filter(() => layerVisible('current'))
+
+    const satelliteNames = [...new Set([
+      ...rows.map((row) => row.satId),
+      ...currentSourceItems
+        .filter((item) => selectedSatellites.includes(item.assetName))
+        .map((item) => item.assetName),
+    ].filter(Boolean))].sort((left, right) => String(left).localeCompare(String(right)))
+
+    const groundStationNames = [...new Set([
+      ...rows.map((row) => row.gsId),
+      ...currentSourceItems
+        .filter((item) => selectedGroundStations.includes(item.assetName))
+        .map((item) => item.assetName),
+    ].filter(Boolean))].sort((left, right) => String(left).localeCompare(String(right)))
+
+    const buildAssetGroup = (kind, assetName) => {
+      const ownLinkItems = visibleLinkItems.filter(
+        (item) => (kind === 'satellite' ? item.satId : item.gsId) === assetName,
+      )
+      const counterpartOf = (item) => (kind === 'satellite' ? item.gsId : item.satId)
+
+      // Q15: a sub-row exists only for counterparts with at least one overpass
+      // in the planning window -- a full cross product of every selected
+      // satellite against every selected ground station would be mostly blank.
+      const counterpartNames = [...new Set(ownLinkItems.map(counterpartOf).filter(Boolean))]
+        .sort((left, right) => String(left).localeCompare(String(right)))
+
+      const headerSource = [
+        ...visibleActivityItems.filter((item) => item.assetName === assetName),
+        // Q7/Q11: the header aggregates what is actually scheduled for this
+        // asset, so a collapsed group still tells the truth.
+        ...ownLinkItems.filter((item) => item.layer === 'proposed'),
+      ]
+      const headerLayout = layoutTimelineItems(headerSource.map(mapToTimelineItem))
+
+      const assetRows = counterpartNames.map((counterpartName) => {
+        const rowItems = ownLinkItems.filter((item) => counterpartOf(item) === counterpartName)
+        const layout = layoutTimelineItems(rowItems.map(mapToTimelineItem))
+
+        return {
+          id: `${kind}:${assetName}|${counterpartName}`,
+          counterpartName,
+          label: `${assetName} – ${counterpartName}`,
+          laneCount: layout.laneCount,
+          items: layout.items.map((item) => ({
+            ...item,
+            id: `${kind}:${assetName}|${counterpartName}|${item.linkId}`,
+          })),
+          containsSelected: rowItems.some((item) => item.variant === 'selected'),
+        }
+      })
+
+      return {
+        id: `${kind}:${assetName}`,
+        kind,
+        name: assetName,
+        label: assetName,
+        laneCount: headerLayout.laneCount,
+        items: headerLayout.items.map((item) => ({
+          ...item,
+          id: `${kind}:${assetName}|header|${item.linkId ?? item.id}`,
+        })),
+        rows: assetRows,
+        linkCount: assetRows.length,
+      }
+    }
+
+    const satelliteGroups = satelliteNames.map((name) => buildAssetGroup('satellite', name))
+    const groundStationGroups = groundStationNames.map((name) => buildAssetGroup('ground_station', name))
 
     const ticks = Array.from({ length: Math.floor(totalMinutes / 60) + 2 }, (_, index) => {
       const offsetMinutes = index * 60
@@ -1203,35 +1300,11 @@ export default function App() {
       ticks,
       dayBands: buildDayBands(baseDate, totalMinutes, timeMode),
       nowOffsetMinutes: (currentTimestamp - baseDate.getTime()) / 60000,
-      tracks: [
-        {
-          id: 'current',
-          label: 'Current SatOS Schedule',
-          copy: 'Activities imported from the selected SatOS schedules.',
-          laneCount: currentItems.laneCount,
-          items: currentItems.items,
-        },
-        {
-          id: 'potential',
-          label: 'Potential Links',
-          copy: useDemoData
-            ? 'Extracted windows with demo trade-off context.'
-            : 'All extracted communication windows before trade-off resolution.',
-          demoLabel: useDemoData ? 'Demo' : null,
-          laneCount: potentialItems.laneCount,
-          items: potentialItems.items,
-        },
-        {
-          id: 'proposed',
-          label: 'Proposed Schedule',
-          copy: useDemoData
-            ? 'Current simulated trade-off selection.'
-            : 'Current frontend selection of the available trade-off options.',
-          demoLabel: useDemoData ? 'Demo' : null,
-          laneCount: proposedItems.laneCount,
-          items: proposedItems.items,
-        },
+      sections: [
+        { id: 'satellites', label: 'Satellites', groups: satelliteGroups },
+        { id: 'groundStations', label: 'Ground Stations', groups: groundStationGroups },
       ],
+      hasVisibleItems: visibleLinkItems.length > 0 || visibleActivityItems.length > 0,
     }
   }
 
@@ -1287,6 +1360,9 @@ export default function App() {
     setTimelinePlaying(false)
     setTimelinePlaybackSpeed(1)
     setTimelineZoomLevel('detail')
+    setExpandedTimelineGroups({})
+    setMarkedTimelineLinkId(null)
+    setMarkedTradeOffOptionId(null)
     setTimelineLayers({
       current: true,
       potential: true,
@@ -1540,6 +1616,9 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption(null)
+    setExpandedTimelineGroups({})
+    setMarkedTimelineLinkId(null)
+    setMarkedTradeOffOptionId(null)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
     const schedulerLaunchTime = timelineNow
@@ -1662,6 +1741,7 @@ export default function App() {
     setOverviewRows(enrichedRows)
     setTradeOffCards(groups)
     setActiveTradeOffCardIndex(0)
+    focusTimelineOnTradeOffCard(groups[0])
     setSelectedTradeOffOption(groups[0]?.options.find((option) => option.recommended)?.optionId ?? null)
     setTradeOffsCalculated(true)
     setConfirmationSuccess(false)
@@ -1924,7 +2004,43 @@ export default function App() {
   const timelineWidthPx = timelineModel
     ? Math.round(timelineModel.widthPx * timelineZoomMultiplier)
     : 0
-  const visibleTimelineTracks = timelineModel?.tracks.filter((track) => timelineLayers[track.id]) ?? []
+  const timelineSections = (timelineModel?.sections ?? [])
+    .filter((section) => section.groups.length > 0)
+  // A single flat row list drives BOTH the label column and the scrollable
+  // canvas, so the two halves of the grid cannot drift apart vertically.
+  const timelineRenderRows = timelineSections.flatMap((section) => [
+    { type: 'section', key: `section-${section.id}`, label: section.label },
+    ...section.groups.flatMap((group) => {
+      const groupRenderRow = { type: 'group', key: `group-${group.id}`, group }
+
+      if (!expandedTimelineGroups[group.id]) {
+        return [groupRenderRow]
+      }
+
+      return [
+        groupRenderRow,
+        ...group.rows.map((row) => ({ type: 'link', key: `link-${row.id}`, group, row })),
+      ]
+    }),
+  ])
+
+  // Expanding a group changes the ROW COUNT but nothing about the horizontal
+  // scale, so the scroll-recentering effects below key off "are there rows at
+  // all" rather than how many -- otherwise every expand/collapse would yank
+  // the timeline back to the playhead.
+  const timelineHasRows = timelineRenderRows.length > 0
+
+  const getTimelineRowHeight = (renderRow) => {
+    if (renderRow.type === 'section') {
+      return '1.55rem'
+    }
+
+    const laneCount = renderRow.type === 'group'
+      ? renderRow.group.laneCount
+      : renderRow.row.laneCount
+
+    return `${Math.max(2.8, (laneCount ?? 1) * 2.68 + 0.44)}rem`
+  }
   const timelineBaseTimestamp = timelineModel?.baseDate.getTime() ?? null
   const timelineDurationMs = timelineModel ? timelineModel.totalMinutes * 60000 : 0
   const timelinePlayheadOffsetMinutes = timelineBaseTimestamp !== null
@@ -1995,6 +2111,72 @@ export default function App() {
       setTimelineLive(false)
     }
   }
+
+  // Punkt 5: moving to a trade-off card opens every asset group involved in
+  // it -- including the ground stations of the options that were NOT chosen,
+  // because that comparison is the whole point of the card -- and scrolls the
+  // timeline to the relevant time. It never auto-collapses (that would hide
+  // bars the user is mid-comparison on) and never touches the zoom, which is
+  // user-owned. Expanding overrides a manual collapse on purpose: the card is
+  // asking you to look at exactly these assets.
+  const focusTimelineOnTradeOffCard = (card) => {
+    if (!card) {
+      return
+    }
+
+    setExpandedTimelineGroups((current) => {
+      let changed = false
+      const next = { ...current }
+
+      card.options.forEach((option) => {
+        const groupIds = [
+          option.satId ? `satellite:${option.satId}` : null,
+          option.gsId ? `ground_station:${option.gsId}` : null,
+        ].filter(Boolean)
+
+        groupIds.forEach((groupId) => {
+          if (!next[groupId]) {
+            next[groupId] = true
+            changed = true
+          }
+        })
+      })
+
+      return changed ? next : current
+    })
+
+    const startTimestamps = card.options
+      .map((option) => toTimestamp(option.startTime))
+      .filter((value) => value !== null)
+
+    if (startTimestamps.length === 0) {
+      return
+    }
+
+    const targetTimestamp = Math.min(...startTimestamps)
+    // The rows above/below only change height after the expansion renders, and
+    // the scroll container has to exist first when this runs straight after
+    // the trade-off calculation.
+    window.requestAnimationFrame(() => scrollTimelineToTimestamp(targetTimestamp, 'smooth'))
+  }
+
+  const showTradeOffCard = (index) => {
+    setActiveTradeOffCardIndex(index)
+    focusTimelineOnTradeOffCard(tradeOffCards[index])
+  }
+
+  // Bring the option marked from the timeline into view inside the Trade-Off
+  // panel. Marking is not selection, so this only scrolls and highlights.
+  useEffect(() => {
+    if (!markedTradeOffOptionId) {
+      return
+    }
+
+    const optionNode = tradeOffOptionListRef.current
+      ?.querySelector(`[data-option-id="${markedTradeOffOptionId}"]`)
+
+    optionNode?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [markedTradeOffOptionId, activeTradeOffCardIndex])
 
   // The datetime thumb above used to be positioned as a fraction of the
   // playhead SLIDER's own (fixed, always-full-window-width) box -- a
@@ -2349,7 +2531,7 @@ export default function App() {
       || !expandedSections.timeline
       || timelineBaseTimestamp === null
       || timelineDurationMs <= 0
-      || visibleTimelineTracks.length === 0
+      || !timelineHasRows
     ) {
       return undefined
     }
@@ -2383,14 +2565,14 @@ export default function App() {
     timelineLive,
     timelinePlayheadTimestamp,
     timelineWidthPx,
-    visibleTimelineTracks.length,
+    timelineHasRows,
   ])
 
   useEffect(() => {
     const layoutKey = [
       expandedSections.timeline,
       timelineWidthPx,
-      visibleTimelineTracks.length,
+      timelineHasRows,
     ].join('|')
 
     if (layoutKey === timelineLayoutKeyRef.current) {
@@ -2402,7 +2584,7 @@ export default function App() {
       !expandedSections.timeline
       || timelineBaseTimestamp === null
       || timelineDurationMs <= 0
-      || visibleTimelineTracks.length === 0
+      || !timelineHasRows
     ) {
       return undefined
     }
@@ -2434,7 +2616,7 @@ export default function App() {
     timelineDurationMs,
     timelinePlayheadTimestamp,
     timelineWidthPx,
-    visibleTimelineTracks.length,
+    timelineHasRows,
   ])
 
   // Keep a ref mirror of the (clamped) playhead timestamp so the playback
@@ -2812,10 +2994,118 @@ export default function App() {
     setConfirmedScheduleCount(0)
   }
 
+  const toggleTimelineGroup = (groupId) => {
+    setExpandedTimelineGroups((current) => ({
+      ...current,
+      [groupId]: !current[groupId],
+    }))
+  }
+
+  // Navigation only. A click marks the link (and its twin in the other asset
+  // section), jumps the Trade-Off panel to the card holding this option and
+  // marks the option there -- selectedTradeOffOption is deliberately NOT
+  // touched, so nothing is decided or un-confirmed by navigating. Clicking the
+  // same bar again is the way back.
   const handleTimelineItemClick = (item) => {
-    if (item.optionId) {
-      handleSelectTradeOffOption(item.optionId)
+    if (item.kind !== 'link') {
+      return
     }
+
+    if (markedTimelineLinkId === item.linkId) {
+      setMarkedTimelineLinkId(null)
+      setMarkedTradeOffOptionId(null)
+      return
+    }
+
+    setMarkedTimelineLinkId(item.linkId)
+
+    if (!item.optionId) {
+      setMarkedTradeOffOptionId(null)
+      return
+    }
+
+    const cardIndex = tradeOffCards.findIndex(
+      (card) => card.options.some((option) => option.optionId === item.optionId),
+    )
+
+    if (cardIndex !== -1) {
+      showTradeOffCard(cardIndex)
+    }
+
+    setMarkedTradeOffOptionId(item.optionId)
+  }
+
+  const renderTimelineBar = (item) => {
+    const itemWidthPx = (item.durationMinutes / timelineModel.totalMinutes) * timelineWidthPx
+    const compactBar = itemWidthPx < 120
+    const tinyBar = itemWidthPx < 72
+    const isLink = item.kind === 'link'
+    // Both instances of the same link (satellite side and ground station side)
+    // carry the same linkId, so marking one visibly marks the other -- that is
+    // the "visuelle Verknuepfung" the asset rows exist for.
+    const marked = isLink && markedTimelineLinkId !== null && markedTimelineLinkId === item.linkId
+
+    return (
+      <button
+        key={item.id}
+        type="button"
+        className={[
+          'timeline-bar',
+          `timeline-bar--${item.variant}`,
+          item.tradeOffColorIndex !== null && item.tradeOffColorIndex !== undefined ? 'timeline-bar--tradeoff' : '',
+          compactBar ? 'timeline-bar--compact' : '',
+          tinyBar ? 'timeline-bar--tiny' : '',
+          isTimelineItemAtPlayhead(item) ? 'timeline-bar--playhead-active' : '',
+          item.dimmed ? 'timeline-bar--dimmed' : '',
+          marked ? 'timeline-bar--marked' : '',
+          isLink ? '' : 'timeline-bar--static',
+        ].filter(Boolean).join(' ')}
+        style={{
+          left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
+          width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
+          top: `calc(0.4rem + ${(item.laneIndex ?? 0) * 2.68}rem)`,
+          '--tradeoff-accent': (item.tradeOffColorIndex !== null && item.tradeOffColorIndex !== undefined)
+            ? getTradeOffAccentColor(item.tradeOffColorIndex)
+            : 'transparent',
+        }}
+        onClick={() => handleTimelineItemClick(item)}
+        aria-pressed={isLink ? marked : undefined}
+        aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
+      >
+        <span className="timeline-bar-content">
+          {item.recommended && !tinyBar && (
+            <span className="timeline-bar-marker" aria-hidden="true"></span>
+          )}
+          <span className="timeline-bar-title">
+            {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
+          </span>
+          {!tinyBar && <span className="timeline-bar-copy">{item.detail}</span>}
+        </span>
+        <span className="timeline-bar-tooltip" role="tooltip">
+          <span
+            className="timeline-bar-tooltip-inner"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <strong>{item.label}</strong>
+            {item.recommended && <span>Recommended option</span>}
+            <span>{item.detail}</span>
+            <span>Start: {formatTimelineDateTime(item.startTime)}</span>
+            <span>End: {formatTimelineDateTime(item.endTime)}</span>
+            <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
+            {item.tradeOffScore && item.tradeOffScore !== '—' && (
+              <span>Score: {item.tradeOffScore}</span>
+            )}
+            {item.blockMessage && <span>{item.blockMessage}</span>}
+            {isLink && item.optionId && (
+              <span className="timeline-bar-tooltip-hint">
+                {marked ? 'Click again to clear the trade-off jump' : 'Click to jump to this trade-off option'}
+              </span>
+            )}
+          </span>
+        </span>
+      </button>
+    )
   }
 
   const getCompactTimelineLabel = (label) => {
@@ -3308,7 +3598,7 @@ export default function App() {
                           type="button"
                           className={`tradeoff-browser-tab ${index === activeTradeOffCardIndex ? 'tradeoff-browser-tab--active' : ''}`}
                           style={{ '--tradeoff-accent': getTradeOffAccentColor(card.colorIndex) }}
-                          onClick={() => setActiveTradeOffCardIndex(index)}
+                          onClick={() => showTradeOffCard(index)}
                         >
                           {card.title}
                         </button>
@@ -3332,16 +3622,24 @@ export default function App() {
                       <span className="tradeoff-reason-label">Reason:</span> {activeTradeOffCard.reason}
                     </p>
 
-                    <div className="tradeoff-option-list">
+                    <div className="tradeoff-option-list" ref={tradeOffOptionListRef}>
                       {activeTradeOffCard.options.map((option) => (
                         <div
                           key={option.optionId}
-                          className={`tradeoff-option ${selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : ''}`}
+                          data-option-id={option.optionId}
+                          className={[
+                            'tradeoff-option',
+                            selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : '',
+                            markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
+                          ].filter(Boolean).join(' ')}
                           style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
                         >
                           <div className="tradeoff-option-header">
                             <span className="tradeoff-option-id">{option.overpassId}</span>
                             <div className="tradeoff-meta tradeoff-meta--option">
+                              {markedTradeOffOptionId === option.optionId && (
+                                <span className="tradeoff-marked-flag">From timeline</span>
+                              )}
                               {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
                               <span className="tradeoff-score">{option.score}</span>
                             </div>
@@ -3365,7 +3663,7 @@ export default function App() {
                       type="button"
                       className="tradeoff-browser-button"
                       disabled={activeTradeOffCardIndex === 0}
-                      onClick={() => setActiveTradeOffCardIndex((current) => Math.max(0, current - 1))}
+                      onClick={() => showTradeOffCard(Math.max(0, activeTradeOffCardIndex - 1))}
                       aria-label="Previous trade-off card"
                     >
                       ‹
@@ -3377,7 +3675,7 @@ export default function App() {
                       type="button"
                       className="tradeoff-browser-button"
                       disabled={activeTradeOffCardIndex >= tradeOffCards.length - 1}
-                      onClick={() => setActiveTradeOffCardIndex((current) => Math.min(tradeOffCards.length - 1, current + 1))}
+                      onClick={() => showTradeOffCard(Math.min(tradeOffCards.length - 1, activeTradeOffCardIndex + 1))}
                       aria-label="Next trade-off card"
                     >
                       ›
@@ -3685,14 +3983,15 @@ export default function App() {
                 <div className="timeline-toolbar">
                   <div className="timeline-toolbar-groups">
                     <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
-                      {timelineModel.tracks.map((track) => (
+                      {TIMELINE_LAYERS.map((layer) => (
                         <button
-                          key={track.id}
+                          key={layer.id}
                           type="button"
-                          className={`timeline-toggle ${timelineLayers[track.id] ? 'timeline-toggle--active' : ''}`}
-                          onClick={() => toggleTimelineLayer(track.id)}
+                          className={`timeline-toggle ${timelineLayers[layer.id] ? 'timeline-toggle--active' : ''}`}
+                          onClick={() => toggleTimelineLayer(layer.id)}
+                          aria-pressed={Boolean(timelineLayers[layer.id])}
                         >
-                          {track.label}
+                          {layer.label}
                         </button>
                       ))}
                     </div>
@@ -3748,28 +4047,71 @@ export default function App() {
                   )}
                 </div>
 
-                {visibleTimelineTracks.length === 0 ? (
+                {timelineRenderRows.length === 0 ? (
                   <p className="timeline-empty-copy">Enable at least one timeline layer to display the schedule view.</p>
                 ) : (
                   <div className="timeline-layout">
                     <div className="timeline-label-column">
                       <div className="timeline-label-cell timeline-label-cell--day"></div>
                       <div className="timeline-label-cell timeline-label-cell--axis"></div>
-                      {visibleTimelineTracks.map((track) => (
-                        <div
-                          key={`${track.id}-label`}
-                          className="timeline-label-cell"
-                          style={{
-                            '--timeline-row-height': `${Math.max(3.2, (track.laneCount ?? 1) * 2.68 + 0.44)}rem`,
-                          }}
-                        >
-                          <span className="timeline-track-name">
-                            {track.label}
-                            {track.demoLabel && <span className="timeline-track-demo">{track.demoLabel}</span>}
-                          </span>
-                          <span className="timeline-track-copy">{track.copy}</span>
-                        </div>
-                      ))}
+                      {timelineRenderRows.map((renderRow) => {
+                        const rowStyle = {
+                          '--timeline-row-height': getTimelineRowHeight(renderRow),
+                        }
+
+                        if (renderRow.type === 'section') {
+                          return (
+                            <div
+                              key={`${renderRow.key}-label`}
+                              className="timeline-label-cell timeline-label-cell--section"
+                              style={rowStyle}
+                            >
+                              <span className="timeline-section-name">{renderRow.label}</span>
+                            </div>
+                          )
+                        }
+
+                        if (renderRow.type === 'group') {
+                          const groupExpanded = Boolean(expandedTimelineGroups[renderRow.group.id])
+
+                          return (
+                            <div
+                              key={`${renderRow.key}-label`}
+                              className={`timeline-label-cell timeline-label-cell--group ${groupExpanded ? 'timeline-label-cell--group-open' : ''}`}
+                              style={rowStyle}
+                            >
+                              <button
+                                type="button"
+                                className="timeline-group-toggle"
+                                onClick={() => toggleTimelineGroup(renderRow.group.id)}
+                                aria-expanded={groupExpanded}
+                                aria-label={`${groupExpanded ? 'Collapse' : 'Expand'} ${renderRow.group.label}`}
+                              >
+                                <span className="timeline-group-chevron" aria-hidden="true">
+                                  {renderSectionChevron(groupExpanded)}
+                                </span>
+                                <span className="timeline-group-name">{renderRow.group.label}</span>
+                                {renderRow.group.linkCount > 0 && (
+                                  <span className="timeline-group-count">
+                                    {renderRow.group.linkCount}
+                                  </span>
+                                )}
+                              </button>
+                            </div>
+                          )
+                        }
+
+                        return (
+                          <div
+                            key={`${renderRow.key}-label`}
+                            className="timeline-label-cell timeline-label-cell--link"
+                            style={rowStyle}
+                          >
+                            <span className="timeline-link-name">{renderRow.row.counterpartName}</span>
+                            <span className="timeline-link-copy">{renderRow.row.label}</span>
+                          </div>
+                        )
+                      })}
                     </div>
 
                     <div ref={timelineScrollFrameRef} className="timeline-scroll-frame">
@@ -3907,74 +4249,40 @@ export default function App() {
                         )}
                       </div>
 
-                      {visibleTimelineTracks.map((track) => (
+                      {timelineRenderRows.map((renderRow) => {
+                        const rowStyle = {
+                          '--timeline-row-height': getTimelineRowHeight(renderRow),
+                        }
+
+                        if (renderRow.type === 'section') {
+                          return (
+                            <div
+                              key={`${renderRow.key}-row`}
+                              className="timeline-track-row timeline-track-row--section"
+                              style={rowStyle}
+                            ></div>
+                          )
+                        }
+
+                        const rowItems = renderRow.type === 'group'
+                          ? renderRow.group.items
+                          : renderRow.row.items
+
+                        return (
                           <div
-                            key={`${track.id}-row`}
-                            className="timeline-track-row"
-                            style={{
-                              '--timeline-row-height': `${Math.max(3.2, (track.laneCount ?? 1) * 2.68 + 0.44)}rem`,
-                            }}
+                            key={`${renderRow.key}-row`}
+                            className={`timeline-track-row timeline-track-row--${renderRow.type}`}
+                            style={rowStyle}
                           >
                             {timelineModel.ticks.map((tick) => (
                               <div
-                                key={`${track.id}-tick-${tick.offsetMinutes}`}
+                                key={`${renderRow.key}-tick-${tick.offsetMinutes}`}
                                 className={`timeline-grid-line ${tick.offsetMinutes % 120 === 0 ? 'timeline-grid-line--major' : ''}`}
                                 style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
                               ></div>
                             ))}
 
-                            {track.items.map((item) => (
-                              (() => {
-                                const itemWidthPx = (item.durationMinutes / timelineModel.totalMinutes) * timelineWidthPx
-                                const compactBar = itemWidthPx < 120
-                                const tinyBar = itemWidthPx < 72
-
-                                return (
-                                  <button
-                                    key={item.id}
-                                    type="button"
-                                    className={`timeline-bar timeline-bar--${item.variant} ${item.tradeOffColorIndex !== null ? 'timeline-bar--tradeoff' : ''} ${compactBar ? 'timeline-bar--compact' : ''} ${tinyBar ? 'timeline-bar--tiny' : ''} ${isTimelineItemAtPlayhead(item) ? 'timeline-bar--playhead-active' : ''}`}
-                                    style={{
-                                      left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
-                                      width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
-                                      top: `calc(0.56rem + ${(item.laneIndex ?? 0) * 2.68}rem)`,
-                                      '--tradeoff-accent': item.tradeOffColorIndex !== null
-                                        ? getTradeOffAccentColor(item.tradeOffColorIndex)
-                                        : 'transparent',
-                                    }}
-                                    onClick={() => handleTimelineItemClick(item)}
-                                    aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
-                                  >
-                                    <span className="timeline-bar-content">
-                                      {item.recommended && !tinyBar && (
-                                        <span
-                                          className="timeline-bar-marker"
-                                          aria-hidden="true"
-                                        ></span>
-                                      )}
-                                      <span className="timeline-bar-title">
-                                        {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
-                                      </span>
-                                      {!tinyBar && <span className="timeline-bar-copy">{item.detail}</span>}
-                                    </span>
-                                    <span className="timeline-bar-tooltip" role="tooltip">
-                                      <span
-                                        className="timeline-bar-tooltip-inner"
-                                        onPointerDown={(event) => event.stopPropagation()}
-                                        onClick={(event) => event.stopPropagation()}
-                                      >
-                                      <strong>{item.label}</strong>
-                                      {item.recommended && <span>Recommended option</span>}
-                                      <span>{item.detail}</span>
-                                      <span>Start: {formatTimelineDateTime(item.startTime)}</span>
-                                      <span>End: {formatTimelineDateTime(item.endTime)}</span>
-                                      <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
-                                      </span>
-                                    </span>
-                                  </button>
-                                )
-                              })()
-                            ))}
+                            {rowItems.map((item) => renderTimelineBar(item))}
 
                             {timelineModel.nowOffsetMinutes >= 0 && timelineModel.nowOffsetMinutes <= timelineModel.totalMinutes && (
                               <div
@@ -3997,7 +4305,8 @@ export default function App() {
                               ></div>
                             )}
                           </div>
-                      ))}
+                        )
+                      })}
                         </div>
                       </div>
                     </div>

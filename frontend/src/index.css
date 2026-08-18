@@ -3207,7 +3207,7 @@ body {
 
 .timeline-layout {
   display: grid;
-  grid-template-columns: 9rem minmax(0, 1fr);
+  grid-template-columns: 11.5rem minmax(0, 1fr);
   align-items: stretch;
   width: 100%;
   max-width: 100%;
@@ -3569,8 +3569,8 @@ body {
   background: #fcfdfe;
 }
 
-.planning-views-row .timeline-label-cell:not(.timeline-label-cell--day):not(.timeline-label-cell--axis),
-.planning-views-row .timeline-track-row {
+.planning-views-row .timeline-label-cell:not(.timeline-label-cell--day):not(.timeline-label-cell--axis):not(.timeline-label-cell--section):not(.timeline-label-cell--group):not(.timeline-label-cell--link),
+.planning-views-row .timeline-track-row:not(.timeline-track-row--section):not(.timeline-track-row--group):not(.timeline-track-row--link) {
   box-sizing: border-box;
   height: max(var(--timeline-row-height, 3.2rem), 6.5rem);
   min-height: max(var(--timeline-row-height, 3.2rem), 6.5rem);
@@ -3870,6 +3870,210 @@ body {
   transition: width 0.32s ease;
 }
 
+/* --- Asset-centric timeline rows -------------------------------------- */
+/* Rows are: section divider -> asset group header -> one sub-row per
+   counterpart. Label column and canvas render the SAME flat row list, so the
+   heights below must stay symmetrical between the two halves. */
+
+.timeline-label-cell--section {
+  justify-content: flex-end;
+  min-height: 1.55rem;
+  padding: 0 0.68rem 0.16rem 0;
+  border-top: 0;
+}
+
+.timeline-section-name {
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.timeline-track-row--section {
+  min-height: 1.55rem;
+  border-top: 0;
+  background: transparent;
+}
+
+.timeline-label-cell--group {
+  justify-content: center;
+  padding: 0 0.45rem 0 0;
+  background: #f2f6fa;
+}
+
+.timeline-track-row--group {
+  background: #f2f6fa;
+}
+
+.timeline-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.34rem;
+  width: 100%;
+  padding: 0.3rem 0.28rem 0.3rem 0.12rem;
+  border: 0;
+  border-radius: 0.2rem;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.timeline-group-toggle:hover {
+  background: rgba(0, 57, 117, 0.07);
+}
+
+.timeline-group-toggle:focus-visible {
+  outline: 2px solid rgba(185, 87, 31, 0.5);
+  outline-offset: 1px;
+}
+
+.timeline-group-chevron {
+  display: inline-flex;
+  flex: none;
+  width: 0.75rem;
+}
+
+/* Tree rows read better with the collapsed chevron pointing right; the shared
+   .section-toggle-chevron default (rotate 90deg) points left. */
+.timeline-group-chevron .section-toggle-chevron {
+  transform: rotate(-90deg);
+}
+
+.timeline-group-chevron .section-toggle-chevron--expanded {
+  transform: rotate(0deg);
+}
+
+.timeline-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-group-count {
+  flex: none;
+  min-width: 1.15rem;
+  padding: 0.03rem 0.3rem;
+  border-radius: 999px;
+  background: #e1e8f0;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.timeline-label-cell--link {
+  justify-content: center;
+  gap: 0.05rem;
+  padding-left: 1.3rem;
+}
+
+.timeline-link-name {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-link-copy {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-track-row--link {
+  background: #fcfdfe;
+}
+
+/* Bar states -------------------------------------------------------- */
+
+.timeline-bar--blocked {
+  background: #fbdedd;
+  border-color: rgba(178, 49, 42, 0.42);
+}
+
+.timeline-bar--blocking {
+  background: #f7cbc9;
+  border-color: rgba(178, 49, 42, 0.52);
+}
+
+.timeline-bar--selected {
+  background: #bfe3c8;
+  border-color: rgba(17, 115, 40, 0.55);
+}
+
+.timeline-bar--candidate {
+  background: #e3f3e7;
+  border-color: rgba(17, 115, 40, 0.3);
+}
+
+.timeline-bar--static {
+  cursor: default;
+}
+
+/* Every option that is not the one driving the schedule is damped, but stays
+   fully interactive: navigating to a damped alternative is the point. */
+.timeline-bar--dimmed {
+  opacity: 0.4;
+  filter: saturate(0.5);
+}
+
+.timeline-bar--dimmed:hover,
+.timeline-bar--dimmed:focus-visible,
+.timeline-bar--dimmed.timeline-bar--marked {
+  opacity: 1;
+  filter: none;
+}
+
+/* Marking is navigation, not selection -- deliberately a ring rather than the
+   filled treatment the Trade-Off panel uses for an actual selection. */
+.timeline-bar--marked {
+  border-color: #b9571f;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 0 0 2px rgba(185, 87, 31, 0.6),
+    0 4px 10px rgba(31, 42, 51, 0.16);
+  z-index: 7;
+}
+
+.timeline-bar--marked.timeline-bar--tradeoff {
+  box-shadow:
+    inset 3px 0 0 var(--tradeoff-accent),
+    0 0 0 2px rgba(185, 87, 31, 0.6),
+    0 4px 10px rgba(31, 42, 51, 0.16);
+}
+
+.timeline-bar-tooltip-hint {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.tradeoff-option--marked {
+  outline: 2px solid rgba(185, 87, 31, 0.62);
+  outline-offset: 2px;
+}
+
+.tradeoff-marked-flag {
+  padding: 0.1rem 0.36rem;
+  border: 1px solid #d8b089;
+  border-radius: 999px;
+  background: #f5e6d8;
+  color: #8c4f18;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 @media (max-width: 980px) {
   .app-header {
     align-items: flex-start;
@@ -3961,7 +4165,7 @@ body {
   }
 
   .timeline-layout {
-    grid-template-columns: 8.5rem minmax(0, 1fr);
+    grid-template-columns: 9.5rem minmax(0, 1fr);
   }
 
   .timeline-label-cell {
