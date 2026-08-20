@@ -1,11 +1,11 @@
 # app/routers/schedule.py
 from fastapi import APIRouter, HTTPException
 
-from core.models.domain import OverrideState
+from core.models.scheduling import OverrideState
 from core.scheduling.session_manager import SchedulingSessionManager
-from app.services.asset_repository import AssetRepository
+from app.repositories import AssetRepository
 from app.services.satos_connector import push_activities_to_SatOS
-from app.models.tasks import (
+from app.models.scheduling import (
     SessionPlanDTO,
     OverrideRequest,
     StrategyUpdateRequest,

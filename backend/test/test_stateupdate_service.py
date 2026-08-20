@@ -17,7 +17,7 @@ from app.services.satos_connector import (
     load_update_state_config,
     update_and_post_satellite_states,
 )
-from core.models.domain import SatelliteStateInputDefinition, UpdateSatelliteStateConfig
+from core.models.assets import SatelliteStateInputDefinition, UpdateSatelliteStateConfig, SatelliteState
 
 
 def test_loads_bundled_default_config() -> None:
@@ -56,7 +56,6 @@ def test_simulate_and_post_with_mocked_satos(mock_update) -> None:
 
 @patch("app.services.satos_connector.update_and_post_satellite_states")
 def test_fastapi_endpoint_default_config(mock_update) -> None:
-    from core.models.domain import SatelliteState
     mock_update.return_value = [
 
         SatelliteState(
@@ -80,7 +79,6 @@ def test_fastapi_endpoint_default_config(mock_update) -> None:
 
 @patch("app.services.satos_connector.update_and_post_satellite_states")
 def test_fastapi_endpoint_custom_config(mock_update) -> None:
-    from core.models.domain import SatelliteState
     mock_update.return_value = [
         SatelliteState(
             name="CustomSat",

@@ -1,18 +1,18 @@
 # core/scheduling/filter_pipeline.py
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
-from core.models.domain import (
+from core.models.propagation import (
     OverpassBlock,
     OverpassProfilePoint,
-    LinkBlock,
-    LinkEligibilityStatus,
     PropagationResult,
 )
-from core.repository.propagation_repository import PropagationResultRepository
-from core.repository.link_repository import LinkRepository
-from app.services.asset_repository import AssetRepository
+from core.models.scheduling import (
+    LinkBlock,
+    LinkEligibilityStatus,
+)
+from core.models.activities import Activity
 
 
 def _ensure_utc(dt: datetime) -> datetime:
@@ -79,7 +79,8 @@ def trim_overpass_by_elevation(
 
 
 def derive_and_filter_links(
-    orbit_engine_run_id: str,
+    propagation_result: PropagationResult,
+    asset_schedules: Optional[Dict[str, List[Activity]]] = None,
     min_aos_los_elevation_deg: Optional[float] = None,
     min_peak_elevation_deg: Optional[float] = None,
     default_downlink_rate_mbps: float = 25.0,
@@ -91,18 +92,12 @@ def derive_and_filter_links(
     2. Optional min AOS/LOS elevation trimming (intrinsically filtering non-compliant passes).
     3. Collision detection against immutable baseline SatOS activities.
 
-    Saves the resulting LinkBlocks to LinkRepository and returns (filter_run_id, links).
+    Returns (filter_run_id, links).
     """
     if filter_run_id is None:
         filter_run_id = str(uuid.uuid4())
 
-    propagation_result: Optional[PropagationResult] = PropagationResultRepository.get_result(orbit_engine_run_id)
-    if not propagation_result:
-        raise ValueError(f"Propagation result for run_id '{orbit_engine_run_id}' not found in PropagationResultRepository.")
-
-    # Get cached schedules from AssetRepository
-    asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
-
+    schedules_map = asset_schedules or {}
     derived_links: List[LinkBlock] = []
 
     for idx, overpass in enumerate(propagation_result.overpass_blocks, start=1):
@@ -143,8 +138,8 @@ def derive_and_filter_links(
         estimated_capacity_mb = round(duration_sec * default_downlink_rate_mbps, 2)
 
         # 2. Check for Collisions with Immutable Baseline SatOS Activities
-        sat_activities = asset_schedules.get(overpass.satellite_name, [])
-        gs_activities = asset_schedules.get(overpass.groundstation_name, [])
+        sat_activities = schedules_map.get(overpass.satellite_name, [])
+        gs_activities = schedules_map.get(overpass.groundstation_name, [])
         all_relevant_activities = [(overpass.satellite_name, act) for act in sat_activities] + \
                                  [(overpass.groundstation_name, act) for act in gs_activities]
 
@@ -199,6 +194,4 @@ def derive_and_filter_links(
 
         derived_links.append(link)
 
-    # Save to LinkRepository
-    LinkRepository.save_links(filter_run_id, derived_links)
     return filter_run_id, derived_links

@@ -1,32 +1,61 @@
 # app/models/satos.py
+from datetime import datetime
+from typing import Union, Optional, List
 from pydantic import BaseModel, Field, ConfigDict, UUID4, UUID7
+
 from pydantic_models.definitions import SatelliteInfoModel, SatelliteModel
 from pydantic_models.activity import ActivityInfoModel, ActivityStatus
 from pydantic_models.schedule_event import ScheduleEventModel
-from typing import Union, Optional
-from datetime import datetime
-from core.models.domain import SatelliteInformation, GroundStationInformation
+
+from core.models.assets import SatelliteInformation, GroundStationInformation
+from core.models.scheduling import LinkBlock, OverpassProfilePoint
+from core.models.activities import AssetSchedule
+from app.models.propagation import OverpassProfilePointDTO
+
+
+# ==========================================
+# Asset Initialization & Query Models
+# ==========================================
+
+class AssetInformation(BaseModel):
+    name: str
+    eligible: bool
+    classification: str  # "satellite", "groundstation", or "ineligible"
+    details: Union[SatelliteInformation, GroundStationInformation, None] = None
+    error: Optional[str] = None
+
+
+class AssetInitializationResponse(BaseModel):
+    assets: list[AssetInformation]
+    schedules: list[AssetSchedule]
+
 
 class AssetListResponse(BaseModel):
     assets: list[SatelliteInfoModel]
 
+
 class AssetResponse(BaseModel):
     assets: SatelliteModel
+
 
 class ScheduleEventsResponse(BaseModel):
     schedule_events: list[ScheduleEventModel]
 
+
 class ActivitiesListResponse(BaseModel):
     activities: list[ActivityInfoModel]
+
 
 class DeleteActivityResponse(BaseModel):
     status: str = "success"
     message: str
     deleted_activity: str
 
+
 class DeleteActivitiesRequest(BaseModel):
     activity_uuids: list[Union[UUID4, UUID7, str]] = []
     schedule_names: list[str] = []
+
 
 class DeleteActivitiesResponse(BaseModel):
     status: str = "success"
@@ -35,12 +64,10 @@ class DeleteActivitiesResponse(BaseModel):
     deleted_activities: list[str] = []
     schedules_cleared: dict[str, list[str]] = {}
 
+
 # ==========================================
 # Satellite State Simulation / Update DTOs
 # ==========================================
-
-from datetime import datetime
-from typing import Optional
 
 class SatelliteDefinitionDTO(BaseModel):
     name: str
@@ -75,10 +102,6 @@ class UpdateSatelliteStateResponse(BaseModel):
 # ==========================================
 # Scheduled Links Push DTOs
 # ==========================================
-
-from core.models.domain import LinkBlock, OverpassProfilePoint
-from app.models.propagation import OverpassProfilePointDTO
-
 
 class ScheduledLinkDTO(BaseModel):
     link_id: str
@@ -171,5 +194,3 @@ class PushActivitiesResponse(BaseModel):
     message: str
     pushed_activities_count: int
     activities_uuids: list[str] = []
-
-

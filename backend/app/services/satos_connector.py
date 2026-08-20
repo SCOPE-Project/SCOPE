@@ -15,8 +15,8 @@ from pydantic_models.schedule_event import ScheduleEventModel
 from pydantic_models.schedule_event_relation import ScheduleEventRelationModel
 
 from pydantic import UUID4, UUID7
-from app.models.tasks import Activity
-from core.models.domain import SatelliteStateInputDefinition, SatelliteState, UpdateSatelliteStateConfig
+from core.models.activities import Activity
+from core.models.assets import SatelliteStateInputDefinition, SatelliteState, UpdateSatelliteStateConfig
 from core.astrodynamics.coordinates import generate_satellite_states
 
 DEFAULT_UPDATE_STATE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "update_state_config.json"
@@ -496,7 +496,7 @@ def update_and_post_satellite_states(
 
         # Invalidate cached asset data in AssetRepository
         try:
-            from app.services.asset_repository import AssetRepository
+            from app.repositories import AssetRepository
             AssetRepository._satellite_infos.clear()
             AssetRepository._raw_asset_models.clear()
             AssetRepository._initialized = False

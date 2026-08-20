@@ -2,19 +2,19 @@ import pytest
 import uuid
 from datetime import datetime, timezone
 
-from core.models.domain import (
+from core.models.propagation import (
     PropagationMetadata,
     PropagationResult,
     OverpassBlock,
     OverpassProfilePoint,
+)
+from core.models.scheduling import (
     LinkBlock,
     LinkEligibilityStatus,
 )
-from core.repository.propagation_repository import PropagationResultRepository
-from core.repository.link_repository import LinkRepository
+from core.models.activities import Activity, AssetSchedule
+from app.repositories import PropagationResultRepository, LinkRepository, AssetRepository
 from core.scheduling.filter_pipeline import derive_and_filter_links, check_peak_elevation, trim_overpass_by_elevation
-from app.models.tasks import Activity, AssetSchedule
-from app.services.asset_repository import AssetRepository
 from pydantic_models.schedule_event import ScheduleEventModel
 
 
@@ -69,13 +69,15 @@ def make_overpass(
     )
 
 
-def test_filter_pipeline_trimming_and_peak_elevation():
+def test_filter_pipeline_basic_trimming_and_peak_filter():
     run_id = "test_run_prop_01"
     start_t = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
     end_t = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
 
-    op1 = make_overpass("op_01", "Sat-1", "GS-1", start_t, end_t, 45.0, [0.0, 5.0, 20.0, 45.0, 20.0, 5.0, 0.0])
-    op2 = make_overpass("op_02", "Sat-1", "GS-2", start_t, end_t, 8.0, [0.0, 4.0, 8.0, 4.0, 0.0])
+    # op1: Peak is 45 deg, meets min_peak_elevation=10 deg
+    op1 = make_overpass("op_01", "Sat-1", "GS-1", start_t, end_t, 45.0, [0.0, 5.0, 45.0, 5.0, 0.0])
+    # op2: Peak is 8 deg, fails min_peak_elevation=10 deg
+    op2 = make_overpass("op_02", "Sat-1", "GS-2", start_t, end_t, 8.0, [0.0, 2.0, 8.0, 2.0, 0.0])
 
     prop_result = PropagationResult(
         metadata=PropagationMetadata(
@@ -90,11 +92,14 @@ def test_filter_pipeline_trimming_and_peak_elevation():
     )
     PropagationResultRepository.save_result(prop_result)
 
+    asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
     filter_run_id, links = derive_and_filter_links(
-        orbit_engine_run_id=run_id,
+        propagation_result=prop_result,
+        asset_schedules=asset_schedules,
         min_aos_los_elevation_deg=5.0,
         min_peak_elevation_deg=10.0,
     )
+    LinkRepository.save_links(filter_run_id, links)
 
     assert len(links) == 2
     l1 = links[0]
@@ -129,11 +134,14 @@ def test_filter_pipeline_no_filters_applied():
     )
     PropagationResultRepository.save_result(prop_result)
 
+    asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
     filter_run_id, links = derive_and_filter_links(
-        orbit_engine_run_id=run_id,
+        propagation_result=prop_result,
+        asset_schedules=asset_schedules,
         min_aos_los_elevation_deg=None,
         min_peak_elevation_deg=None,
     )
+    LinkRepository.save_links(filter_run_id, links)
 
     assert len(links) == 1
     l = links[0]
@@ -160,11 +168,14 @@ def test_filter_pipeline_trimming_without_compliant_points():
     )
     PropagationResultRepository.save_result(prop_result)
 
+    asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
     filter_run_id, links = derive_and_filter_links(
-        orbit_engine_run_id=run_id,
+        propagation_result=prop_result,
+        asset_schedules=asset_schedules,
         min_aos_los_elevation_deg=20.0,
         min_peak_elevation_deg=None,
     )
+    LinkRepository.save_links(filter_run_id, links)
 
     assert len(links) == 1
     assert links[0].is_eligible is False
@@ -204,11 +215,14 @@ def test_filter_pipeline_baseline_collision():
     )
     AssetRepository._schedules = [AssetSchedule(name="Sat-2", activities=[act])]
 
+    asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
     filter_run_id, links = derive_and_filter_links(
-        orbit_engine_run_id=run_id,
+        propagation_result=prop_result,
+        asset_schedules=asset_schedules,
         min_aos_los_elevation_deg=5.0,
         min_peak_elevation_deg=10.0,
     )
+    LinkRepository.save_links(filter_run_id, links)
 
     assert len(links) == 1
     link = links[0]

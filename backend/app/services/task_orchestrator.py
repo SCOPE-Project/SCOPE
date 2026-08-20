@@ -1,28 +1,30 @@
 # app/services/task_orchestrator.py
 from datetime import datetime
 from typing import Optional, Dict
+
 from app.services import state_manager
 from core.orbit_engine import orekit_engine
 from core.scheduling.filter_pipeline import derive_and_filter_links
 from core.scheduling.session_manager import SchedulingSessionManager
-from core.models.domain import SatelliteInformation, GroundStationInformation, TimeInterval
-from app.services.asset_repository import AssetRepository
+from core.models.assets import SatelliteInformation, GroundStationInformation, TimeInterval
+from core.models.propagation import PropagationResult
+from core.models.scheduling import LinkEligibilityStatus
+from app.repositories import AssetRepository, PropagationResultRepository, LinkRepository
 from app.models.propagation import PropagationResultDTO
-from app.models.tasks import (
+from app.models.scheduling import (
     FilterResultDTO,
     LinkBlockDTO,
     SessionPlanDTO,
 )
-from core.models.domain import PropagationResult, LinkEligibilityStatus
 
 
 def run_orbit_engine_task(
-        task_id: str, 
-        selected_satellites: list[str], 
-        selected_groundstations: list[str], 
-        start_time: datetime, 
-        end_time: datetime
-    ):
+    task_id: str, 
+    selected_satellites: list[str], 
+    selected_groundstations: list[str], 
+    start_time: datetime, 
+    end_time: datetime
+):
     """
     Starts the orbit engine task.
 
@@ -59,6 +61,9 @@ def run_orbit_engine_task(
             on_progress_update=web_callback
         )
         
+        # Save to repository
+        PropagationResultRepository.save_result(propagation_results)
+
         propagation_results_dto = PropagationResultDTO.from_domain(propagation_results)
         state_manager.complete_task(task_id, payload=propagation_results_dto)
     except Exception as e:
@@ -66,22 +71,32 @@ def run_orbit_engine_task(
 
 
 def run_filter_links_task(
-        task_id: str,
-        orbit_engine_run_id: str,
-        min_aos_los_elevation_deg: Optional[float] = None,
-        min_peak_elevation_deg: Optional[float] = None,
-    ):
+    task_id: str,
+    orbit_engine_run_id: str,
+    min_aos_los_elevation_deg: Optional[float] = None,
+    min_peak_elevation_deg: Optional[float] = None,
+):
     """
     Executes the dedicated link derivation and filtering task.
     """
     state_manager.update_task(task_id, status="processing", message="Filtering potential communication links...", progress=30)
     try:
+        propagation_result = PropagationResultRepository.get_result(orbit_engine_run_id)
+        if not propagation_result:
+            raise ValueError(f"Propagation result for run_id '{orbit_engine_run_id}' not found in PropagationResultRepository.")
+
+        asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
+
         filter_run_id, links = derive_and_filter_links(
-            orbit_engine_run_id=orbit_engine_run_id,
+            propagation_result=propagation_result,
+            asset_schedules=asset_schedules,
             min_aos_los_elevation_deg=min_aos_los_elevation_deg,
             min_peak_elevation_deg=min_peak_elevation_deg,
             filter_run_id=task_id,
         )
+
+        # Save to LinkRepository
+        LinkRepository.save_links(filter_run_id, links)
 
         eligible_count = sum(1 for l in links if l.is_eligible)
         baseline_blocked_count = sum(
@@ -107,19 +122,27 @@ def run_filter_links_task(
 
 
 def run_process_trade_offs_task(
-        task_id: str, 
-        filter_run_id: str,
-        initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
-        scoring_strategy: str = "buffer_overflow_avoidance",
-        urgency_alpha: float = 2.0,
-    ):
+    task_id: str, 
+    filter_run_id: str,
+    initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
+    scoring_strategy: str = "buffer_overflow_avoidance",
+    urgency_alpha: float = 2.0,
+):
     """
     Starts the trade-off analysis task and initializes the in-memory SchedulingSession.
     """
     state_manager.update_task(task_id, status="processing", message="Computing trade-offs and resolving schedule...", progress=40)
     try:
+        candidate_links = LinkRepository.get_links(filter_run_id)
+        if candidate_links is None:
+            raise ValueError(f"No filtered links found for filter_run_id '{filter_run_id}'.")
+
+        asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
+
         session = SchedulingSessionManager.create_session(
             filter_run_id=filter_run_id,
+            candidate_links=candidate_links,
+            asset_schedules=asset_schedules,
             initial_buffer_levels_mb=initial_buffer_levels_mb,
             scoring_strategy=scoring_strategy,
             urgency_alpha=urgency_alpha,

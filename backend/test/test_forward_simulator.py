@@ -2,7 +2,7 @@ import pytest
 import uuid
 from datetime import datetime, timezone
 
-from core.models.domain import (
+from core.models.scheduling import (
     LinkBlock,
     OverrideState,
     SatelliteBufferConfig,
@@ -11,7 +11,7 @@ from core.models.domain import (
 from core.scheduling.conflict_builder import build_conflict_structure
 from core.scheduling.forward_simulator import run_forward_simulation, ForwardSimulationScheduler
 from core.scheduling.strategy import BufferUrgencyScoringRule, ThroughputScoringRule, DurationScoringRule
-from app.models.tasks import Activity
+from core.models.activities import Activity
 from pydantic_models.schedule_event import ScheduleEventModel
 
 

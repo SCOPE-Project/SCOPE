@@ -1,4 +1,4 @@
-# /services/asset_repository.py
+# app/repositories/asset_repository.py
 import uuid
 import warnings
 from collections.abc import Sequence
@@ -7,9 +7,10 @@ from api_connect.satio_session import SatIOSession
 from pydantic_models.definitions import SatelliteModel
 from pydantic_models.activity import ActivityInfoModel, ActivityStatus
 from pydantic_models.schedule_event import ScheduleEventModel
-from core.models.domain import SatelliteInformation, GroundStationInformation, LinkBlock
-from app.models.tasks import AssetInformation, AssetSchedule, Activity
-from app.models.satos import ActivityDTO
+from core.models.assets import SatelliteInformation, GroundStationInformation
+from core.models.scheduling import LinkBlock
+from core.models.activities import Activity, AssetSchedule
+from app.models.satos import ActivityDTO, AssetInformation
 from app.services.satos_connector import (
     satos_get_asset,
     satos_get_asset_list,
@@ -19,6 +20,7 @@ from app.services.satos_connector import (
     satos_clear_schedules,
 )
 
+
 class AssetRepository:
     _satellite_infos: dict[str, SatelliteInformation] = {}
     _groundstation_infos: dict[str, GroundStationInformation] = {}
@@ -27,12 +29,10 @@ class AssetRepository:
     
     _ineligible_cache: dict[str, str] = {}
     
-    _raw_schedules : dict[str, list[ActivityInfoModel]] = {}
+    _raw_schedules: dict[str, list[ActivityInfoModel]] = {}
     _schedules: list[AssetSchedule] = []
     
     _initialized_assets: list[AssetInformation] = []
-
-    
     _initialized = False
     
     @classmethod
@@ -352,7 +352,6 @@ class AssetRepository:
         except Exception as e:
             raise RuntimeError(f"Failed to fetch schedule information for {schedule_name} from SatOS: {e}")
 
-
     @classmethod
     def create_activities_from_link_block(cls, link: LinkBlock) -> tuple[Activity, Activity]:
         """
@@ -573,4 +572,3 @@ class AssetRepository:
                 existing_sched.activities = []
 
         return cleared_summary
-

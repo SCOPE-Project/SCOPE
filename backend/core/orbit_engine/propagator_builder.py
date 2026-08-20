@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from org.orekit.frames import Frame
 from datetime import datetime
 
-from core.models.domain import SatelliteInformation
+from core.models.assets import SatelliteInformation
 from core.orbit_engine.time_utils import normalize_datetime_to_utc
 
 

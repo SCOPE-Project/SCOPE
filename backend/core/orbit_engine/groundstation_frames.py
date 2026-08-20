@@ -3,7 +3,8 @@ from typing import TYPE_CHECKING
 from dataclasses import dataclass
 from math import radians
 
-from core.models.domain import GroundStationInformation, GroundStationRuntimeContext
+from core.models.assets import GroundStationInformation
+from core.models.propagation import GroundStationRuntimeContext
 
 if TYPE_CHECKING:
     from org.orekit.frames import TopocentricFrame

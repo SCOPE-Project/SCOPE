@@ -1,6 +1,8 @@
+# app/repositories/propagation_repository.py
 import threading
 from typing import Dict, List, Optional
-from core.models.domain import PropagationResult
+from core.models.propagation import PropagationResult
+
 
 class PropagationResultRepository:
     """Thread-safe in-memory storage for orbit propagation results."""

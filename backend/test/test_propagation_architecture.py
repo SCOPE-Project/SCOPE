@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime, timezone
-from core.models.domain import (
+from core.models.propagation import (
     PropagationMetadata,
     GlobalTrackPoint,
     OverpassProfilePoint,
@@ -8,7 +8,7 @@ from core.models.domain import (
     PropagationResult,
     SatelliteTrajectory,
 )
-from core.repository.propagation_repository import PropagationResultRepository
+from app.repositories import PropagationResultRepository
 from app.models.propagation import PropagationResultDTO
 
 def test_propagation_repository_and_dto_mapping():

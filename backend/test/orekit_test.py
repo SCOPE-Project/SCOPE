@@ -7,8 +7,8 @@ sys.path.insert(0, backend_dir)
 
 from datetime import datetime, timezone
 from core.orbit_engine.orekit_engine import run_orekit_engine
-from core.models.domain import TimeInterval, SatelliteInformation, GroundStationInformation
-from app.services.asset_repository import AssetRepository
+from core.models.assets import TimeInterval, SatelliteInformation, GroundStationInformation
+from app.repositories import AssetRepository
 
 time_interval = TimeInterval(
     start_time=datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc),

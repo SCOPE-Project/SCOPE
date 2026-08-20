@@ -5,8 +5,8 @@ import sys
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
-from app.models.tasks import Activity, AssetSchedule
-from app.services.asset_repository import AssetRepository
+from core.models.activities import Activity, AssetSchedule
+from app.repositories import AssetRepository
 from app.services import satos_connector
 from app.main import app
 from pydantic_models.activity import ActivityInfoModel, ActivityStatus
@@ -145,7 +145,7 @@ def test_satos_clear_schedules_empty():
 # 2. AssetRepository Cache Synchronization Tests
 # =========================================================
 
-@patch("app.services.asset_repository.satos_delete_activities")
+@patch("app.repositories.asset_repository.satos_delete_activities")
 def test_repository_delete_activities_updates_caches(mock_connector_delete):
     uuid1 = uuid.uuid4()
     uuid2 = uuid.uuid4()
@@ -180,7 +180,7 @@ def test_repository_delete_activities_updates_caches(mock_connector_delete):
     assert sat_b_sched.activities[0].uuid == uuid3
 
 
-@patch("app.services.asset_repository.satos_clear_schedules")
+@patch("app.repositories.asset_repository.satos_clear_schedules")
 def test_repository_clear_schedules_updates_caches(mock_connector_clear):
     uuid1 = uuid.uuid4()
     uuid2 = uuid.uuid4()
@@ -214,7 +214,7 @@ def test_repository_clear_schedules_updates_caches(mock_connector_clear):
 # 3. Router REST Endpoint Tests
 # =========================================================
 
-@patch("app.services.asset_repository.AssetRepository.delete_activities_from_satos")
+@patch("app.repositories.asset_repository.AssetRepository.delete_activities_from_satos")
 def test_router_delete_single_activity_success(mock_repo_delete):
     act_uuid = uuid.uuid4()
     mock_repo_delete.return_value = [str(act_uuid)]
@@ -228,7 +228,7 @@ def test_router_delete_single_activity_success(mock_repo_delete):
     assert data["deleted_activity"] == str(act_uuid)
 
 
-@patch("app.services.asset_repository.AssetRepository.delete_activities_from_satos")
+@patch("app.repositories.asset_repository.AssetRepository.delete_activities_from_satos")
 def test_router_delete_single_activity_not_found(mock_repo_delete):
     act_uuid = uuid.uuid4()
     mock_repo_delete.return_value = []
@@ -239,8 +239,8 @@ def test_router_delete_single_activity_not_found(mock_repo_delete):
     assert response.status_code == 404
 
 
-@patch("app.services.asset_repository.AssetRepository.delete_activities_from_satos")
-@patch("app.services.asset_repository.AssetRepository.clear_schedules_in_satos")
+@patch("app.repositories.asset_repository.AssetRepository.delete_activities_from_satos")
+@patch("app.repositories.asset_repository.AssetRepository.clear_schedules_in_satos")
 def test_router_batch_delete_activities_endpoint(mock_clear_repo, mock_delete_repo):
     uuid1 = uuid.uuid4()
     uuid2 = uuid.uuid4()
@@ -273,7 +273,7 @@ def test_router_batch_delete_empty():
     assert data["deleted_activities"] == []
 
 
-@patch("app.services.asset_repository.AssetRepository.clear_schedules_in_satos")
+@patch("app.repositories.asset_repository.AssetRepository.clear_schedules_in_satos")
 def test_router_delete_activities_by_schedule_names(mock_clear_repo):
     uuid1 = uuid.uuid4()
     mock_clear_repo.return_value = {"Sat-1": [str(uuid1)]}

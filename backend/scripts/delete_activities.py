@@ -26,7 +26,7 @@ credentials_path = backend_dir / "SatOS_credentials" / "credentials.env"
 if credentials_path.exists():
     load_dotenv(credentials_path)
 
-from app.services.asset_repository import AssetRepository
+from app.repositories import AssetRepository
 from app.services.satos_connector import satos_get_activities_list, satos_get_schedule_events
 
 

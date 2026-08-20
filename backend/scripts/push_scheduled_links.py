@@ -31,8 +31,9 @@ credentials_path = backend_dir / "SatOS_credentials" / "credentials.env"
 if credentials_path.exists():
     load_dotenv(credentials_path)
 
-from core.models.domain import LinkBlock, OverpassProfilePoint
-from app.services.asset_repository import AssetRepository
+from core.models.scheduling import LinkBlock
+from core.models.propagation import OverpassProfilePoint
+from app.repositories import AssetRepository
 
 
 def load_links_from_json(json_path: Path) -> list[LinkBlock]:

@@ -51,7 +51,7 @@ if not load_dotenv(credentials_path):
 
 # Create a session with SAT.IO using environment variables
 session = SatIOSession()
-from core.models.domain import SatelliteInformation, GroundStationInformation
+from core.models.assets import SatelliteInformation, GroundStationInformation
 import warnings
 with SatIOSession() as session:
     groundstation_model = get_satellite(session, satellite_name="GS1_Group1")

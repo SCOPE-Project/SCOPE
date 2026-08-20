@@ -10,16 +10,17 @@ if TYPE_CHECKING:
 from typing import Callable
 from datetime import datetime
 
-from core.models.domain import (
+from core.models.assets import (
     GroundStationInformation,
-    PropagationResult,
     SatelliteInformation,
     TimeInterval,
+)
+from core.models.propagation import (
+    PropagationResult,
     GlobalTrackPoint,
     OverpassBlock,
-    SatelliteTrajectory
+    SatelliteTrajectory,
 )
-from core.repository.propagation_repository import PropagationResultRepository
 from core.orbit_engine.groundstation_frames import (
     GroundStationRuntimeContext,
     build_groundstation_contexts,
@@ -242,8 +243,6 @@ def run_orekit_engine(
         global_tracks=global_tracks,
         overpass_blocks=overpass_blocks,
     )
-
-    PropagationResultRepository.save_result(propagation_result)
 
     report_progress(
         run_id,

@@ -2,7 +2,7 @@ from datetime import datetime
 from pydantic import UUID4, UUID7
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from app.services import satos_connector
-from app.services.asset_repository import AssetRepository
+from app.repositories import AssetRepository
 from app.models.tasks import OrbitEngineRequest
 
 from app.models.satos import (
@@ -19,7 +19,7 @@ from app.models.satos import (
     DeleteActivitiesRequest,
     DeleteActivitiesResponse,
 )
-from core.models.domain import (
+from core.models.assets import (
     SatelliteStateInputDefinition,
     UpdateSatelliteStateConfig,
 )

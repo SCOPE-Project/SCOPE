@@ -6,7 +6,7 @@ import numpy as np
 
 from core.astrodynamics.constants import Constants
 from core.astrodynamics.kepler import kep2rv
-from core.models.domain import SatelliteStateInputDefinition, SatelliteState
+from core.models.assets import SatelliteStateInputDefinition, SatelliteState
 
 J2000_UT = datetime(2000, 1, 1, 11, 58, 55, 816000, tzinfo=timezone.utc)
 SECONDS_PER_DAY = 86_400.0

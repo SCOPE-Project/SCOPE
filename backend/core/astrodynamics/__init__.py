@@ -8,7 +8,7 @@ from core.astrodynamics.coordinates import (
     geographic_longitude_to_raan_deg,
     generate_satellite_states,
 )
-from core.models.domain import (
+from core.models.assets import (
     SatelliteStateInputDefinition,
     SatelliteState,
     UpdateSatelliteStateConfig,

@@ -6,14 +6,11 @@ from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
-from core.models.domain import (
-    LinkBlock,
-    OverpassProfilePoint,
-)
-from core.repository.propagation_repository import PropagationResultRepository
-from app.models.tasks import Activity, AssetSchedule
+from core.models.scheduling import LinkBlock
+from core.models.propagation import OverpassProfilePoint
+from core.models.activities import Activity, AssetSchedule
 from app.models.satos import ScheduledLinkDTO
-from app.services.asset_repository import AssetRepository
+from app.repositories import PropagationResultRepository, AssetRepository
 from app.services import satos_connector
 from app.main import app
 
@@ -137,7 +134,7 @@ def test_push_activities_to_satos_deduplication(mock_session, mock_put_events, m
     assert passed_activities[1].name == expected_name
 
 
-@patch("app.services.asset_repository.push_activities_to_SatOS")
+@patch("app.repositories.asset_repository.push_activities_to_SatOS")
 def test_push_scheduled_links_to_satos_updates_local_cache(mock_push):
     link = create_sample_scheduled_link(link_id="link_001", sat_name="Sat-1", gs_name="GS-1")
     pushed = AssetRepository.push_scheduled_links_to_satos([link])
@@ -198,7 +195,7 @@ def test_utilities_router_push_scheduled_links_empty():
     assert data["pushed_activities_count"] == 0
 
 
-@patch("app.services.asset_repository.AssetRepository.push_scheduled_links_to_satos")
+@patch("app.repositories.asset_repository.AssetRepository.push_scheduled_links_to_satos")
 def test_utilities_router_push_scheduled_links_success(mock_push_repo):
     link = create_sample_scheduled_link(link_id="link_001", sat_name="Sat-A", gs_name="GS-A")
     mock_act1 = Activity(
@@ -253,7 +250,7 @@ def test_satos_router_push_activities_empty():
     assert data["activities_uuids"] == []
 
 
-@patch("app.services.asset_repository.AssetRepository.push_activities_to_satos")
+@patch("app.repositories.asset_repository.AssetRepository.push_activities_to_satos")
 def test_satos_router_push_activities_success(mock_push_repo):
     act_uuid1 = uuid.uuid4()
     act_uuid2 = uuid.uuid4()

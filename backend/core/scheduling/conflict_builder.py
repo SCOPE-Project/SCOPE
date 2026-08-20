@@ -2,7 +2,7 @@
 from collections import defaultdict, deque
 from typing import Dict, List, Set, Tuple
 
-from core.models.domain import (
+from core.models.scheduling import (
     LinkBlock,
     TradeOffGroup,
     ConflictStructure,

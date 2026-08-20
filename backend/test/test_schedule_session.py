@@ -3,19 +3,19 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 
-from core.models.domain import (
+from core.models.scheduling import (
     LinkBlock,
     OverrideState,
+)
+from core.models.propagation import (
     PropagationResult,
     PropagationMetadata,
     OverpassBlock,
     OverpassProfilePoint,
 )
-from core.repository.propagation_repository import PropagationResultRepository
-from core.repository.link_repository import LinkRepository
+from app.repositories import PropagationResultRepository, LinkRepository, AssetRepository
 from core.scheduling.session_manager import SchedulingSessionManager
 from core.scheduling.filter_pipeline import derive_and_filter_links
-from app.services.asset_repository import AssetRepository
 from app.main import app
 
 client = TestClient(app)
@@ -50,6 +50,7 @@ def test_session_manager_lifecycle():
     # 2. Create Session
     session = SchedulingSessionManager.create_session(
         filter_run_id=filter_id,
+        candidate_links=[l1, l2],
         initial_buffer_levels_mb={"Sat-1": 100.0, "Sat-2": 500.0},
         scoring_strategy="buffer_overflow_avoidance",
         session_id="session_01",
@@ -80,6 +81,7 @@ def test_schedule_router_endpoints():
 
     session = SchedulingSessionManager.create_session(
         filter_run_id=filter_id,
+        candidate_links=[l1],
         initial_buffer_levels_mb={"Sat-A": 200.0},
         session_id="sess_router_test",
     )

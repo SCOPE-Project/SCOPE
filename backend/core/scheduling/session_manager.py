@@ -3,17 +3,16 @@ import uuid
 import threading
 from typing import Dict, List, Optional
 
-from core.models.domain import (
+from core.models.scheduling import (
     LinkBlock,
     OverrideState,
     SatelliteBufferConfig,
     SchedulingSession,
 )
-from core.repository.link_repository import LinkRepository
+from core.models.activities import Activity
 from core.scheduling.conflict_builder import build_conflict_structure
 from core.scheduling.forward_simulator import ForwardSimulationScheduler
 from core.scheduling.strategy import BaseScheduler, BaseScoringRule, get_scoring_rule
-from app.services.asset_repository import AssetRepository
 
 
 class SchedulingSessionManager:
@@ -27,6 +26,8 @@ class SchedulingSessionManager:
     def create_session(
         cls,
         filter_run_id: str,
+        candidate_links: List[LinkBlock],
+        asset_schedules: Optional[Dict[str, List[Activity]]] = None,
         initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
         scoring_strategy: str = "buffer_overflow_avoidance",
         urgency_alpha: float = 2.0,
@@ -35,18 +36,14 @@ class SchedulingSessionManager:
         scoring_rule: Optional[BaseScoringRule] = None,
     ) -> SchedulingSession:
         """
-        Creates a new SchedulingSession from a filter_run_id, builds the conflict graph,
+        Creates a new SchedulingSession from candidate links, builds the conflict graph,
         and computes the initial forward simulation schedule using the injected scheduler and scoring rule.
         """
         if session_id is None:
             session_id = str(uuid.uuid4())
 
-        links: Optional[List[LinkBlock]] = LinkRepository.get_links(filter_run_id)
-        if links is None:
-            raise ValueError(f"No filtered links found for filter_run_id '{filter_run_id}'.")
-
-        candidate_links: Dict[str, LinkBlock] = {l.link_id: l for l in links}
-        eligible_links = [l for l in links if l.is_eligible]
+        links_by_id: Dict[str, LinkBlock] = {l.link_id: l for l in candidate_links}
+        eligible_links = [l for l in candidate_links if l.is_eligible]
 
         # Build conflict graph over eligible links
         conflict_structure = build_conflict_structure(eligible_links)
@@ -55,7 +52,7 @@ class SchedulingSessionManager:
         initial_buffers = initial_buffer_levels_mb or {}
         satellite_configs: Dict[str, SatelliteBufferConfig] = {}
 
-        for link in links:
+        for link in candidate_links:
             sat = link.satellite_name
             if sat not in satellite_configs:
                 satellite_configs[sat] = SatelliteBufferConfig(
@@ -67,31 +64,32 @@ class SchedulingSessionManager:
                 )
 
         user_overrides: Dict[str, OverrideState] = {}
-        asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
+        schedules_map = asset_schedules or {}
 
         active_scheduler = scheduler or cls._default_scheduler
         active_scoring = scoring_rule or get_scoring_rule(scoring_strategy, urgency_alpha=urgency_alpha)
 
         # Run initial forward simulation
         current_plan, satellite_profiles = active_scheduler.solve(
-            candidate_links=candidate_links,
+            candidate_links=links_by_id,
             user_overrides=user_overrides,
             satellite_configs=satellite_configs,
             conflict_structure=conflict_structure,
-            asset_schedules=asset_schedules,
+            asset_schedules=schedules_map,
             scoring_rule=active_scoring,
         )
 
         session = SchedulingSession(
             session_id=session_id,
             filter_run_id=filter_run_id,
-            candidate_links=candidate_links,
+            candidate_links=links_by_id,
             user_overrides=user_overrides,
             satellite_configs=satellite_configs,
             conflict_structure=conflict_structure,
             active_scoring_strategy=scoring_strategy,
             current_plan=current_plan,
             satellite_buffer_profiles=satellite_profiles,
+            asset_schedules=schedules_map,
         )
 
         with cls._lock:
@@ -126,7 +124,6 @@ class SchedulingSessionManager:
             else:
                 session.user_overrides[link_id] = override_state
 
-            asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
             active_scheduler = scheduler or cls._default_scheduler
             active_scoring = scoring_rule or get_scoring_rule(session.active_scoring_strategy)
 
@@ -135,7 +132,7 @@ class SchedulingSessionManager:
                 user_overrides=session.user_overrides,
                 satellite_configs=session.satellite_configs,
                 conflict_structure=session.conflict_structure,
-                asset_schedules=asset_schedules,
+                asset_schedules=session.asset_schedules,
                 scoring_rule=active_scoring,
             )
 
@@ -159,7 +156,6 @@ class SchedulingSessionManager:
                 raise ValueError(f"SchedulingSession '{session_id}' not found.")
 
             session.active_scoring_strategy = scoring_strategy
-            asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
             active_scheduler = scheduler or cls._default_scheduler
             active_scoring = scoring_rule or get_scoring_rule(scoring_strategy, urgency_alpha=urgency_alpha)
 
@@ -168,7 +164,7 @@ class SchedulingSessionManager:
                 user_overrides=session.user_overrides,
                 satellite_configs=session.satellite_configs,
                 conflict_structure=session.conflict_structure,
-                asset_schedules=asset_schedules,
+                asset_schedules=session.asset_schedules,
                 scoring_rule=active_scoring,
             )
 

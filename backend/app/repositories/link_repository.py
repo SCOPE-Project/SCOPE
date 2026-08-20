@@ -1,7 +1,8 @@
-# core/repository/link_repository.py
+# app/repositories/link_repository.py
 import threading
 from typing import Dict, List, Optional
-from core.models.domain import LinkBlock
+from core.models.scheduling import LinkBlock
+
 
 class LinkRepository:
     """Thread-safe in-memory storage for filtered LinkBlocks indexed by filter_run_id."""

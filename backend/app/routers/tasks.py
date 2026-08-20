@@ -9,11 +9,12 @@ from app.models.tasks import (
     TaskStatusResponse,
     TaskResultResponse,
     TaskReceiptResponse,
+)
+from app.models.satos import (
     AssetInformation,
     AssetInitializationResponse,
 )
-
-from app.services.asset_repository import AssetRepository
+from app.repositories import AssetRepository
 
 
 router = APIRouter(prefix="/tasks", tags=["Task Processing Workspace"])

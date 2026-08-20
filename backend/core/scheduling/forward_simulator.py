@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 
-from core.models.domain import (
+from core.models.scheduling import (
     LinkBlock,
     OverrideState,
     TradeOffGroup,
@@ -16,7 +16,7 @@ from core.models.domain import (
     ScheduledLinkStatus,
 )
 from core.scheduling.strategy import BaseScoringRule, BaseScheduler, BufferUrgencyScoringRule, get_scoring_rule
-from app.models.tasks import Activity
+from core.models.activities import Activity
 
 
 def _ensure_utc(dt: datetime) -> datetime:

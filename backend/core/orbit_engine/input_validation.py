@@ -3,7 +3,7 @@
 from datetime import datetime
 from numbers import Real
 
-from core.models.domain import (
+from core.models.assets import (
     GroundStationInformation,
     SatelliteInformation,
     TimeInterval,

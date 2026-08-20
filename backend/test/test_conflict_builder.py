@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime, timezone
 
-from core.models.domain import LinkBlock, LinkEligibilityStatus
+from core.models.scheduling import LinkBlock, LinkEligibilityStatus
 from core.scheduling.conflict_builder import build_conflict_structure
 
 

@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
 
-from core.models.domain import (
+from core.models.scheduling import (
     LinkBlock,
     OverrideState,
     SatelliteBufferConfig,
@@ -10,7 +10,7 @@ from core.models.domain import (
     ScheduledLinkStatus,
     SatelliteBufferProfile,
 )
-from app.models.tasks import Activity
+from core.models.activities import Activity
 
 
 # =====================================================================

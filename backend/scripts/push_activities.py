@@ -32,7 +32,7 @@ if credentials_path.exists():
     load_dotenv(credentials_path)
 
 from app.models.satos import ActivityDTO
-from app.services.asset_repository import AssetRepository
+from app.repositories import AssetRepository
 
 DEFAULT_CONFIG_PATH = backend_dir / "config" / "default_activities.json"
 
