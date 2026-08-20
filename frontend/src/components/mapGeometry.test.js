@@ -10,9 +10,29 @@ import {
   geocentricEarthRadiusMeters,
   interpolateTrackPosition,
   normalizeSignedLongitude,
+  prepareTrackPoints,
   splitCoordinatesAtAntimeridian,
   splitTrackAtAntimeridian,
 } from './mapGeometry.js'
+
+describe('prepareTrackPoints', () => {
+  it('normalizes and sorts a track once without mutating the backend array', () => {
+    const track = [
+      { timestamp: '2026-08-10T12:01:00.000Z', latitude_deg: 2, longitude_deg: 3 },
+      { timestamp: '2026-08-10T12:00:00.000Z', latitude_deg: 1, longitude_deg: 2 },
+      { timestamp: 'invalid', latitude_deg: 0, longitude_deg: 0 },
+    ]
+
+    const prepared = prepareTrackPoints(track)
+
+    expect(prepared).not.toBe(track)
+    expect(prepared).toHaveLength(2)
+    expect(prepared.map((point) => point.latitude_deg)).toEqual([1, 2])
+    expect(prepared.every((point) => Number.isFinite(point.timestampMs))).toBe(true)
+    expect(prepareTrackPoints(track)).toBe(prepared)
+    expect(track[0].latitude_deg).toBe(2)
+  })
+})
 
 describe('splitTrackAtAntimeridian', () => {
   it('keeps ordinary ground tracks in one segment', () => {

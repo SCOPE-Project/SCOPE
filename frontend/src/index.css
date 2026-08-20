@@ -3300,6 +3300,35 @@ body {
   background: #f1f4f7;
 }
 
+.timeline-content-plane {
+  position: relative;
+  width: 100%;
+}
+
+/* One shared grid replaces a separate pair of DOM nodes for every tick in
+   every row. The hour and two-hour widths are supplied by the timeline model
+   on the canvas, so the background stays aligned at every zoom level. */
+.timeline-grid-backdrop {
+  position: absolute;
+  z-index: 1;
+  top: calc(1.35rem + 1.6rem);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(0, 57, 117, 0.18) 1px, transparent 1px),
+    linear-gradient(to right, rgba(90, 109, 128, 0.1) 1px, transparent 1px);
+  background-size:
+    var(--timeline-major-width) 100%,
+    var(--timeline-hour-width) 100%;
+  background-repeat: repeat-x;
+}
+
+.timeline-grid-backdrop--data {
+  top: 1.6rem;
+}
+
 /* Shown briefly whenever a plain (non-modifier) wheel gesture passes over
    the timeline, mirroring .mission-map-wheel-hint -- scrolling still just
    pans the timeline, so this tells the person how to zoom with the wheel
@@ -3702,6 +3731,10 @@ body {
   width: 0;
   border-left: 2px dashed #b9571f;
   pointer-events: none;
+}
+
+.timeline-playhead-marker-line--full {
+  z-index: 5;
 }
 
 .timeline-bar {
@@ -4406,6 +4439,7 @@ body {
   height: calc(100% - 0.85rem);
   overflow: visible;
   pointer-events: none;
+  z-index: 2;
 }
 
 .data-volume-curve {

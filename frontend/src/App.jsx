@@ -1,7 +1,8 @@
-import { Component, lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   computeMeanTrackAltitudeMeters,
   interpolateTrackPosition,
+  prepareTrackPoints,
 } from './components/mapGeometry.js'
 
 const BACKEND_BASE_URL = 'http://localhost:8000'
@@ -27,6 +28,7 @@ const TIMELINE_MIN_ZOOM_MULTIPLIER = 1
 const TIMELINE_MAX_ZOOM_MULTIPLIER = 24
 const TIMELINE_PLAYBACK_SPEEDS = [1, 2, 4, 8, 16, 32, 64, 128]
 const DEFAULT_PLANNING_TIME_MODE = 'utc'
+const MAP_PANEL_CHROME_OVERHEAD_PX = 88
 // Panel identity is separate from panel position: PANEL_LABELS/panelSlotAssignment
 // let every panel (Overview, Trade-Off, Map View, Timeline, Data Volume) be
 // dragged into any of the 5 layout slots, while collapse state etc. stays keyed
@@ -255,6 +257,9 @@ export default function App() {
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
+  const timelinePlaybackDomRef = useRef({ markers: [], bars: [], thumb: null, label: null })
+  const timelinePlaybackLastTextSyncRef = useRef(0)
+  const missionMapRef = useRef(null)
   const tradeOffCardListRef = useRef(null)
   const timelinePanelRef = useRef(null)
   const dataVolumeScrollRef = useRef(null)
@@ -264,6 +269,7 @@ export default function App() {
   const scrollSyncLockRef = useRef(false)
   const timelineWheelHintRef = useRef(null)
   const timelineWheelHintTimeoutRef = useRef(null)
+  const timelineWheelHandlerRef = useRef(null)
   const schedulerAbortControllerRef = useRef(null)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
@@ -392,6 +398,13 @@ export default function App() {
     dataVolume: true,
   })
 
+  const preparedSatelliteTracks = useMemo(() => Object.fromEntries(
+    Object.entries(satelliteTracks).map(([assetName, points]) => [
+      assetName,
+      prepareTrackPoints(points),
+    ]),
+  ), [satelliteTracks])
+
   useEffect(() => {
     let active = true
     let intervalId = null
@@ -503,7 +516,7 @@ export default function App() {
   }, [view])
 
   useEffect(() => {
-    if (!schedulerLaunched) {
+    if (!schedulerLaunched || !timelineLive) {
       return undefined
     }
 
@@ -512,7 +525,7 @@ export default function App() {
     }, 1000)
 
     return () => window.clearInterval(intervalId)
-  }, [schedulerLaunched])
+  }, [schedulerLaunched, timelineLive])
 
   useEffect(() => () => {
     if (splitDragCleanupRef.current) {
@@ -530,8 +543,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    setConfirmationSuccess(false)
-    setConfirmedScheduleCount(0)
+    const animationFrameId = window.requestAnimationFrame(() => {
+      setConfirmationSuccess(false)
+      setConfirmedScheduleCount(0)
+    })
+    return () => window.cancelAnimationFrame(animationFrameId)
   }, [selectedTradeOffOption, tradeOffsCalculated, useDemoData, schedulerLaunched])
 
   const toggleSatellite = (name) => {
@@ -1003,11 +1019,6 @@ export default function App() {
     return Math.floor((current - start) / 86400000)
   }
 
-  const parseDurationMinutes = (value) => {
-    const parsed = Number.parseInt(value, 10)
-    return Number.isFinite(parsed) ? parsed : 30
-  }
-
   const formatTimelineHour = (date, timeMode) =>
     date.toLocaleTimeString([], {
       hour: '2-digit',
@@ -1220,7 +1231,7 @@ export default function App() {
   // actually has overpasses with. Every link therefore appears TWICE (once
   // under its satellite, once under its ground station); both instances share
   // a `linkId` so marking one marks the other.
-  const buildTimelineModel = (rows, groups, currentTimestamp, currentScheduleItems, planningWindow) => {
+  const buildTimelineModel = (rows, groups, currentScheduleItems, planningWindow) => {
     const timeMode = planningWindow?.timeMode ?? DEFAULT_PLANNING_TIME_MODE
     const selectedOptions = groups
       .map((group) => getSelectedTradeOffForGroup(group))
@@ -1478,7 +1489,6 @@ export default function App() {
       widthPx: Math.max(980, totalMinutes * 2.2),
       ticks,
       dayBands: buildDayBands(baseDate, totalMinutes, timeMode),
-      nowOffsetMinutes: (currentTimestamp - baseDate.getTime()) / 60000,
       sections: [
         { id: 'satellites', label: 'Satellites', groups: satelliteGroups },
         { id: 'groundStations', label: 'Ground Stations', groups: groundStationGroups },
@@ -1789,7 +1799,7 @@ export default function App() {
     setExtractionProgress(0)
     setExtractionMessages([
       {
-        id: `queued-${Date.now()}`,
+        id: `queued-${timelineNow}`,
         text: 'Task queued. Waiting for backend processing to start.',
       },
     ])
@@ -2025,10 +2035,17 @@ export default function App() {
     </header>
   )
 
-  const satelliteAssets = assets.filter((asset) => normalizeAssetClassification(asset) === 'satellite')
-  const groundStationAssets = assets.filter((asset) => normalizeAssetClassification(asset) === 'ground_station')
-  const unavailableAssets = assets.filter(
-    (asset) => normalizeAssetClassification(asset) === 'ineligible'
+  const satelliteAssets = useMemo(
+    () => assets.filter((asset) => normalizeAssetClassification(asset) === 'satellite'),
+    [assets],
+  )
+  const groundStationAssets = useMemo(
+    () => assets.filter((asset) => normalizeAssetClassification(asset) === 'ground_station'),
+    [assets],
+  )
+  const unavailableAssets = useMemo(
+    () => assets.filter((asset) => normalizeAssetClassification(asset) === 'ineligible'),
+    [assets],
   )
   const planningWindowComplete =
     planningWindowStartDate !== ''
@@ -2083,9 +2100,9 @@ export default function App() {
     timelineLive ? timelineNow : timelinePlayheadTime,
   )
 
-  const getSatelliteTrackCoordinates = (assetName) => (
-    interpolateTrackPosition(satelliteTracks[assetName], timelinePlayheadTimestamp)
-  )
+  const getSatelliteTrackCoordinates = useCallback((assetName) => (
+    interpolateTrackPosition(preparedSatelliteTracks[assetName], timelinePlayheadTimestamp)
+  ), [preparedSatelliteTracks, timelinePlayheadTimestamp])
 
   const formatCoordinate = (value, positiveLabel, negativeLabel) => {
     const direction = value >= 0 ? positiveLabel : negativeLabel
@@ -2096,15 +2113,17 @@ export default function App() {
     Number.isFinite(value) ? `${(value / 1000).toFixed(1)} km` : '—'
   )
 
-  const selectedGroundStationAssets = groundStationAssets.filter((asset) =>
-    selectedGroundStations.includes(asset.name)
+  const selectedGroundStationAssets = useMemo(
+    () => groundStationAssets.filter((asset) => selectedGroundStations.includes(asset.name)),
+    [groundStationAssets, selectedGroundStations],
   )
 
-  const selectedSatelliteAssets = satelliteAssets.filter((asset) =>
-    selectedSatellites.includes(asset.name)
+  const selectedSatelliteAssets = useMemo(
+    () => satelliteAssets.filter((asset) => selectedSatellites.includes(asset.name)),
+    [satelliteAssets, selectedSatellites],
   )
 
-  const selectedMapAssets = [
+  const selectedMapAssets = useMemo(() => [
     ...selectedGroundStationAssets
       .map((asset) => {
         const coordinates = getAssetCoordinates(asset)
@@ -2138,11 +2157,15 @@ export default function App() {
         }
       })
       .filter(Boolean),
-  ]
+  ], [
+    getSatelliteTrackCoordinates,
+    selectedGroundStationAssets,
+    selectedSatelliteAssets,
+  ])
 
   const visibleMapAssets = selectedMapAssets
 
-  const selectedAssetsWithoutLocation = [
+  const selectedAssetsWithoutLocation = useMemo(() => [
     ...selectedSatelliteAssets
       .filter((asset) => !getSatelliteTrackCoordinates(asset.name))
       .map((asset) => ({
@@ -2153,7 +2176,11 @@ export default function App() {
           ? 'No propagated position is available at the selected time.'
           : 'Satellite position becomes available after propagation.',
       })),
-  ]
+  ], [
+    getSatelliteTrackCoordinates,
+    schedulerLaunched,
+    selectedSatelliteAssets,
+  ])
   // No fallback to visibleMapAssets[0] here: defaulting to "always something
   // highlighted" would make it impossible to ever reach a genuinely
   // unhighlighted state -- clicking to deselect (or clicking empty map
@@ -2161,39 +2188,61 @@ export default function App() {
   // "nothing selected" state to land on.
   const activeMapAsset = visibleMapAssets.find((asset) => asset.id === activeMapAssetId) ?? null
 
-  const currentScheduleItems = buildCurrentScheduleItems(
+  const currentScheduleItems = useMemo(() => buildCurrentScheduleItems(
     assetSchedules,
     [...selectedSatellites, ...selectedGroundStations],
-  )
+  // The builder is declared in App because the existing SatOS parsing helpers
+  // are scoped here; its data dependencies are fully listed below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [assetSchedules, selectedGroundStations, selectedSatellites])
   const showOverviewProgress =
     launchingScheduler
     || extractionStatus === 'Queued'
     || extractionStatus === 'Running'
   const schedulableOverviewRows = overviewRows.filter((row) => !row.scheduleBlocked)
   const tradeOffDemoAvailable = useDemoData && schedulerLaunched && schedulableOverviewRows.length > 0
-  const finalScheduleRows = getFinalScheduleRows(overviewRows, tradeOffCards, tradeOffsCalculated)
+  const finalScheduleRows = useMemo(
+    () => getFinalScheduleRows(overviewRows, tradeOffCards, tradeOffsCalculated),
+    // selectedTradeOffOption is the state captured by getFinalScheduleRows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [overviewRows, selectedTradeOffOption, tradeOffCards, tradeOffsCalculated],
+  )
   const confirmDemoAvailable =
     useDemoData
     && schedulerLaunched
     && tradeOffsCalculated
     && finalScheduleRows.length > 0
-  const timelineModel = buildTimelineModel(
+  const timelineModel = useMemo(() => buildTimelineModel(
     overviewRows,
     tradeOffCards,
-    timelineNow,
     currentScheduleItems,
     activePlanningWindow,
-  )
+  // buildTimelineModel closes over the UI filters listed in the dependency
+  // array; keeping the builder scoped to App avoids duplicating formatters.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [
+    activePlanningWindow,
+    currentScheduleItems,
+    overviewRows,
+    selectedGroundStations,
+    selectedSatellites,
+    selectedTradeOffOption,
+    timelineLayers,
+    tradeOffCards,
+    tradeOffsCalculated,
+  ])
   const timelineZoomMultiplier = timelineCustomZoomMultiplier
     ?? (TIMELINE_ZOOM_LEVELS.find((level) => level.id === timelineZoomLevel)?.multiplier ?? 1)
   const timelineWidthPx = timelineModel
     ? Math.round(timelineModel.widthPx * timelineZoomMultiplier)
     : 0
-  const timelineSections = (timelineModel?.sections ?? [])
-    .filter((section) => section.groups.length > 0)
+  const timelineSections = useMemo(
+    () => (timelineModel?.sections ?? []).filter((section) => section.groups.length > 0),
+    [timelineModel],
+  )
   // A single flat row list drives BOTH the label column and the scrollable
   // canvas, so the two halves of the grid cannot drift apart vertically.
-  const timelineRenderRows = timelineSections.flatMap((section) => {
+  const timelineRenderRows = useMemo(() => timelineSections.flatMap((section) => {
     const sectionRenderRow = {
       type: 'section',
       key: `section-${section.id}`,
@@ -2220,7 +2269,7 @@ export default function App() {
         ]
       }),
     ]
-  })
+  }), [expandedTimelineGroups, expandedTimelineSections, timelineSections])
 
   // Expanding a group changes the ROW COUNT but nothing about the horizontal
   // scale, so the scroll-recentering effects below key off "are there rows at
@@ -2245,12 +2294,12 @@ export default function App() {
   // buffer", so it is built from the SELECTED links (finalScheduleRows), not
   // from every extracted window, and it shares the timeline's exact time span
   // so a step always sits under its link.
-  const getSatelliteAltitudeMeters = (satelliteName) => {
-    const altitude = computeMeanTrackAltitudeMeters(satelliteTracks[satelliteName])
+  const getSatelliteAltitudeMeters = useCallback((satelliteName) => {
+    const altitude = computeMeanTrackAltitudeMeters(preparedSatelliteTracks[satelliteName])
     return Number.isFinite(altitude) && altitude > 0 ? altitude : DEMO_REFERENCE_ALTITUDE_M
-  }
+  }, [preparedSatelliteTracks])
 
-  const buildSatellitePasses = (rows, satelliteName) => rows
+  const buildSatellitePasses = useCallback((rows, satelliteName) => rows
     .filter((row) => row.satId === satelliteName && !row.scheduleBlocked)
     .map((row) => {
       const startTimestamp = toTimestamp(row.startTime)
@@ -2282,7 +2331,7 @@ export default function App() {
       }
     })
     .filter(Boolean)
-    .sort((left, right) => left.startTimestamp - right.startTimestamp)
+    .sort((left, right) => left.startTimestamp - right.startTimestamp), [getSatelliteAltitudeMeters])
 
   // The red comparison curve: the option currently marked in the Trade-Off
   // panel, swapped in for the one that actually drives the schedule. Only one
@@ -2302,15 +2351,6 @@ export default function App() {
     && effectiveOptionOfMarkedCard
     && markedTradeOffOption.optionId !== effectiveOptionOfMarkedCard.optionId,
   )
-  const alternativeScheduleRows = hasDistinctAlternative
-    ? [
-      ...finalScheduleRows.filter(
-        (row) => row.overpassId !== effectiveOptionOfMarkedCard.overpassId,
-      ),
-      ...overviewRows.filter((row) => row.overpassId === markedTradeOffOption.overpassId),
-    ]
-    : []
-
   const dataVolumeCapacityGb = Math.max(1, Number(dataCapacityGb) || 0)
   const dataVolumeStartLevelGb = Math.max(
     0,
@@ -2319,13 +2359,21 @@ export default function App() {
   const dataVolumeGenerationGbPerMs = Math.max(0, Number(dataGenerationMbps) || 0)
     * MBPS_TO_GB_PER_MS
 
-  const dataVolumeModel = (() => {
+  const dataVolumeModel = useMemo(() => {
     if (!timelineModel) {
       return null
     }
 
     const startTimestamp = timelineModel.baseDate.getTime()
     const endTimestamp = timelineModel.endDate.getTime()
+    const alternativeScheduleRows = hasDistinctAlternative
+      ? [
+        ...finalScheduleRows.filter(
+          (row) => row.overpassId !== effectiveOptionOfMarkedCard.overpassId,
+        ),
+        ...overviewRows.filter((row) => row.overpassId === markedTradeOffOption.overpassId),
+      ]
+      : []
 
     // Q4/Q9: only satellites whose timeline group is expanded, ground station
     // groups do not count. The auto-expand on trade-off cards therefore pulls
@@ -2376,7 +2424,22 @@ export default function App() {
       series,
       expandedSatelliteCount: satelliteGroups.length,
     }
-  })()
+  }, [
+    dataVolumeCapacityGb,
+    dataVolumeGenerationGbPerMs,
+    dataVolumeStartLevelGb,
+    buildSatellitePasses,
+    expandedTimelineGroups,
+    expandedTimelineSections.satellites,
+    effectiveOptionOfMarkedCard,
+    // These schedule rows are treated immutably throughout App.
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+    finalScheduleRows,
+    hasDistinctAlternative,
+    markedTradeOffOption,
+    overviewRows,
+    timelineModel,
+  ])
   const timelineBaseTimestamp = timelineModel?.baseDate.getTime() ?? null
   const timelineDurationMs = timelineModel ? timelineModel.totalMinutes * 60000 : 0
   const timelinePlayheadOffsetMinutes = timelineBaseTimestamp !== null
@@ -2392,6 +2455,76 @@ export default function App() {
       / (planningWindowEndTimestamp - planningWindowStartTimestamp)
     )))
     : null
+
+  const refreshTimelinePlaybackDom = () => {
+    const root = splitPanelsRef.current
+    if (!root) {
+      timelinePlaybackDomRef.current = { markers: [], bars: [], thumb: null, label: null }
+      return
+    }
+
+    timelinePlaybackDomRef.current = {
+      markers: [...root.querySelectorAll('[data-timeline-playhead]')],
+      bars: [...root.querySelectorAll('[data-playback-start][data-playback-end]')],
+      thumb: root.querySelector('[data-playback-thumb]'),
+      label: root.querySelector('[data-playback-label]'),
+    }
+  }
+
+  const syncTimelinePlaybackDom = (timestamp, syncText = false) => {
+    if (!Number.isFinite(timestamp)) {
+      return
+    }
+
+    const { markers, bars, thumb, label } = timelinePlaybackDomRef.current
+    const timelineRatio = (
+      timelineBaseTimestamp !== null
+      && timelineDurationMs > 0
+    )
+      ? (timestamp - timelineBaseTimestamp) / timelineDurationMs
+      : null
+    const windowRatio = (
+      planningWindowStartTimestamp !== null
+      && planningWindowEndTimestamp !== null
+      && planningWindowEndTimestamp > planningWindowStartTimestamp
+    )
+      ? (timestamp - planningWindowStartTimestamp)
+        / (planningWindowEndTimestamp - planningWindowStartTimestamp)
+      : null
+
+    markers.forEach((marker) => {
+      const visible = timelineRatio !== null && timelineRatio >= 0 && timelineRatio <= 1
+      marker.hidden = !visible
+      if (visible) {
+        marker.style.left = `${timelineRatio * 100}%`
+      }
+    })
+
+    if (thumb && windowRatio !== null) {
+      thumb.style.left = `${Math.max(0, Math.min(1, windowRatio)) * 100}%`
+      thumb.setAttribute('aria-valuenow', String(Math.round(timestamp)))
+    }
+
+    bars.forEach((bar) => {
+      const startTimestamp = Number(bar.dataset.playbackStart)
+      const endTimestamp = Number(bar.dataset.playbackEnd)
+      bar.classList.toggle(
+        'timeline-bar--playhead-active',
+        Number.isFinite(startTimestamp)
+          && Number.isFinite(endTimestamp)
+          && timestamp >= startTimestamp
+          && timestamp <= endTimestamp,
+      )
+    })
+
+    if (syncText && label) {
+      const formatted = formatTimelinePlayheadDateTime(timestamp)
+      label.textContent = formatted
+      thumb?.setAttribute('aria-valuetext', formatted)
+    }
+
+    missionMapRef.current?.setPlayheadTime(timestamp)
+  }
 
   // `.timeline-time-canvas` (the scrollable/zoomable element holding the
   // day bands, ticks, schedule blocks and the playhead marker line) is
@@ -2593,6 +2726,19 @@ export default function App() {
   // leaves the viewport when you drag the thumb past the visible range -- that
   // is the honest depiction of two independent positions, not a glitch. Live
   // mode is the one exception, and it is an opt-in follow mode.
+  const previewTimelinePlayheadTime = (timestamp, syncText = true) => {
+    const clampedTimestamp = clampToPlanningWindow(timestamp)
+    timelinePlayheadTimeRef.current = clampedTimestamp
+    syncTimelinePlaybackDom(clampedTimestamp, syncText)
+    return clampedTimestamp
+  }
+
+  const commitTimelinePlayheadTime = () => {
+    if (Number.isFinite(timelinePlayheadTimeRef.current)) {
+      setTimelinePlayheadTime(timelinePlayheadTimeRef.current)
+    }
+  }
+
   const handleTimelinePlayheadPointerDown = (event) => {
     if (event.button !== undefined && event.button !== 0) {
       return
@@ -2605,7 +2751,7 @@ export default function App() {
 
     const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
     if (nextTimestamp !== null) {
-      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+      setTimelinePlayheadTime(previewTimelinePlayheadTime(nextTimestamp))
     }
   }
 
@@ -2616,7 +2762,7 @@ export default function App() {
 
     const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
     if (nextTimestamp !== null) {
-      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+      previewTimelinePlayheadTime(nextTimestamp)
     }
   }
 
@@ -2624,6 +2770,7 @@ export default function App() {
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    commitTimelinePlayheadTime()
   }
 
   // The playhead marker line(s) and the datetime label live inside
@@ -2660,8 +2807,7 @@ export default function App() {
     return timelineBaseTimestamp + (ratio * timelineDurationMs)
   }
 
-  // Lets a person click-and-drag the playhead marker line itself (one is
-  // rendered per visible track row, all representing the same instant) to
+  // Lets a person click-and-drag the shared playhead marker line itself to
   // move the current time, not just the small slider thumb above. Mirrors
   // handleTimelinePlayheadPointerDown/Move/Up, just reading position from
   // the scrollable canvas instead of the fixed slider.
@@ -2678,7 +2824,7 @@ export default function App() {
 
     const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
     if (nextTimestamp !== null) {
-      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+      setTimelinePlayheadTime(previewTimelinePlayheadTime(nextTimestamp))
     }
   }
 
@@ -2689,7 +2835,7 @@ export default function App() {
 
     const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
     if (nextTimestamp !== null) {
-      setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
+      previewTimelinePlayheadTime(nextTimestamp)
     }
   }
 
@@ -2698,6 +2844,7 @@ export default function App() {
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    commitTimelinePlayheadTime()
   }
 
   // Mirrors the map's Ctrl/⌘ + scroll-to-zoom gesture: a plain wheel event
@@ -2736,17 +2883,22 @@ export default function App() {
   // so event.preventDefault() inside handleTimelineWheel would silently
   // fail there (Ctrl+wheel would zoom AND still scroll the page) -- same
   // reasoning as MissionMap's handleWheel, which registers a native
-  // { passive: false } listener instead of using JSX onWheel. Re-attached on
-  // every render (cheap) so it always closes over the latest state.
+  // { passive: false } listener instead of using JSX onWheel. A ref keeps the
+  // native listener stable while still giving it the latest React state.
+  useLayoutEffect(() => {
+    timelineWheelHandlerRef.current = handleTimelineWheel
+  })
+
   useEffect(() => {
     const scrollContainer = timelineScrollRef.current
     if (!scrollContainer) {
       return undefined
     }
 
-    scrollContainer.addEventListener('wheel', handleTimelineWheel, { passive: false })
-    return () => scrollContainer.removeEventListener('wheel', handleTimelineWheel)
-  })
+    const onWheel = (event) => timelineWheelHandlerRef.current?.(event)
+    scrollContainer.addEventListener('wheel', onWheel, { passive: false })
+    return () => scrollContainer.removeEventListener('wheel', onWheel)
+  }, [expandedSections.timeline, view])
 
   // The Data Volume canvas is the same width, the same 50% inline padding and
   // the same time span as the timeline canvas, so a mirrored scrollLeft puts
@@ -2777,7 +2929,8 @@ export default function App() {
 
     timelineContainer.addEventListener('scroll', onTimelineScroll, { passive: true })
     dataContainer.addEventListener('scroll', onDataScroll, { passive: true })
-    dataContainer.addEventListener('wheel', handleTimelineWheel, { passive: false })
+    const onWheel = (event) => timelineWheelHandlerRef.current?.(event)
+    dataContainer.addEventListener('wheel', onWheel, { passive: false })
 
     // Align once on mount/relayout so the two do not start out offset.
     dataContainer.scrollLeft = timelineContainer.scrollLeft
@@ -2785,9 +2938,9 @@ export default function App() {
     return () => {
       timelineContainer.removeEventListener('scroll', onTimelineScroll)
       dataContainer.removeEventListener('scroll', onDataScroll)
-      dataContainer.removeEventListener('wheel', handleTimelineWheel)
+      dataContainer.removeEventListener('wheel', onWheel)
     }
-  })
+  }, [expandedSections.dataVolume, expandedSections.timeline, view])
 
   const handleTimelinePlayheadKeyDown = (event) => {
     if (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null) {
@@ -2795,10 +2948,11 @@ export default function App() {
     }
 
     let nextTimestamp
+    const currentTimestamp = timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp
     if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
       const direction = event.key === 'ArrowLeft' ? -1 : 1
       const stepMilliseconds = event.shiftKey ? 60000 : 10000
-      nextTimestamp = timelinePlayheadTimestamp + (direction * stepMilliseconds)
+      nextTimestamp = currentTimestamp + (direction * stepMilliseconds)
     } else if (event.key === 'Home') {
       nextTimestamp = planningWindowStartTimestamp
     } else if (event.key === 'End') {
@@ -2825,7 +2979,8 @@ export default function App() {
     const direction = event.key === 'ArrowLeft' ? -1 : 1
     const stepMilliseconds = event.shiftKey ? 60000 : 10000
     const nextTimestamp = clampToPlanningWindow(
-      timelinePlayheadTimestamp + (direction * stepMilliseconds),
+      (timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp)
+        + (direction * stepMilliseconds),
     )
     setTimelineLive(false)
     setTimelinePlaying(false)
@@ -2846,6 +3001,7 @@ export default function App() {
 
   const handleTimelinePlaybackToggle = () => {
     if (timelinePlaying) {
+      commitTimelinePlayheadTime()
       setTimelinePlaying(false)
       return
     }
@@ -2855,7 +3011,9 @@ export default function App() {
     }
 
     setTimelineLive(false)
-    if (timelinePlayheadTimestamp >= planningWindowEndTimestamp) {
+    const currentPlayheadTimestamp = timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp
+    if (currentPlayheadTimestamp >= planningWindowEndTimestamp) {
+      timelinePlayheadTimeRef.current = planningWindowStartTimestamp
       setTimelinePlayheadTime(planningWindowStartTimestamp)
     }
     setTimelinePlaying(true)
@@ -2966,25 +3124,28 @@ export default function App() {
     timelineHasRows,
   ])
 
-  // Keep a ref mirror of the (clamped) playhead timestamp so the playback
-  // loop below can always read the latest value without needing to restart
-  // its requestAnimationFrame loop on every tick.
-  //
-  // This MUST be useLayoutEffect, not useEffect: the playback loop also
-  // writes this same ref directly, synchronously, right before scheduling
-  // its next animation frame. useEffect's passive-effect flush is
-  // deferred/async and isn't guaranteed to run before the next
-  // requestAnimationFrame callback fires, so a stale commit's effect could
-  // overwrite the ref with an older value AFTER a newer frame already
-  // advanced it -- the playback loop would then briefly compute from that
-  // stale value before self-correcting on the next tick, which is exactly
-  // what showed up as the satellite marker occasionally jumping backward
-  // ("vibrating") during fast playback. useLayoutEffect runs synchronously
-  // right after each commit, before paint and before any later
-  // requestAnimationFrame callback can run, which closes that race.
+  // React owns the committed playhead value, while playback and pointer drags
+  // update the small set of animated DOM nodes through this ref. Refresh the
+  // node cache after commits so an unrelated render cannot leave those nodes
+  // displaying the older committed timestamp.
   useLayoutEffect(() => {
-    timelinePlayheadTimeRef.current = timelinePlayheadTimestamp
-  }, [timelinePlayheadTimestamp])
+    if (!timelinePlaying) {
+      timelinePlayheadTimeRef.current = timelinePlayheadTimestamp
+    }
+    refreshTimelinePlaybackDom()
+    syncTimelinePlaybackDom(
+      timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp,
+      true,
+    )
+  // The DOM synchronizer closes over the timeline bounds represented below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    dataVolumeModel,
+    timelinePlayheadTimestamp,
+    timelinePlaying,
+    timelineRenderRows,
+    timelineWidthPx,
+  ])
 
   // Drives the "Play" button: advances the playhead forward at
   // `timelinePlaybackSpeed`x real elapsed time, starting from wherever the
@@ -3017,9 +3178,16 @@ export default function App() {
           : Math.max(planningWindowStartTimestamp, Math.min(planningWindowEndTimestamp, rawNextTimestamp))
 
       timelinePlayheadTimeRef.current = clampedNextTimestamp
-      setTimelinePlayheadTime(clampedNextTimestamp)
+      const syncText = (
+        frameTimestamp - timelinePlaybackLastTextSyncRef.current >= 100
+      )
+      if (syncText) {
+        timelinePlaybackLastTextSyncRef.current = frameTimestamp
+      }
+      syncTimelinePlaybackDom(clampedNextTimestamp, syncText)
 
       if (planningWindowEndTimestamp !== null && rawNextTimestamp >= planningWindowEndTimestamp) {
+        setTimelinePlayheadTime(clampedNextTimestamp)
         setTimelinePlaying(false)
         return
       }
@@ -3036,6 +3204,9 @@ export default function App() {
       }
       timelinePlaybackFrameTimestampRef.current = null
     }
+  // Playback intentionally uses the synchronizer captured for these bounds;
+  // ordinary playback frames do not create React renders.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     timelinePlaying,
     timelinePlaybackSpeed,
@@ -3086,14 +3257,19 @@ export default function App() {
 
     const relativeX = clientX - rect.left
     const nextWidth = (relativeX / rect.width) * 100
-    setOverviewPanelWidth(clampOverviewPanelWidth(nextWidth))
+    const clampedWidth = clampOverviewPanelWidth(nextWidth)
+    if (panelSlotAssignment.topRight) {
+      splitPanelsRef.current.style.gridTemplateColumns = `minmax(0, ${clampedWidth}%) 0.9rem minmax(0, calc(${100 - clampedWidth}% - 0.9rem))`
+    }
+    return clampedWidth
   }
 
   const handlePanelResizeStart = (event) => {
     event.preventDefault()
+    let nextWidth = overviewPanelWidth
 
     const handlePointerMove = (moveEvent) => {
-      updateOverviewPanelWidthFromClientX(moveEvent.clientX)
+      nextWidth = updateOverviewPanelWidthFromClientX(moveEvent.clientX) ?? nextWidth
     }
 
     const stopResize = () => {
@@ -3103,6 +3279,7 @@ export default function App() {
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       splitDragCleanupRef.current = null
+      setOverviewPanelWidth(nextWidth)
     }
 
     splitDragCleanupRef.current = stopResize
@@ -3113,7 +3290,7 @@ export default function App() {
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
 
-    updateOverviewPanelWidthFromClientX(event.clientX)
+    nextWidth = updateOverviewPanelWidthFromClientX(event.clientX) ?? nextWidth
   }
 
   const handlePanelResizeKeyDown = (event) => {
@@ -3139,16 +3316,42 @@ export default function App() {
   const clampBottomTopHeightPx = (value) => Math.min(2400, Math.max(140, value))
   const clampBottomMiddleHeightPx = (value) => Math.min(2400, Math.max(140, value))
 
+  const updatePlanningGridRows = (topHeight, middleHeight) => {
+    const planningRow = splitPanelsRef.current?.querySelector('.planning-views-row')
+    if (!planningRow) {
+      return
+    }
+    planningRow.style.gridTemplateRows = [
+      expandedSections[panelSlotAssignment.bottomTop] ? `${topHeight}px` : 'auto',
+      '0.9rem',
+      expandedSections[panelSlotAssignment.bottomMiddle] ? `${middleHeight}px` : 'auto',
+      '0.9rem',
+      'auto',
+    ].join(' ')
+
+    const liveMapSlotHeight = panelSlotAssignment.bottomTop === 'mapView'
+      ? topHeight
+      : (panelSlotAssignment.bottomMiddle === 'mapView' ? middleHeight : null)
+    if (liveMapSlotHeight !== null) {
+      const liveMapHeight = Math.max(40, liveMapSlotHeight - MAP_PANEL_CHROME_OVERHEAD_PX)
+      missionMapRef.current?.setHeight(liveMapHeight)
+      const mapSidebar = splitPanelsRef.current?.querySelector('.map-sidebar')
+      if (mapSidebar) {
+        mapSidebar.style.maxHeight = `${liveMapHeight}px`
+      }
+    }
+  }
+
   const handleBottomRowResizeStart = (event) => {
     event.preventDefault()
 
     const startClientY = event.clientY
     const startHeight = bottomMiddleHeightPx
+    let nextHeight = startHeight
 
     const handlePointerMove = (moveEvent) => {
-      setBottomMiddleHeightPx(
-        clampBottomMiddleHeightPx(startHeight + (moveEvent.clientY - startClientY)),
-      )
+      nextHeight = clampBottomMiddleHeightPx(startHeight + (moveEvent.clientY - startClientY))
+      updatePlanningGridRows(bottomTopHeightPx, nextHeight)
     }
 
     const stopResize = () => {
@@ -3158,6 +3361,7 @@ export default function App() {
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       bottomRowResizeDragCleanupRef.current = null
+      setBottomMiddleHeightPx(nextHeight)
     }
 
     bottomRowResizeDragCleanupRef.current = stopResize
@@ -3186,9 +3390,11 @@ export default function App() {
 
     const startClientY = event.clientY
     const startHeight = bottomTopHeightPx
+    let nextHeight = startHeight
 
     const handlePointerMove = (moveEvent) => {
-      setBottomTopHeightPx(clampBottomTopHeightPx(startHeight + (moveEvent.clientY - startClientY)))
+      nextHeight = clampBottomTopHeightPx(startHeight + (moveEvent.clientY - startClientY))
+      updatePlanningGridRows(nextHeight, bottomMiddleHeightPx)
     }
 
     const stopResize = () => {
@@ -3198,6 +3404,7 @@ export default function App() {
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       planningRowResizeDragCleanupRef.current = null
+      setBottomTopHeightPx(nextHeight)
     }
 
     planningRowResizeDragCleanupRef.current = stopResize
@@ -3228,9 +3435,11 @@ export default function App() {
 
     const startClientY = event.clientY
     const startHeight = topPanelsHeightPx
+    let nextHeight = startHeight
 
     const handlePointerMove = (moveEvent) => {
-      setTopPanelsHeightPx(clampTopPanelsHeightPx(startHeight + (moveEvent.clientY - startClientY)))
+      nextHeight = clampTopPanelsHeightPx(startHeight + (moveEvent.clientY - startClientY))
+      splitPanelsRef.current?.style.setProperty('--top-panels-height', `${nextHeight}px`)
     }
 
     const stopResize = () => {
@@ -3240,6 +3449,7 @@ export default function App() {
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       topPanelsResizeDragCleanupRef.current = null
+      setTopPanelsHeightPx(nextHeight)
     }
 
     topPanelsResizeDragCleanupRef.current = stopResize
@@ -3270,7 +3480,6 @@ export default function App() {
   // panel occupying the resizable bottomTop slot (e.g. it got dragged into
   // the top row, or swapped to bottomBottom), since there's no divider
   // controlling its size in those positions.
-  const MAP_PANEL_CHROME_OVERHEAD_PX = 88
   const mapViewSlotHeightPx = panelSlotAssignment.bottomTop === 'mapView'
     ? bottomTopHeightPx
     : (panelSlotAssignment.bottomMiddle === 'mapView' ? bottomMiddleHeightPx : null)
@@ -3560,6 +3769,8 @@ export default function App() {
             ? getTradeOffAccentColor(item.tradeOffColorIndex)
             : 'transparent',
         }}
+        data-playback-start={item.startTimestamp}
+        data-playback-end={item.endTimestamp}
         onClick={() => handleTimelineItemClick(item)}
         aria-pressed={isLink ? marked : undefined}
         aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
@@ -4094,7 +4305,7 @@ export default function App() {
           </section>
   )
 
-  const tradeOffPanelNode = (
+  const tradeOffPanelNode = TRADE_OFF_PANEL_ENABLED ? (
           <section
             className={`panel tradeoff-panel ${expandedSections.tradeOff ? '' : 'panel--collapsed'}${getPanelDragClassName('tradeOff')}`}
             {...getPanelDropZoneProps('tradeOff')}
@@ -4218,7 +4429,7 @@ export default function App() {
               </div>
             )}
           </section>
-  )
+  ) : null
 
   const mapViewPanelNode = (
           <section
@@ -4264,9 +4475,10 @@ export default function App() {
                       )}
                     >
                       <MissionMap
+                        ref={missionMapRef}
                         heightPx={mapViewHeightPx}
                         assets={visibleMapAssets}
-                        satelliteTracks={satelliteTracks}
+                        satelliteTracks={preparedSatelliteTracks}
                         activeAssetId={activeMapAsset?.id ?? null}
                         onSelectAsset={setActiveMapAssetId}
                         timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
@@ -4678,6 +4890,7 @@ export default function App() {
                         {timelinePlayheadWindowRatio !== null && (
                           <div
                             className="timeline-playhead-thumb"
+                            data-playback-thumb
                             style={{ left: `${timelinePlayheadWindowRatio * 100}%` }}
                             role="slider"
                             tabIndex="0"
@@ -4695,7 +4908,9 @@ export default function App() {
                             <span className="timeline-playhead-handle" aria-hidden="true"></span>
                             <span className="timeline-playhead-label">
                               {timelineLive && <span className="timeline-playhead-live">Live</span>}
-                              {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
+                              <span data-playback-label>
+                                {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
+                              </span>
                             </span>
                           </div>
                         )}
@@ -4712,8 +4927,13 @@ export default function App() {
                       >
                         <div
                           className="timeline-time-canvas"
-                          style={{ width: `${timelineWidthPx}px` }}
+                          style={{
+                            width: `${timelineWidthPx}px`,
+                            '--timeline-hour-width': `${(60 / timelineModel.totalMinutes) * 100}%`,
+                            '--timeline-major-width': `${(120 / timelineModel.totalMinutes) * 100}%`,
+                          }}
                         >
+                      <div className="timeline-content-plane">
                       <div className="timeline-day-row">
                         {timelineModel.dayBands.map((band, index) => (
                           <div
@@ -4727,32 +4947,6 @@ export default function App() {
                             {band.label}
                           </div>
                         ))}
-
-                        {/* A position:absolute child's percentage `left`
-                            resolves against its CONTAINING BLOCK's
-                            padding-box -- for a direct child of the padded
-                            .timeline-time-canvas that's the canvas's full
-                            (padding-inclusive) width, which is NOT what the
-                            r*100% values here are computed against. Plain,
-                            non-padded rows like this one (and axis-row,
-                            track-row below) don't have that problem, so the
-                            now-line/marker-line are rendered once per row
-                            instead of once for the whole canvas -- see
-                            getTimelineScrollLeftForRatio's comment for the
-                            full derivation this depends on staying true. */}
-                        {timelinePlayheadOffsetMinutes !== null
-                          && timelinePlayheadOffsetMinutes >= 0
-                          && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
-                          <div
-                            className="timeline-playhead-marker-line"
-                            aria-hidden="true"
-                            style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                            onPointerDown={handleTimelineMarkerLinePointerDown}
-                            onPointerMove={handleTimelineMarkerLinePointerMove}
-                            onPointerUp={handleTimelineMarkerLinePointerUp}
-                            onPointerCancel={handleTimelineMarkerLinePointerUp}
-                          ></div>
-                        )}
                       </div>
 
                       <div className="timeline-axis-row">
@@ -4765,21 +4959,9 @@ export default function App() {
                             <span>{tick.label}</span>
                           </div>
                         ))}
-
-                        {timelinePlayheadOffsetMinutes !== null
-                          && timelinePlayheadOffsetMinutes >= 0
-                          && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
-                          <div
-                            className="timeline-playhead-marker-line"
-                            aria-hidden="true"
-                            style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                            onPointerDown={handleTimelineMarkerLinePointerDown}
-                            onPointerMove={handleTimelineMarkerLinePointerMove}
-                            onPointerUp={handleTimelineMarkerLinePointerUp}
-                            onPointerCancel={handleTimelineMarkerLinePointerUp}
-                          ></div>
-                        )}
                       </div>
+
+                      <div className="timeline-grid-backdrop" aria-hidden="true"></div>
 
                       {timelineRenderRows.map((renderRow) => {
                         const rowStyle = {
@@ -4806,35 +4988,28 @@ export default function App() {
                             className={`timeline-track-row timeline-track-row--${renderRow.type}`}
                             style={rowStyle}
                           >
-                            {timelineModel.ticks.map((tick) => (
-                              <div
-                                key={`${renderRow.key}-tick-${tick.offsetMinutes}`}
-                                className={`timeline-grid-line ${tick.offsetMinutes % 120 === 0 ? 'timeline-grid-line--major' : ''}`}
-                                style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                              ></div>
-                            ))}
-
                             {rowItems.map((item) => renderTimelineBar(item))}
-
-                            {timelinePlayheadOffsetMinutes !== null
-                              && timelinePlayheadOffsetMinutes >= 0
-                              && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
-                              <div
-                                className="timeline-playhead-marker-line"
-                                aria-hidden="true"
-                                style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                                onPointerDown={handleTimelineMarkerLinePointerDown}
-                                onPointerMove={handleTimelineMarkerLinePointerMove}
-                                onPointerUp={handleTimelineMarkerLinePointerUp}
-                                onPointerCancel={handleTimelineMarkerLinePointerUp}
-                              ></div>
-                            )}
                           </div>
                         )
                       })}
+                      {timelinePlayheadOffsetMinutes !== null
+                        && timelinePlayheadOffsetMinutes >= 0
+                        && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
+                        <div
+                          className="timeline-playhead-marker-line timeline-playhead-marker-line--full"
+                          data-timeline-playhead
+                          aria-hidden="true"
+                          style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                          onPointerDown={handleTimelineMarkerLinePointerDown}
+                          onPointerMove={handleTimelineMarkerLinePointerMove}
+                          onPointerUp={handleTimelineMarkerLinePointerUp}
+                          onPointerCancel={handleTimelineMarkerLinePointerUp}
+                        ></div>
+                      )}
                         </div>
                       </div>
                     </div>
+                  </div>
                   </div>
                 )}
 
@@ -5041,8 +5216,13 @@ export default function App() {
                       >
                         <div
                           className="timeline-time-canvas"
-                          style={{ width: `${timelineWidthPx}px` }}
+                          style={{
+                            width: `${timelineWidthPx}px`,
+                            '--timeline-hour-width': `${(60 / timelineModel.totalMinutes) * 100}%`,
+                            '--timeline-major-width': `${(120 / timelineModel.totalMinutes) * 100}%`,
+                          }}
                         >
+                          <div className="timeline-content-plane">
                           <div className="timeline-axis-row">
                             {timelineModel.ticks.map((tick) => (
                               <div
@@ -5055,16 +5235,10 @@ export default function App() {
                             ))}
                           </div>
 
+                          <div className="timeline-grid-backdrop timeline-grid-backdrop--data" aria-hidden="true"></div>
+
                           {dataVolumeModel.series.map((series) => (
                             <div key={`${series.id}-row`} className="data-volume-row">
-                              {timelineModel.ticks.map((tick) => (
-                                <div
-                                  key={`${series.id}-grid-${tick.offsetMinutes}`}
-                                  className={`timeline-grid-line ${tick.offsetMinutes % 120 === 0 ? 'timeline-grid-line--major' : ''}`}
-                                  style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                                ></div>
-                              ))}
-
                               <svg
                                 className="data-volume-chart"
                                 viewBox="0 0 1000 100"
@@ -5114,17 +5288,19 @@ export default function App() {
                                 </button>
                               ))}
 
-                              {timelinePlayheadOffsetMinutes !== null
-                                && timelinePlayheadOffsetMinutes >= 0
-                                && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
-                                <div
-                                  className="timeline-playhead-marker-line"
-                                  aria-hidden="true"
-                                  style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                                ></div>
-                              )}
                             </div>
                           ))}
+                          {timelinePlayheadOffsetMinutes !== null
+                            && timelinePlayheadOffsetMinutes >= 0
+                            && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
+                            <div
+                              className="timeline-playhead-marker-line timeline-playhead-marker-line--full"
+                              data-timeline-playhead
+                              aria-hidden="true"
+                              style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
+                            ></div>
+                          )}
+                          </div>
                         </div>
                       </div>
                     </div>
