@@ -233,9 +233,7 @@ def test_trade_off_request_with_buffer_configs_dto():
         ),
     )
 
-    task_id = "task_dto_test"
-    state_manager.create_task_entry()
-    state_manager.update_task(task_id, status="queued", message="Queued")
+    task_id = state_manager.create_task_entry()
 
     run_process_trade_offs_task(
         task_id=task_id,
@@ -264,7 +262,10 @@ def test_filter_pipeline_custom_downlink_rate():
             run_id="test_run",
             start_time=datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc),
             end_time=datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc),
+            global_track_step_seconds=10.0,
+            overpass_profile_step_seconds=5.0,
         ),
+        global_tracks=[],
         overpass_blocks=[
             OverpassBlock(
                 overpass_id="op_sat1",
@@ -274,6 +275,7 @@ def test_filter_pipeline_custom_downlink_rate():
                 end_time=datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc),
                 duration_seconds=600.0,
                 max_elevation_deg=45.0,
+                high_res_trajectory=[],
             ),
             OverpassBlock(
                 overpass_id="op_sat2",
@@ -283,6 +285,7 @@ def test_filter_pipeline_custom_downlink_rate():
                 end_time=datetime(2026, 8, 18, 11, 10, 0, tzinfo=timezone.utc),
                 duration_seconds=600.0,
                 max_elevation_deg=45.0,
+                high_res_trajectory=[],
             )
         ]
     )
