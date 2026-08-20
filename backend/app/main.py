@@ -17,9 +17,10 @@ credentials_path = Path("SatOS_credentials/credentials.env")
 if not credentials_path.exists():
     credentials_path = Path(__file__).resolve().parent.parent / "SatOS_credentials" / "credentials.env"
 
-# Make sure the .env file exists and is filled correctly
+# Load local credentials if present; fall back to tracked example defaults.
 if not load_dotenv(credentials_path):
-    raise Exception(f"No .env file found or empty at {credentials_path}")
+    example_credentials_path = credentials_path.with_name("credentials.env.example")
+    load_dotenv(example_credentials_path)
 
 
 
