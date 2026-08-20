@@ -62,13 +62,15 @@ class ForwardSimulationScheduler(BaseScheduler):
                     _ensure_utc(act.start_event.timestamp)
                     for acts in asset_schedules.values()
                     for act in acts
-                    if abs((_ensure_utc(act.start_event.timestamp) - min_link_t).total_seconds()) <= 86400 * 2
+                    if act.start_event and getattr(act.start_event, "timestamp", None) is not None
+                    and abs((_ensure_utc(act.start_event.timestamp) - min_link_t).total_seconds()) <= 86400 * 2
                 ]
                 activity_ends = [
                     _ensure_utc(act.end_event.timestamp)
                     for acts in asset_schedules.values()
                     for act in acts
-                    if abs((_ensure_utc(act.end_event.timestamp) - max_link_t).total_seconds()) <= 86400 * 2
+                    if act.end_event and getattr(act.end_event, "timestamp", None) is not None
+                    and abs((_ensure_utc(act.end_event.timestamp) - max_link_t).total_seconds()) <= 86400 * 2
                 ]
                 scenario_start = min([min_link_t] + activity_starts) if scenario_start is None else scenario_start
                 scenario_end = max([max_link_t] + activity_ends) if scenario_end is None else scenario_end
@@ -112,6 +114,10 @@ class ForwardSimulationScheduler(BaseScheduler):
         for sat_name, activities in asset_schedules.items():
             if sat_name in satellite_configs:
                 for act in activities:
+                    if not act.start_event or getattr(act.start_event, "timestamp", None) is None:
+                        continue
+                    if not act.end_event or getattr(act.end_event, "timestamp", None) is None:
+                        continue
                     act_start = _ensure_utc(act.start_event.timestamp)
                     act_end = _ensure_utc(act.end_event.timestamp)
 

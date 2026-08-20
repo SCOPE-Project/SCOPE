@@ -219,14 +219,18 @@ class AssetRepository:
                 position_r = [float(val) for val in var.matrixDefinition.defaultValue]
                 if position_r[0] == 0.0 or position_r[1] == 0.0 or position_r[2] == 0.0:
                     warnings.warn(f"{satellite_name}: Position vector has 0.0 as one of its components. Is this correct or an API default?", UserWarning)
-                
+                if len(position_r) != 3:
+                    raise ValueError(f"{satellite_name}: 'position_vector' must contain exactly 3 float values.")
+
             elif var.name == "velocity_vector":
                 if not var.matrixDefinition or var.matrixDefinition.defaultValue is None:
                     raise ValueError(f"{satellite_name}: Malformed satellite model: 'velocity_vector' missing definition or value.")
                 velocity_v = [float(val) for val in var.matrixDefinition.defaultValue]
                 if velocity_v[0] == 0.0 or velocity_v[1] == 0.0 or velocity_v[2] == 0.0:
                     warnings.warn(f"{satellite_name}: Velocity vector has 0.0 as one of its components. Is this correct or an API default?", UserWarning)
-                
+                if len(velocity_v) != 3:
+                    raise ValueError(f"{satellite_name}: 'velocity_vector' must contain exactly 3 float values.")
+
             elif var.name == "state_timestamp":
                 if not var.timeDefinition or var.timeDefinition.defaultValue is None:
                     raise ValueError(f"{satellite_name}: Malformed satellite model: 'state_timestamp' missing definition or value.")
@@ -274,7 +278,7 @@ class AssetRepository:
         latitude = None
         longitude = None
         min_link_elevation = None
-        
+
         # 3. Extract values and fail hard on malformed definitions
         for var in groundstation_model.variableDefinitions:
             if var.name == "latitude":
@@ -283,14 +287,14 @@ class AssetRepository:
                 latitude = float(var.floatDefinition.defaultValue)
                 if latitude == 0.0:
                     warnings.warn(f"{groundstation_name}: Latitude is 0.0, is this correct or an API default?", UserWarning)
-                    
+
             elif var.name == "longitude":
                 if not var.floatDefinition or var.floatDefinition.defaultValue is None:
                     raise ValueError(f"{groundstation_name}: Malformed groundstation model: 'longitude' missing definition or value.")
                 longitude = float(var.floatDefinition.defaultValue)
                 if longitude == 0.0:
                     warnings.warn(f"{groundstation_name}: Longitude is 0.0, is this correct or an API default?", UserWarning)
-                    
+
             elif var.name == "min_link_elevation":
                 if not var.floatDefinition or var.floatDefinition.defaultValue is None:
                     raise ValueError(f"{groundstation_name}: Malformed groundstation model: 'min_link_elevation' missing definition or value.")
@@ -305,58 +309,33 @@ class AssetRepository:
             raise ValueError(f"{groundstation_name}: Missing required variable: 'longitude'")
         if min_link_elevation is None:
             raise ValueError(f"{groundstation_name}: Missing required variable: 'min_link_elevation'")
-        
+
+        # 5. Create internal domain model
         groundstation_information = GroundStationInformation(
             name=groundstation_name,
             latitude=latitude,
             longitude=longitude,
-            min_link_elevation=min_link_elevation,
+            min_link_elevation=min_link_elevation
         )
         
-        # 5. Cache and return
+        # 6. Cache and return
         cls._groundstation_infos[groundstation_name] = groundstation_information
         return groundstation_information
-    
-    @classmethod
-    def get_schedule(cls, schedule_name: str) -> list[ActivityInfoModel]:
-        """
-        Retrieves the schedule information, fetching from SatOS if not cached.
-        """
-        if schedule_name in cls._raw_schedules:
-            return cls._raw_schedules[schedule_name]
-        
-        try:
-            schedule_information = satos_get_activities_list(schedule_name=schedule_name)
-            cls._raw_schedules[schedule_name] = schedule_information
-            
-            # Keep _schedules list in sync
-            cls._schedules = [s for s in cls._schedules if s.name != schedule_name]
-            cls._schedules.append(
-                AssetSchedule(
-                    name=schedule_name,
-                    activities=[
-                        Activity(
-                            uuid=act.uuid,
-                            schedule_name=act.schedule_name,
-                            status=act.status,
-                            start_event=act.start_event,
-                            end_event=act.end_event,
-                            name=getattr(act, "name", "") or "",
-                        )
-                        for act in schedule_information
-                    ]
-                )
-            )
-            
-            return schedule_information
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch schedule information for {schedule_name} from SatOS: {e}")
+
+    # =========================================================================
+    # Scheduled Links -> SatOS Activity Bridge
+    # =========================================================================
 
     @classmethod
-    def create_activities_from_link_block(cls, link: LinkBlock) -> tuple[Activity, Activity]:
+    def create_activity_pair_from_link_block(
+        cls,
+        link: LinkBlock,
+    ) -> tuple[Activity, Activity]:
         """
-        Converts a LinkBlock into 2 ScheduleEventModel objects (AOS and LOS)
-        and 2 Activity objects (one for the satellite, one for the ground station).
+        Converts a single LinkBlock into a pair of correlated SatOS Activity objects:
+        one for the satellite schedule and one for the ground station schedule.
+        Both share the same AOS (start) and LOS (end) ScheduleEvent timestamps,
+        and receive distinct, deterministic UUIDs.
 
         :param link: LinkBlock domain object
         :return: (satellite_activity, groundstation_activity)
@@ -392,13 +371,18 @@ class AssetRepository:
         )
 
         # 3. Create Satellite Activity
+        act_name = f"Pass {link.satellite_name} - {link.groundstation_name} at {start_time.isoformat()}"
         sat_activity = Activity(
             uuid=uuid.uuid4(),
             schedule_name=link.satellite_name,
             status=int(ActivityStatus.SUSPENDED),
             start_event=aos_event,
             end_event=los_event,
-            name=f"Pass {link.satellite_name} - {link.groundstation_name} at {link.start_time.isoformat()}",
+            name=act_name,
+            description=act_name,
+            priority=1,
+            initiator="SCOPE_Scheduler",
+            executor=link.satellite_name,
         )
 
         # 4. Create Ground Station Activity
@@ -408,61 +392,78 @@ class AssetRepository:
             status=int(ActivityStatus.SUSPENDED),
             start_event=aos_event,
             end_event=los_event,
-            name=f"Pass {link.satellite_name} - {link.groundstation_name} at {link.start_time.isoformat()}",
+            name=act_name,
+            description=act_name,
+            priority=1,
+            initiator="SCOPE_Scheduler",
+            executor=link.groundstation_name,
         )
 
         return sat_activity, gs_activity
 
-    @classmethod
-    def create_activities_from_link_blocks(cls, links: list[LinkBlock]) -> list[Activity]:
-        """
-        Converts a list of LinkBlock objects into a list of Activity objects (2 activities per link).
+    create_activities_from_link_block = create_activity_pair_from_link_block
 
-        :param links: list of LinkBlock domain objects
-        :return: list of Activity objects (length 2 * len(links))
+    @classmethod
+    def create_activities_from_link_blocks(
+        cls,
+        links: list[LinkBlock],
+    ) -> list[Activity]:
+        """
+        Converts a collection of LinkBlock domain objects into a flat list
+        of SatOS Activity domain objects (two per link: satellite and groundstation).
+
+        :param links: sequence of LinkBlock domain objects
+        :return: flat list of Activity domain objects
         """
         activities: list[Activity] = []
         for link in links:
-            sat_act, gs_act = cls.create_activities_from_link_block(link)
-            activities.append(sat_act)
-            activities.append(gs_act)
+            sat_act, gs_act = cls.create_activity_pair_from_link_block(link)
+            activities.extend([sat_act, gs_act])
         return activities
 
     @classmethod
     def create_activity_from_dto(cls, dto: ActivityDTO) -> Activity:
         """
-        Converts an ActivityDTO into 2 ScheduleEventModel objects (start and end)
-        and 1 Activity domain object.
+        Creates a domain Activity object from an ActivityDTO.
+
+        :param dto: ActivityDTO model
+        :return: Activity domain object
         """
-        start_time = dto.start_time
-        if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
+        if isinstance(dto.start_time, datetime):
+            start_ts = dto.start_time
+        else:
+            start_ts = datetime.fromisoformat(str(dto.start_time))
+        if start_ts.tzinfo is None:
+            start_ts = start_ts.replace(tzinfo=timezone.utc)
 
-        end_time = dto.end_time
-        if end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=timezone.utc)
-
-        event_prefix = dto.name if dto.name else f"Activity_{dto.schedule_name}"
-        short_id = uuid.uuid4().hex[:8]
+        if isinstance(dto.end_time, datetime):
+            end_ts = dto.end_time
+        else:
+            end_ts = datetime.fromisoformat(str(dto.end_time))
+        if end_ts.tzinfo is None:
+            end_ts = end_ts.replace(tzinfo=timezone.utc)
 
         start_event = ScheduleEventModel(
             uuid=uuid.uuid4(),
-            id=f"{event_prefix}_START_{short_id}",
-            name=f"{dto.name} - Start" if dto.name else f"Start: {dto.schedule_name}",
-            timestamp=start_time,
+            id=f"{dto.name}_start_{uuid.uuid4().hex[:8]}",
+            name=f"{dto.name} - Start",
+            timestamp=start_ts,
             schedule_1=dto.schedule_name,
         )
 
         end_event = ScheduleEventModel(
             uuid=uuid.uuid4(),
-            id=f"{event_prefix}_END_{short_id}",
-            name=f"{dto.name} - End" if dto.name else f"End: {dto.schedule_name}",
-            timestamp=end_time,
+            id=f"{dto.name}_end_{uuid.uuid4().hex[:8]}",
+            name=f"{dto.name} - End",
+            timestamp=end_ts,
             schedule_1=dto.schedule_name,
         )
 
+        dto_uuid = getattr(dto, "uuid", None)
+        act_uuid = uuid.UUID(str(dto_uuid)) if dto_uuid else uuid.uuid4()
+
         return Activity(
-            uuid=uuid.uuid4(),
+            uuid=act_uuid,
             schedule_name=dto.schedule_name,
             status=dto.status,
             start_event=start_event,
@@ -470,22 +471,24 @@ class AssetRepository:
             name=dto.name,
             description=dto.description,
             priority=dto.priority,
-            initiator=dto.initiator or dto.schedule_name,
-            executor=dto.executor or dto.schedule_name,
+            initiator=dto.initiator,
+            executor=dto.executor,
         )
 
     @classmethod
     def create_activities_from_dtos(cls, dtos: list[ActivityDTO]) -> list[Activity]:
         """
-        Converts a list of ActivityDTOs into a list of Activity domain objects.
+        Converts a list of ActivityDTO objects to a list of Activity domain objects.
+
+        :param dtos: list of ActivityDTO models
+        :return: list of Activity domain objects
         """
         return [cls.create_activity_from_dto(dto) for dto in dtos]
 
     @classmethod
     def push_activities_to_satos(cls, activities: list[Activity]) -> list[Activity]:
         """
-        Pushes Activity objects to SatOS, synchronizes the local _schedules cache,
-        and returns the created activities.
+        Pushes a list of Activity objects to SatOS and synchronizes the local _schedules cache.
 
         :param activities: list of Activity domain objects
         :return: list of pushed Activity objects

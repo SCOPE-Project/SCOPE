@@ -2,20 +2,16 @@
 CLI Script: Process Trade-Off Groups & Schedule Multi-Pass Downlinks.
 
 Usage:
-    python scripts/process_tradeoffs.py --input-file <PATH_TO_LINKS_JSON> [--strategy <NAME>] [--urgency-alpha <FLOAT>] [--initial-buffers <KEY=VAL,...>] [--output-file <PATH_TO_OUTPUT_JSON>] [--commit-to-satos]
-    python scripts/process_tradeoffs.py --filter-run-id <FILTER_RUN_ID> [--strategy <NAME>] [--commit-to-satos]
+    python scripts/process_tradeoffs.py --filter-run-id <FILTER_RUN_ID> [--strategy <NAME>] [--strategy-params <KEY=VAL,...>] [--initial-buffers <KEY=VAL,...>] [--commit-to-satos]
 
-Note:
-    Ingests filtered LinkBlock candidates, constructs mutual exclusion trade-off groups, runs the
-    multi-pass data buffer forward simulation, and optionally commits confirmed links to SatOS.
+Description:
+    Fetches filtered LinkBlock candidates from LinkRepository, constructs mutual exclusion trade-off groups,
+    runs the multi-pass data buffer forward simulation, and optionally commits confirmed links to SatOS.
 """
 
 import sys
-import os
-import json
 import argparse
-import uuid
-from datetime import datetime, timezone
+from typing import Dict, Any
 from pathlib import Path
 
 # Ensure backend root is on sys.path
@@ -33,245 +29,182 @@ credentials_path = backend_dir / "SatOS_credentials" / "credentials.env"
 if credentials_path.exists():
     load_dotenv(credentials_path)
 
-from core.models.scheduling import (
-    LinkBlock,
-    LinkEligibilityStatus,
-    SchedulingSession,
-)
-from core.models.propagation import OverpassProfilePoint
 from app.repositories import LinkRepository, AssetRepository
 from core.scheduling.session_manager import SchedulingSessionManager
 from core.scheduling.strategy import get_scoring_rule
-from app.models.scheduling import SessionPlanDTO
 
 
-def load_links_from_json(json_path: Path) -> list[LinkBlock]:
-    """Loads a list of LinkBlock objects from a JSON file."""
-    if not json_path.exists():
-        print(f"HARD FAIL: Input file '{json_path}' does not exist.", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        data = json.loads(json_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"HARD FAIL: Error reading JSON file '{json_path}': {e}", file=sys.stderr)
-        sys.exit(1)
-
-    items = data if isinstance(data, list) else data.get("links", data.get("candidate_links", []))
-    links: list[LinkBlock] = []
-
-    for idx, item in enumerate(items):
-        start_time = datetime.fromisoformat(item["start_time"])
-        end_time = datetime.fromisoformat(item["end_time"])
-        if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
-        if end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=timezone.utc)
-
-        pts = []
-        for p in item.get("high_res_trajectory", []):
-            pt_time = datetime.fromisoformat(p["timestamp"]) if isinstance(p["timestamp"], str) else p["timestamp"]
-            if pt_time.tzinfo is None:
-                pt_time = pt_time.replace(tzinfo=timezone.utc)
-            pts.append(
-                OverpassProfilePoint(
-                    timestamp=pt_time,
-                    latitude_deg=float(p.get("latitude_deg", 0.0)),
-                    longitude_deg=float(p.get("longitude_deg", 0.0)),
-                    altitude_m=float(p.get("altitude_m", 0.0)),
-                    elevation_deg=float(p.get("elevation_deg", 0.0)),
-                    azimuth_deg=float(p.get("azimuth_deg", 0.0)),
-                    range_m=float(p.get("range_m", 0.0)),
-                )
-            )
-
-        elig_str = item.get("eligibility_status", "eligible")
+def parse_key_value_pairs(kv_string: str) -> Dict[str, float]:
+    """Parse comma-separated key=value pairs into a float dictionary."""
+    result: Dict[str, float] = {}
+    if not kv_string:
+        return result
+    for pair in kv_string.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            raise ValueError(f"Invalid key=value format in '{pair}'. Expected 'KEY=FLOAT'.")
+        k, v = pair.split("=", 1)
         try:
-            elig_status = LinkEligibilityStatus(elig_str)
-        except Exception:
-            elig_status = LinkEligibilityStatus.ELIGIBLE if item.get("is_eligible", True) else LinkEligibilityStatus.EXCLUDED_BY_PEAK_ELEVATION
-
-        links.append(
-            LinkBlock(
-                link_id=item.get("link_id", f"link_{idx}"),
-                satellite_name=item["satellite_name"],
-                groundstation_name=item["groundstation_name"],
-                start_time=start_time,
-                end_time=end_time,
-                duration_seconds=float(item.get("duration_seconds", (end_time - start_time).total_seconds())),
-                max_elevation_deg=float(item.get("max_elevation_deg", 0.0)),
-                overpass_id=item.get("overpass_id", ""),
-                estimated_data_capacity_mb=float(item.get("estimated_data_capacity_mb", 0.0)),
-                high_res_trajectory=pts,
-                is_eligible=item.get("is_eligible", True),
-                eligibility_status=elig_status,
-                ineligibility_reason=item.get("ineligibility_reason"),
-                conflicting_activity_uuid=item.get("conflicting_activity_uuid"),
-            )
-        )
-
-    return links
+            result[k.strip()] = float(v.strip())
+        except ValueError:
+            raise ValueError(f"Value for key '{k}' must be a float, got '{v}'.")
+    return result
 
 
-def parse_initial_buffers(buf_arg: str | None) -> dict[str, float]:
-    """Parses buffer definitions like 'Sat-1=100.0,Sat-2=500.0' or JSON string."""
-    if not buf_arg:
-        return {}
-    if buf_arg.startswith("{"):
-        return json.loads(buf_arg)
-    res = {}
-    for pair in buf_arg.split(","):
-        if "=" in pair:
-            k, v = pair.split("=", 1)
-            res[k.strip()] = float(v.strip())
-    return res
-
-
-def export_session_to_json(session: SchedulingSession, output_path: Path) -> None:
-    """Exports the complete SchedulingSession plan and profiles to a JSON file."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    dto = SessionPlanDTO.from_domain(session)
-    output_path.write_text(json.dumps(dto.model_dump(mode="json"), indent=2, default=str), encoding="utf-8")
-    print(f"Exported session plan to '{output_path}'.")
+def parse_generic_params(param_string: str) -> Dict[str, Any]:
+    """Parse comma-separated key=value parameter string into typed Python dictionary."""
+    params: Dict[str, Any] = {}
+    if not param_string:
+        return params
+    for pair in param_string.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            raise ValueError(f"Invalid parameter format in '{pair}'. Expected 'KEY=VALUE'.")
+        k, v = pair.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        try:
+            if "." in v:
+                params[k] = float(v)
+            else:
+                params[k] = int(v)
+        except ValueError:
+            if v.lower() in ("true", "yes"):
+                params[k] = True
+            elif v.lower() in ("false", "no"):
+                params[k] = False
+            else:
+                params[k] = v
+    return params
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build conflict graph, evaluate trade-offs, and simulate satellite data buffer schedule."
+        description="Run multi-pass downlink scheduling and trade-off optimization from LinkRepository."
     )
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--input-file",
-        type=str,
-        help="Path to JSON file containing filtered LinkBlock candidates.",
-    )
-    group.add_argument(
-        "--filter-run-id",
-        type=str,
-        help="Filter run ID of LinkBlocks already cached in LinkRepository.",
-    )
-
     parser.add_argument(
-        "--strategy",
+        "--filter-run-id", "-f",
+        type=str,
+        required=True,
+        help="Filter Run ID of candidate LinkBlocks in LinkRepository.",
+    )
+    parser.add_argument(
+        "--strategy", "-s",
         type=str,
         default="buffer_overflow_avoidance",
-        choices=["buffer_overflow_avoidance", "max_downlink_throughput", "max_pass_duration"],
-        help="Objective scoring strategy rule (default: buffer_overflow_avoidance).",
+        help="Pluggable scoring strategy name (default: 'buffer_overflow_avoidance').",
     )
     parser.add_argument(
-        "--urgency-alpha",
-        type=float,
-        default=2.0,
-        help="Urgency sensitivity multiplier exponent for buffer urgency scoring (default: 2.0).",
-    )
-    parser.add_argument(
-        "--initial-buffers",
+        "--strategy-params",
         type=str,
-        default=None,
-        help="Initial satellite storage levels in MB (e.g. 'Sat-1=100,Sat-2=450').",
+        default="",
+        help="Comma-separated strategy hyperparameters (e.g. 'alpha=2.5,exponent=2.0').",
     )
     parser.add_argument(
-        "--output-file",
+        "--initial-buffers", "-b",
         type=str,
-        default=None,
-        help="Optional path to export full schedule plan and telemetry curves to JSON.",
+        default="",
+        help="Comma-separated initial satellite buffer levels in MB (e.g. 'Sat1_Group1=500.0,Sat2_Group1=200.0').",
     )
     parser.add_argument(
         "--commit-to-satos",
         action="store_true",
-        help="Push the final scheduled links to SatOS as active schedule events.",
-    )
-    parser.add_argument(
-        "--no-satos",
-        action="store_true",
-        help="Skip querying SatOS server for live schedules (use local/empty cache).",
+        help="Push confirmed scheduled link activities directly to SatOS schedule.",
     )
 
     args = parser.parse_args()
 
-    # Initialize SatOS schedules if enabled
-    if not args.no_satos:
-        try:
-            print("Connecting to SatOS to fetch baseline activities...")
-            AssetRepository.initialize_repository()
-            print("Successfully loaded baseline schedules from SatOS.")
-        except Exception as e:
-            print(f"[WARNING] Could not fetch schedules from SatOS: {e}. Proceeding with local cache.")
+    # 1. Fetch links from LinkRepository (Hard fail if missing)
+    filter_run_id = args.filter_run_id
+    links = LinkRepository.get_links(filter_run_id)
+    if links is None:
+        print(f"HARD FAIL: Filter run ID '{filter_run_id}' not found in LinkRepository. Ensure links have been filtered first.", file=sys.stderr)
+        sys.exit(1)
 
-    # Ingest LinkBlocks
-    if args.input_file:
-        json_path = Path(args.input_file)
-        links = load_links_from_json(json_path)
-        filter_run_id = f"cli_{uuid.uuid4().hex[:8]}"
-        LinkRepository.save_links(filter_run_id, links)
-        print(f"Loaded {len(links)} candidate links from '{json_path}' (Filter Run ID: {filter_run_id}).")
-    else:
-        filter_run_id = args.filter_run_id
-        links = LinkRepository.get_links(filter_run_id)
-        if not links:
-            print(f"HARD FAIL: Filter run ID '{filter_run_id}' not found in LinkRepository.", file=sys.stderr)
-            sys.exit(1)
+    print(f"Loaded {len(links)} candidate links from LinkRepository (Filter Run ID: {filter_run_id}).")
 
-    initial_buffers = parse_initial_buffers(args.initial_buffers)
-    print(f"\nExecuting forward simulation with strategy='{args.strategy}' (alpha={args.urgency_alpha})...")
+    # 2. Parse initial buffers and hyperparameters
+    try:
+        initial_buffers = parse_key_value_pairs(args.initial_buffers) if args.initial_buffers else None
+        strategy_params = parse_generic_params(args.strategy_params) if args.strategy_params else {}
+    except ValueError as e:
+        print(f"HARD FAIL: Invalid parameter format: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
+    # 3. Instantiate scoring rule and SchedulingSessionManager
+    try:
+        scoring_rule = get_scoring_rule(args.strategy, **strategy_params)
+    except Exception as e:
+        print(f"HARD FAIL: Error configuring strategy '{args.strategy}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Executing forward simulation with strategy='{args.strategy}' (parameters={strategy_params})...")
+    asset_scheds = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
     session = SchedulingSessionManager.create_session(
-        filter_run_id=filter_run_id,
+        filter_run_id=args.filter_run_id,
         candidate_links=links,
-        asset_schedules=asset_schedules,
+        asset_schedules=asset_scheds,
         initial_buffer_levels_mb=initial_buffers,
         scoring_strategy=args.strategy,
-        urgency_alpha=args.urgency_alpha,
+        scoring_parameters=strategy_params,
     )
 
-    # Display Results
-    scheduled_links = [status for status in session.current_plan.values() if status.is_scheduled]
-    unscheduled_links = [status for status in session.current_plan.values() if not status.is_scheduled]
-
-    print(f"\n=======================================================")
-    print(f"  Scheduling Plan (Session ID: {session.session_id})")
-    print(f"=======================================================")
-    print(f"Total Trade-Off Groups: {len(session.conflict_structure.trade_off_groups)}")
-    print(f"Total Candidate Passes: {len(session.current_plan)}")
-    print(f"  - Scheduled:   {len(scheduled_links)}")
-    print(f"  - Unscheduled: {len(unscheduled_links)}")
-    print("-------------------------------------------------------")
-
-    print("\n[SCHEDULED LINKS]")
-    for s in sorted(scheduled_links, key=lambda x: x.link.start_time):
-        l = s.link
-        print(f"  * {l.satellite_name} <-> {l.groundstation_name} | {l.start_time.isoformat()} -> {l.end_time.isoformat()} | Offloaded: {s.useful_data_offloaded_mb:.1f} MB (Group: {s.tradeoff_id})")
-
-    if unscheduled_links:
-        print("\n[UNSCHEDULED / REJECTED PASSES]")
-        for u in sorted(unscheduled_links, key=lambda x: x.link.start_time):
-            l = u.link
-            print(f"  x {l.satellite_name} <-> {l.groundstation_name} | {l.start_time.isoformat()} -> {l.end_time.isoformat()} | Reason: {u.rejection_reason}")
+    plan = session.current_plan
+    scheduled_statuses = [st for st in plan.values() if st.is_scheduled]
+    unscheduled_statuses = [st for st in plan.values() if not st.is_scheduled]
 
     print("\n=======================================================")
-    print(f"  Satellite Data Buffer Telemetry")
-    print(f"=======================================================")
-    for sat, prof in session.satellite_buffer_profiles.items():
-        print(f"Satellite: {sat}")
+    print(f"  Scheduling Plan (Session ID: {session.session_id})")
+    print("=======================================================")
+    print(f"Total Trade-Off Groups: {len(session.conflict_structure.trade_off_groups)}")
+    print(f"Total Candidate Passes: {len(links)}")
+    print(f"  - Scheduled:   {len(scheduled_statuses)}")
+    print(f"  - Unscheduled: {len(unscheduled_statuses)}")
+    print("-------------------------------------------------------")
+
+    if scheduled_statuses:
+        print("\n[SCHEDULED LINKS]")
+        for sp in scheduled_statuses:
+            l = sp.link
+            st_str = l.start_time.isoformat() if hasattr(l.start_time, "isoformat") else str(l.start_time)
+            et_str = l.end_time.isoformat() if hasattr(l.end_time, "isoformat") else str(l.end_time)
+            print(f"  * {l.satellite_name} <-> {l.groundstation_name} | {st_str} -> {et_str} | Offloaded: {sp.useful_data_offloaded_mb:.1f} MB (Group: {sp.tradeoff_id})")
+
+    if unscheduled_statuses:
+        print("\n[UNSCHEDULED / REJECTED PASSES]")
+        for up in unscheduled_statuses:
+            l = up.link
+            st_str = l.start_time.isoformat() if hasattr(l.start_time, "isoformat") else str(l.start_time)
+            et_str = l.end_time.isoformat() if hasattr(l.end_time, "isoformat") else str(l.end_time)
+            print(f"  x {l.satellite_name} <-> {l.groundstation_name} | {st_str} -> {et_str} | Reason: {up.rejection_reason}")
+
+    print("\n=======================================================")
+    print("  Satellite Data Buffer Telemetry")
+    print("=======================================================")
+    for sat_name, prof in session.satellite_buffer_profiles.items():
+        print(f"Satellite: {sat_name}")
         print(f"  Capacity:    {prof.capacity_mb:.1f} MB")
         print(f"  Generated:   {prof.total_generated_mb:.1f} MB")
         print(f"  Downlinked:  {prof.total_downlinked_mb:.1f} MB")
         print(f"  Final Level: {prof.final_level_mb:.1f} MB (Peak: {prof.peak_level_mb:.1f} MB)")
-        if prof.total_lost_mb > 0:
-            print(f"  [ALERT] Overflow Data Lost: {prof.total_lost_mb:.1f} MB ({len(prof.overflow_events)} event(s))")
 
-    if args.output_file:
-        export_session_to_json(session, Path(args.output_file))
-
+    # 4. Commit to SatOS if requested
     if args.commit_to_satos:
-        print("\nCommitting scheduled links to SatOS...")
-        scheduled_domain_links = [s.link for s in scheduled_links]
-        if not scheduled_domain_links:
-            print("[INFO] No scheduled links to commit.")
+        if not scheduled_statuses:
+            print("\n[WARNING] No scheduled passes to commit to SatOS.")
         else:
-            activities = AssetRepository.push_scheduled_links_to_satos(scheduled_domain_links)
-            print(f"[SUCCESS] Pushed {len(activities)} activity record(s) to SatOS.")
+            print(f"\nPushing {len(scheduled_statuses)} scheduled links to SatOS...")
+            scheduled_links = [sp.link for sp in scheduled_statuses]
+            try:
+                pushed_activities = AssetRepository.push_scheduled_links_to_satos(scheduled_links)
+                print(f"[OK] Successfully created and pushed {len(pushed_activities)} activities to SatOS.")
+            except Exception as e:
+                print(f"HARD FAIL: Failed to commit scheduled links to SatOS: {e}", file=sys.stderr)
+                sys.exit(1)
 
     print("\n[SUCCESS] Trade-off processing completed.")
 

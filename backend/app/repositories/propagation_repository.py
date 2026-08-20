@@ -12,19 +12,19 @@ class PropagationResultRepository:
 
     @classmethod
     def save_result(cls, result: PropagationResult) -> None:
-        """Stores a propagation result using its run_id."""
+        """Stores a propagation result, keyed by its run_id."""
         with cls._lock:
             cls._results[result.metadata.run_id] = result
 
     @classmethod
     def get_result(cls, run_id: str) -> Optional[PropagationResult]:
-        """Retrieves a propagation result by run_id."""
+        """Retrieves a propagation result by run_id, or None if not found."""
         with cls._lock:
             return cls._results.get(run_id)
 
     @classmethod
     def list_results(cls) -> List[PropagationResult]:
-        """Retrieves all propagation results currently stored."""
+        """Retrieves all propagation results currently stored in memory."""
         with cls._lock:
             return list(cls._results.values())
 
@@ -32,11 +32,10 @@ class PropagationResultRepository:
     def delete_result(cls, run_id: str) -> None:
         """Deletes a propagation result by run_id."""
         with cls._lock:
-            if run_id in cls._results:
-                del cls._results[run_id]
+            cls._results.pop(run_id, None)
 
     @classmethod
     def clear(cls) -> None:
-        """Clears all stored propagation results."""
+        """Clears all stored propagation results in memory."""
         with cls._lock:
             cls._results.clear()

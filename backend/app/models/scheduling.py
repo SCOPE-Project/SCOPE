@@ -1,6 +1,6 @@
 # app/models/scheduling.py
 from datetime import datetime
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 from core.models.scheduling import (
@@ -13,6 +13,13 @@ from core.models.scheduling import (
     SchedulingSession,
 )
 from core.orbit_engine.time_utils import to_utc_iso_string
+from core.scheduling.strategy import (
+    BaseScoringRule,
+    BufferUrgencyScoringRule,
+    ThroughputScoringRule,
+    DurationScoringRule,
+    get_scoring_rule,
+)
 
 
 # ========================================
@@ -169,10 +176,44 @@ class TradeOffGroupDTO(BaseModel):
         )
 
 
+# ========================================
+# Scoring Strategy DTOs
+# ========================================
+
+class ScoringStrategyConfigDTO(BaseModel):
+    name: str = Field(
+        default="buffer_overflow_avoidance",
+        description="Name of the scoring strategy (e.g. 'buffer_overflow_avoidance', 'max_downlink_throughput', 'max_pass_duration')",
+    )
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Key-value hyperparameter dictionary for the scoring rule (e.g. {'alpha': 2.0, 'exponent': 2.0})",
+    )
+
+    def to_domain(self) -> BaseScoringRule:
+        return get_scoring_rule(self.name, **self.parameters)
+
+    @classmethod
+    def from_domain(cls, domain: BaseScoringRule) -> "ScoringStrategyConfigDTO":
+        name = domain.__class__.__name__
+        params = {}
+
+        if isinstance(domain, BufferUrgencyScoringRule):
+            name = "buffer_overflow_avoidance"
+            params = {"alpha": domain.alpha, "exponent": domain.exponent}
+        elif isinstance(domain, ThroughputScoringRule):
+            name = "max_downlink_throughput"
+        elif isinstance(domain, DurationScoringRule):
+            name = "max_pass_duration"
+
+        return cls(name=name, parameters=params)
+
+
 class SessionPlanDTO(BaseModel):
     session_id: str
     filter_run_id: str
     active_scoring_strategy: str
+    scoring_config: Optional[ScoringStrategyConfigDTO] = None
     current_plan: Dict[str, ScheduledLinkStatusDTO]
     trade_off_groups: Dict[str, TradeOffGroupDTO]
     conflict_reasons: Dict[str, str]
@@ -184,6 +225,10 @@ class SessionPlanDTO(BaseModel):
             session_id=domain.session_id,
             filter_run_id=domain.filter_run_id,
             active_scoring_strategy=domain.active_scoring_strategy,
+            scoring_config=ScoringStrategyConfigDTO(
+                name=domain.active_scoring_strategy,
+                parameters=domain.scoring_parameters or {},
+            ),
             current_plan={
                 link_id: ScheduledLinkStatusDTO.from_domain(status)
                 for link_id, status in domain.current_plan.items()
@@ -206,8 +251,18 @@ class OverrideRequest(BaseModel):
 
 
 class StrategyUpdateRequest(BaseModel):
-    scoring_strategy: str
-    urgency_alpha: Optional[float] = 0.0
+    name: str = Field(
+        default="buffer_overflow_avoidance",
+        description="Identifier of the scoring strategy (e.g. 'buffer_overflow_avoidance', 'max_downlink_throughput', 'max_pass_duration')",
+    )
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Hyperparameters dictionary for the scoring rule",
+    )
+
+    def to_domain(self):
+        from core.scheduling.strategy import get_scoring_rule
+        return get_scoring_rule(self.name, **self.parameters)
 
 
 class CommitResponseDTO(BaseModel):

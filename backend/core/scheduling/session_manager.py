@@ -1,7 +1,7 @@
 # core/scheduling/session_manager.py
 import uuid
 import threading
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from core.models.scheduling import (
     LinkBlock,
@@ -30,7 +30,7 @@ class SchedulingSessionManager:
         asset_schedules: Optional[Dict[str, List[Activity]]] = None,
         initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
         scoring_strategy: str = "buffer_overflow_avoidance",
-        urgency_alpha: float = 2.0,
+        scoring_parameters: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
         scheduler: Optional[BaseScheduler] = None,
         scoring_rule: Optional[BaseScoringRule] = None,
@@ -67,7 +67,9 @@ class SchedulingSessionManager:
         schedules_map = asset_schedules or {}
 
         active_scheduler = scheduler or cls._default_scheduler
-        active_scoring = scoring_rule or get_scoring_rule(scoring_strategy, urgency_alpha=urgency_alpha)
+        params = dict(scoring_parameters or {})
+
+        active_scoring = scoring_rule or get_scoring_rule(scoring_strategy, **params)
 
         # Run initial forward simulation
         current_plan, satellite_profiles = active_scheduler.solve(
@@ -87,6 +89,7 @@ class SchedulingSessionManager:
             satellite_configs=satellite_configs,
             conflict_structure=conflict_structure,
             active_scoring_strategy=scoring_strategy,
+            scoring_parameters=params,
             current_plan=current_plan,
             satellite_buffer_profiles=satellite_profiles,
             asset_schedules=schedules_map,
@@ -125,7 +128,8 @@ class SchedulingSessionManager:
                 session.user_overrides[link_id] = override_state
 
             active_scheduler = scheduler or cls._default_scheduler
-            active_scoring = scoring_rule or get_scoring_rule(session.active_scoring_strategy)
+            params = session.scoring_parameters or {}
+            active_scoring = scoring_rule or get_scoring_rule(session.active_scoring_strategy, **params)
 
             current_plan, satellite_profiles = active_scheduler.solve(
                 candidate_links=session.candidate_links,
@@ -145,7 +149,7 @@ class SchedulingSessionManager:
         cls,
         session_id: str,
         scoring_strategy: str,
-        urgency_alpha: float = 2.0,
+        scoring_parameters: Optional[Dict[str, Any]] = None,
         scheduler: Optional[BaseScheduler] = None,
         scoring_rule: Optional[BaseScoringRule] = None,
     ) -> SchedulingSession:
@@ -156,8 +160,11 @@ class SchedulingSessionManager:
                 raise ValueError(f"SchedulingSession '{session_id}' not found.")
 
             session.active_scoring_strategy = scoring_strategy
+            params = dict(scoring_parameters or {})
+            session.scoring_parameters = params
+
             active_scheduler = scheduler or cls._default_scheduler
-            active_scoring = scoring_rule or get_scoring_rule(scoring_strategy, urgency_alpha=urgency_alpha)
+            active_scoring = scoring_rule or get_scoring_rule(scoring_strategy, **params)
 
             current_plan, satellite_profiles = active_scheduler.solve(
                 candidate_links=session.candidate_links,

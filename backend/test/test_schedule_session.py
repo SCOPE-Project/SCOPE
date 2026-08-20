@@ -53,10 +53,12 @@ def test_session_manager_lifecycle():
         candidate_links=[l1, l2],
         initial_buffer_levels_mb={"Sat-1": 100.0, "Sat-2": 500.0},
         scoring_strategy="buffer_overflow_avoidance",
+        scoring_parameters={"alpha": 2.0},
         session_id="session_01",
     )
 
     assert session.session_id == "session_01"
+    assert session.scoring_parameters == {"alpha": 2.0}
     assert session.current_plan["L2"].is_scheduled is True  # Sat-2 higher buffer wins
 
     # 3. Apply Override: Pin L1
@@ -68,6 +70,7 @@ def test_session_manager_lifecycle():
 
     assert updated_session.current_plan["L1"].is_scheduled is True
     assert updated_session.current_plan["L2"].is_scheduled is False
+    assert updated_session.scoring_parameters == {"alpha": 2.0}
 
 
 def test_schedule_router_endpoints():
@@ -104,16 +107,51 @@ def test_schedule_router_endpoints():
     assert ov_data["current_plan"]["link_01"]["is_scheduled"] is False
     assert ov_data["current_plan"]["link_01"]["override_state"] == "excluded"
 
-    # 3. POST strategy update
+    # 3. POST strategy update (structured config)
     res_strat = client.post(
         f"/schedule/session/{session.session_id}/strategy",
-        json={"scoring_strategy": "max_downlink_throughput", "urgency_alpha": 0.0}
+        json={"name": "buffer_overflow_avoidance", "parameters": {"alpha": 3.5, "exponent": 2.5}}
     )
     assert res_strat.status_code == 200
-    assert res_strat.json()["active_scoring_strategy"] == "max_downlink_throughput"
+    strat_data = res_strat.json()
+    assert strat_data["active_scoring_strategy"] == "buffer_overflow_avoidance"
+    assert strat_data["scoring_config"]["parameters"]["alpha"] == 3.5
 
     # 4. POST commit
     with patch("app.routers.schedule.push_activities_to_SatOS") as mock_push:
         res_commit = client.post(f"/schedule/session/{session.session_id}/commit")
         assert res_commit.status_code == 200
         assert res_commit.json()["status"] in ["synchronized", "synchronized (empty plan)"]
+
+
+def test_trade_off_request_model_structured():
+    from app.models.tasks import TradeOffRequest
+    from app.models.scheduling import StrategyUpdateRequest, ScoringStrategyConfigDTO
+
+    # 1. Clean structured request with dict
+    req1 = TradeOffRequest(
+        filter_run_id="filt_01",
+        scoring_config={"name": "buffer_overflow_avoidance", "parameters": {"alpha": 5.0, "exponent": 3.0}}
+    )
+    assert req1.scoring_config.name == "buffer_overflow_avoidance"
+    assert req1.scoring_config.parameters == {"alpha": 5.0, "exponent": 3.0}
+
+    # 2. Structured request with ScoringStrategyConfigDTO instance
+    req2 = TradeOffRequest(
+        filter_run_id="filt_02",
+        scoring_config=ScoringStrategyConfigDTO(
+            name="max_downlink_throughput",
+            parameters={"alpha": 1.5}
+        )
+    )
+    assert req2.scoring_config.name == "max_downlink_throughput"
+    assert req2.scoring_config.parameters == {"alpha": 1.5}
+
+    # 3. StrategyUpdateRequest structured
+    sreq1 = StrategyUpdateRequest(name="max_pass_duration", parameters={"weight": 1.0})
+    assert sreq1.name == "max_pass_duration"
+    assert sreq1.parameters == {"weight": 1.0}
+
+    sreq2 = StrategyUpdateRequest(name="buffer_overflow_avoidance", parameters={"alpha": 2.0, "exponent": 3.0})
+    assert sreq2.name == "buffer_overflow_avoidance"
+    assert sreq2.parameters == {"alpha": 2.0, "exponent": 3.0}

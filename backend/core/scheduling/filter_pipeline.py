@@ -147,6 +147,10 @@ def derive_and_filter_links(
         colliding_asset = None
 
         for asset_name, act in all_relevant_activities:
+            if not act.start_event or getattr(act.start_event, "timestamp", None) is None:
+                continue
+            if not act.end_event or getattr(act.end_event, "timestamp", None) is None:
+                continue
             act_start = _ensure_utc(act.start_event.timestamp)
             act_end = _ensure_utc(act.end_event.timestamp)
 

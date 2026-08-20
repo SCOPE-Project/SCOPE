@@ -59,10 +59,12 @@ def update_scoring_strategy(session_id: str, payload: StrategyUpdateRequest):
     Updates the active scoring strategy and re-runs the forward simulation.
     """
     try:
+        scoring_rule = payload.to_domain()
         updated_session = SchedulingSessionManager.update_strategy(
             session_id=session_id,
-            scoring_strategy=payload.scoring_strategy,
-            urgency_alpha=payload.urgency_alpha or 2.0,
+            scoring_strategy=payload.name,
+            scoring_parameters=payload.parameters,
+            scoring_rule=scoring_rule,
         )
         return SessionPlanDTO.from_domain(updated_session)
     except ValueError as e:

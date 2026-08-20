@@ -169,6 +169,7 @@ class PushScheduledLinksResponse(BaseModel):
 # ==========================================
 
 class ActivityDTO(BaseModel):
+    uuid: Optional[Union[UUID4, UUID7, str]] = None
     schedule_name: str
     start_time: datetime
     end_time: datetime

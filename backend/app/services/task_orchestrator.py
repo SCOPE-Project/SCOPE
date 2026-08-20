@@ -15,6 +15,7 @@ from app.models.scheduling import (
     FilterResultDTO,
     LinkBlockDTO,
     SessionPlanDTO,
+    ScoringStrategyConfigDTO,
 )
 
 
@@ -125,8 +126,7 @@ def run_process_trade_offs_task(
     task_id: str, 
     filter_run_id: str,
     initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
-    scoring_strategy: str = "buffer_overflow_avoidance",
-    urgency_alpha: float = 2.0,
+    scoring_config: Optional[ScoringStrategyConfigDTO] = None,
 ):
     """
     Starts the trade-off analysis task and initializes the in-memory SchedulingSession.
@@ -139,13 +139,21 @@ def run_process_trade_offs_task(
 
         asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
 
+        if scoring_config is None:
+            scoring_config = ScoringStrategyConfigDTO()
+
+        scoring_rule = scoring_config.to_domain()
+        strat_name = scoring_config.name
+        strat_params = scoring_config.parameters
+
         session = SchedulingSessionManager.create_session(
             filter_run_id=filter_run_id,
             candidate_links=candidate_links,
             asset_schedules=asset_schedules,
             initial_buffer_levels_mb=initial_buffer_levels_mb,
-            scoring_strategy=scoring_strategy,
-            urgency_alpha=urgency_alpha,
+            scoring_strategy=strat_name,
+            scoring_parameters=strat_params,
+            scoring_rule=scoring_rule,
             session_id=task_id,
         )
         plan_dto = SessionPlanDTO.from_domain(session)

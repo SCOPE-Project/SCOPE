@@ -69,8 +69,7 @@ def trigger_process_trade_offs(payload: TradeOffRequest, background_tasks: Backg
         task_id=task_id,
         filter_run_id=payload.filter_run_id,
         initial_buffer_levels_mb=payload.initial_buffer_levels_mb,
-        scoring_strategy=payload.scoring_strategy,
-        urgency_alpha=payload.urgency_alpha,
+        scoring_config=payload.scoring_config,
     )
     return {"task_id": task_id, "status": "Queued"}
 

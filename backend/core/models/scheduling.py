@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Dict, Set, Optional
+from typing import List, Dict, Set, Optional, Any
 
 from core.models.propagation import OverpassProfilePoint
 
@@ -131,3 +131,4 @@ class SchedulingSession:
     current_plan: Dict[str, ScheduledLinkStatus] = field(default_factory=dict)
     satellite_buffer_profiles: Dict[str, SatelliteBufferProfile] = field(default_factory=dict)
     asset_schedules: Dict[str, List[Activity]] = field(default_factory=dict)
+    scoring_parameters: Dict[str, Any] = field(default_factory=dict)

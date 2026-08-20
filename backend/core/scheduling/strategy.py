@@ -94,13 +94,20 @@ SCORING_RULE_REGISTRY = {
 }
 
 def get_scoring_rule(name: str, **kwargs) -> BaseScoringRule:
-    """Factory helper to obtain a scoring rule instance by name."""
-    cls = SCORING_RULE_REGISTRY.get(name.lower(), BufferUrgencyScoringRule)
+    """Factory helper to obtain a scoring rule instance by name and arbitrary parameters."""
+    cls = SCORING_RULE_REGISTRY.get(name.lower())
+    if not cls:
+        cls = BufferUrgencyScoringRule
+
     if cls is BufferUrgencyScoringRule:
-        alpha = kwargs.get("alpha", kwargs.get("urgency_alpha", 2.0))
-        exponent = kwargs.get("exponent", 2.0)
+        alpha = float(kwargs.get("alpha", 2.0))
+        exponent = float(kwargs.get("exponent", 2.0))
         return BufferUrgencyScoringRule(alpha=alpha, exponent=exponent)
-    return cls()
+
+    try:
+        return cls(**kwargs)
+    except TypeError:
+        return cls()
 
 
 # =====================================================================

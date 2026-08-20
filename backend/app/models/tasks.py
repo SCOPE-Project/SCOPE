@@ -4,7 +4,7 @@ from typing import List, Optional, Dict, Union, Any
 from pydantic import BaseModel, Field
 
 from app.models.propagation import PropagationResultDTO
-from app.models.scheduling import FilterResultDTO, SessionPlanDTO
+from app.models.scheduling import FilterResultDTO, SessionPlanDTO, ScoringStrategyConfigDTO
 
 
 # ========================================
@@ -36,8 +36,10 @@ class TradeOffRequest(BaseModel):
     """ 
     filter_run_id: str = Field(..., description="Run ID of the filtered links dataset")
     initial_buffer_levels_mb: Optional[Dict[str, float]] = Field(default=None, description="Initial satellite storage levels in MB")
-    scoring_strategy: str = Field(default="buffer_overflow_avoidance", description="Objective scoring algorithm")
-    urgency_alpha: float = Field(default=2.0, ge=0.0, description="Urgency sensitivity multiplier")
+    scoring_config: ScoringStrategyConfigDTO = Field(
+        default_factory=lambda: ScoringStrategyConfigDTO(name="buffer_overflow_avoidance", parameters={"alpha": 2.0, "exponent": 2.0}),
+        description="Pluggable scoring strategy configuration and hyperparameters",
+    )
 
 
 # ========================================
