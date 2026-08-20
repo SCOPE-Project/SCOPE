@@ -14,7 +14,7 @@ if not credentials_path.exists() or not load_dotenv(credentials_path):
         allow_module_level=True,
     )
 
-from app.services.asset_repository import AssetRepository
+from app.repositories import AssetRepository
 
 def run_tests():
     print("Starting integration tests for AssetRepository...")

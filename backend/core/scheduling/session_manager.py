@@ -1,0 +1,235 @@
+# core/scheduling/session_manager.py
+import uuid
+import threading
+from typing import Dict, List, Optional, Any
+
+from core.models.scheduling import (
+    LinkBlock,
+    OverrideState,
+    SatelliteBufferConfig,
+    SchedulingSession,
+)
+from core.models.activities import Activity
+from core.scheduling.conflict_builder import build_conflict_structure
+from core.scheduling.forward_simulator import ForwardSimulationScheduler
+from core.scheduling.strategy import BaseScheduler, BaseScoringRule, get_scoring_rule
+
+
+class SchedulingSessionManager:
+    """Thread-safe in-memory manager for interactive scheduling sessions."""
+    
+    _sessions: Dict[str, SchedulingSession] = {}
+    _lock = threading.Lock()
+    _default_scheduler: BaseScheduler = ForwardSimulationScheduler()
+
+    @classmethod
+    def create_session(
+        cls,
+        filter_run_id: str,
+        candidate_links: List[LinkBlock],
+        asset_schedules: Optional[Dict[str, List[Activity]]] = None,
+        satellite_configs: Optional[Dict[str, SatelliteBufferConfig]] = None,
+        initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
+        buffer_capacities_mb: Optional[Dict[str, float]] = None,
+        payload_generation_rates_mbps: Optional[Dict[str, float]] = None,
+        downlink_rates_mbps: Optional[Dict[str, float]] = None,
+        default_capacity_mb: float = 2000.0,
+        default_initial_level_mb: float = 0.0,
+        default_payload_generation_rate_mbps: float = 15.0,
+        default_downlink_rate_mbps: float = 25.0,
+        scoring_strategy: str = "buffer_overflow_avoidance",
+        scoring_parameters: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        scheduler: Optional[BaseScheduler] = None,
+        scoring_rule: Optional[BaseScoringRule] = None,
+    ) -> SchedulingSession:
+        """
+        Creates a new SchedulingSession from candidate links, builds the conflict graph,
+        and computes the initial forward simulation schedule using the injected scheduler and scoring rule.
+        """
+        if session_id is None:
+            session_id = str(uuid.uuid4())
+
+        links_by_id: Dict[str, LinkBlock] = {l.link_id: l for l in candidate_links}
+        eligible_links = [l for l in candidate_links if l.is_eligible]
+
+        # Build conflict graph over eligible links
+        conflict_structure = build_conflict_structure(eligible_links)
+
+        # Set up satellite buffer configurations
+        configs_dict = dict(satellite_configs or {})
+        initial_buffers = initial_buffer_levels_mb or {}
+        capacities = buffer_capacities_mb or {}
+        generation_rates = payload_generation_rates_mbps or {}
+        downlink_rates = downlink_rates_mbps or {}
+
+        resolved_satellite_configs: Dict[str, SatelliteBufferConfig] = {}
+
+        # 1. Ingest any explicitly provided SatelliteBufferConfig objects
+        for sat, cfg in configs_dict.items():
+            resolved_satellite_configs[sat] = cfg
+
+        # 2. Ensure every satellite present in candidate_links has a complete config
+        for link in candidate_links:
+            sat = link.satellite_name
+            if sat not in resolved_satellite_configs:
+                resolved_satellite_configs[sat] = SatelliteBufferConfig(
+                    satellite_name=sat,
+                    capacity_mb=capacities.get(sat, default_capacity_mb),
+                    initial_level_mb=initial_buffers.get(sat, default_initial_level_mb),
+                    payload_generation_rate_mbps=generation_rates.get(sat, default_payload_generation_rate_mbps),
+                    downlink_rate_mbps=downlink_rates.get(sat, default_downlink_rate_mbps),
+                )
+            else:
+                existing = resolved_satellite_configs[sat]
+                new_init = initial_buffers.get(sat, existing.initial_level_mb)
+                new_cap = capacities.get(sat, existing.capacity_mb)
+                new_gen = generation_rates.get(sat, existing.payload_generation_rate_mbps)
+                new_dl = downlink_rates.get(sat, existing.downlink_rate_mbps)
+                if (
+                    new_init != existing.initial_level_mb
+                    or new_cap != existing.capacity_mb
+                    or new_gen != existing.payload_generation_rate_mbps
+                    or new_dl != existing.downlink_rate_mbps
+                ):
+                    resolved_satellite_configs[sat] = SatelliteBufferConfig(
+                        satellite_name=sat,
+                        capacity_mb=new_cap,
+                        initial_level_mb=new_init,
+                        payload_generation_rate_mbps=new_gen,
+                        downlink_rate_mbps=new_dl,
+                    )
+
+        user_overrides: Dict[str, OverrideState] = {}
+        schedules_map = asset_schedules or {}
+
+        active_scheduler = scheduler or cls._default_scheduler
+        params = dict(scoring_parameters or {})
+
+        active_scoring = scoring_rule or get_scoring_rule(scoring_strategy, **params)
+
+        # Run initial forward simulation
+        current_plan, satellite_profiles = active_scheduler.solve(
+            candidate_links=links_by_id,
+            user_overrides=user_overrides,
+            satellite_configs=resolved_satellite_configs,
+            conflict_structure=conflict_structure,
+            asset_schedules=schedules_map,
+            scoring_rule=active_scoring,
+        )
+
+        session = SchedulingSession(
+            session_id=session_id,
+            filter_run_id=filter_run_id,
+            candidate_links=links_by_id,
+            user_overrides=user_overrides,
+            satellite_configs=resolved_satellite_configs,
+            conflict_structure=conflict_structure,
+            active_scoring_strategy=scoring_strategy,
+            scoring_parameters=params,
+            current_plan=current_plan,
+            satellite_buffer_profiles=satellite_profiles,
+            asset_schedules=schedules_map,
+        )
+
+        with cls._lock:
+            cls._sessions[session_id] = session
+
+        return session
+
+    @classmethod
+    def apply_override(
+        cls,
+        session_id: str,
+        link_id: str,
+        override_state: OverrideState,
+        scheduler: Optional[BaseScheduler] = None,
+        scoring_rule: Optional[BaseScoringRule] = None,
+    ) -> SchedulingSession:
+        """
+        Synchronously applies a user override (PINNED / EXCLUDED / AUTO) and re-evaluates
+        the schedule via the scheduler.
+        """
+        with cls._lock:
+            session = cls._sessions.get(session_id)
+            if not session:
+                raise ValueError(f"SchedulingSession '{session_id}' not found.")
+
+            if link_id not in session.candidate_links:
+                raise ValueError(f"Link '{link_id}' does not exist in session '{session_id}'.")
+
+            # Update override state
+            if override_state == OverrideState.AUTO:
+                session.user_overrides.pop(link_id, None)
+            else:
+                session.user_overrides[link_id] = override_state
+
+            active_scheduler = scheduler or cls._default_scheduler
+            params = session.scoring_parameters or {}
+            active_scoring = scoring_rule or get_scoring_rule(session.active_scoring_strategy, **params)
+
+            current_plan, satellite_profiles = active_scheduler.solve(
+                candidate_links=session.candidate_links,
+                user_overrides=session.user_overrides,
+                satellite_configs=session.satellite_configs,
+                conflict_structure=session.conflict_structure,
+                asset_schedules=session.asset_schedules,
+                scoring_rule=active_scoring,
+            )
+
+            session.current_plan = current_plan
+            session.satellite_buffer_profiles = satellite_profiles
+            return session
+
+    @classmethod
+    def update_strategy(
+        cls,
+        session_id: str,
+        scoring_strategy: str,
+        scoring_parameters: Optional[Dict[str, Any]] = None,
+        scheduler: Optional[BaseScheduler] = None,
+        scoring_rule: Optional[BaseScoringRule] = None,
+    ) -> SchedulingSession:
+        """Updates scoring strategy and re-runs solver."""
+        with cls._lock:
+            session = cls._sessions.get(session_id)
+            if not session:
+                raise ValueError(f"SchedulingSession '{session_id}' not found.")
+
+            session.active_scoring_strategy = scoring_strategy
+            params = dict(scoring_parameters or {})
+            session.scoring_parameters = params
+
+            active_scheduler = scheduler or cls._default_scheduler
+            active_scoring = scoring_rule or get_scoring_rule(scoring_strategy, **params)
+
+            current_plan, satellite_profiles = active_scheduler.solve(
+                candidate_links=session.candidate_links,
+                user_overrides=session.user_overrides,
+                satellite_configs=session.satellite_configs,
+                conflict_structure=session.conflict_structure,
+                asset_schedules=session.asset_schedules,
+                scoring_rule=active_scoring,
+            )
+
+            session.current_plan = current_plan
+            session.satellite_buffer_profiles = satellite_profiles
+            return session
+
+    @classmethod
+    def get_session(cls, session_id: str) -> Optional[SchedulingSession]:
+        """Retrieves a session by session_id."""
+        with cls._lock:
+            return cls._sessions.get(session_id)
+
+    @classmethod
+    def list_sessions(cls) -> List[str]:
+        """Lists all active session IDs."""
+        with cls._lock:
+            return list(cls._sessions.keys())
+
+    @classmethod
+    def clear(cls) -> None:
+        """Clears all sessions."""
+        with cls._lock:
+            cls._sessions.clear()

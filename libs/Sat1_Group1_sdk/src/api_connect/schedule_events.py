@@ -4,6 +4,7 @@ from pydantic import UUID4
 from pydantic_models.schedule_event import ScheduleEventModel
 
 from api_connect.satio_session import SatIOSession
+from requests import Response
 
 prefix = "schedule_events"
 
@@ -45,3 +46,20 @@ def get_schedule_events(
     response.raise_for_status()
 
     return [ScheduleEventModel.model_validate(event) for event in response.json()]
+
+def put_schedule_events(session: SatIOSession, schedule_events: list[ScheduleEventModel]) -> Response:
+    """
+    Put activities to the API
+
+    :param session: SatIOSession
+    :param schedule_events: list[ScheduleEventModel], list of schedule events to put
+    """
+    return session.put(endpoint=prefix, data=[event.model_dump(mode="json") for event in schedule_events])
+
+def delete_schedule_events(session: SatIOSession, schedule_event_uuid: UUID4) -> Response:
+    """
+    Delete activities from the API
+    :param session: SatIOSession
+    :param schedule_event_uuid: UUID4 of the schedule event to delete
+    """
+    return session.delete(endpoint=prefix, params={"schedule_event_uuid": schedule_event_uuid})

@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from org.orekit.frames import Frame
 from datetime import datetime
 
-from core.models.domain import SatelliteInformation
+from core.models.assets import SatelliteInformation
 from core.orbit_engine.time_utils import normalize_datetime_to_utc
 
 
@@ -39,7 +39,7 @@ def build_satellite_propagator(
     from org.orekit.propagation.numerical import NumericalPropagator
     from org.orekit.utils import IERSConventions, PVCoordinates
 
-    from orbit_propagation_pipeline.utils.propagation_utils.constants import Constants
+    from core.astrodynamics.constants import Constants
 
     state_timestamp = normalize_datetime_to_utc(satellite_info.state_timestamp)
     state_absolute_date = datetime_to_absolutedate(state_timestamp)

@@ -3,17 +3,18 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Response
 from app.services import state_manager, task_orchestrator
 
 from app.models.tasks import (
-    OrbitEngineRequest, 
+    OrbitEngineRequest,
+    FilterLinksRequest,
     TradeOffRequest,
     TaskStatusResponse,
     TaskResultResponse,
     TaskReceiptResponse,
-    AssetInformation,
-    AssetInitializationResponse
 )
-
-from app.services.asset_repository import AssetRepository
-
+from app.models.satos import (
+    AssetInformation,
+    AssetInitializationResponse,
+)
+from app.repositories import AssetRepository
 
 
 router = APIRouter(prefix="/tasks", tags=["Task Processing Workspace"])
@@ -29,7 +30,7 @@ def initialize_assets(force_refresh: bool = False):
 @router.post("/extract-overpasses", response_model=TaskReceiptResponse)
 def trigger_orbit_engine(payload: OrbitEngineRequest, background_tasks: BackgroundTasks):
     """
-    Triggers the heavy background thread instantly and returns a receipt handle.
+    Triggers the heavy background thread for orbit propagation and returns a receipt handle.
     """
     task_id = state_manager.create_task_entry()
     background_tasks.add_task(
@@ -42,13 +43,41 @@ def trigger_orbit_engine(payload: OrbitEngineRequest, background_tasks: Backgrou
     )
     return {"task_id": task_id, "status": "Queued"}
 
+@router.post("/filter-links", response_model=TaskReceiptResponse)
+def trigger_filter_links(payload: FilterLinksRequest, background_tasks: BackgroundTasks):
+    """
+    Triggers the dedicated link derivation and filtering task against SatOS baseline activities.
+    """
+    task_id = state_manager.create_task_entry()
+    background_tasks.add_task(
+        task_orchestrator.run_filter_links_task,
+        task_id=task_id,
+        orbit_engine_run_id=payload.orbit_engine_run_id,
+        min_aos_los_elevation_deg=payload.min_aos_los_elevation_deg,
+        min_peak_elevation_deg=payload.min_peak_elevation_deg,
+        default_downlink_rate_mbps=payload.default_downlink_rate_mbps or 25.0,
+        satellite_downlink_rates_mbps=payload.satellite_downlink_rates_mbps,
+    )
+    return {"task_id": task_id, "status": "Queued"}
+
 @router.post("/process-trade-offs", response_model=TaskReceiptResponse)
 def trigger_process_trade_offs(payload: TradeOffRequest, background_tasks: BackgroundTasks):
     """
-    Triggers the heavy background thread instantly and returns a receipt handle.
+    Triggers the trade-off analysis task and initializes the in-memory SchedulingSession.
     """
     task_id = state_manager.create_task_entry()
-    background_tasks.add_task(task_orchestrator.run_process_trade_offs_task, task_id=task_id, selected_satellites=payload.satellites)
+    background_tasks.add_task(
+        task_orchestrator.run_process_trade_offs_task,
+        task_id=task_id,
+        filter_run_id=payload.filter_run_id,
+        initial_buffer_levels_mb=payload.initial_buffer_levels_mb,
+        satellite_buffer_configs=payload.satellite_buffer_configs,
+        default_buffer_config=payload.default_buffer_config,
+        buffer_capacities_mb=payload.buffer_capacities_mb,
+        payload_generation_rates_mbps=payload.payload_generation_rates_mbps,
+        downlink_rates_mbps=payload.downlink_rates_mbps,
+        scoring_config=payload.scoring_config,
+    )
     return {"task_id": task_id, "status": "Queued"}
 
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
@@ -74,10 +103,8 @@ def get_task_result(task_id: str):
         raise HTTPException(
             status_code=400, 
             detail=f"Task is in state '{task_result.status}' and has no result payload yet."
-            )
+        )
             
-    # Bypass FastAPI's runtime validation/serialization
-    # return task_result
     return Response(
         content=task_result.model_dump_json(),
         media_type="application/json"

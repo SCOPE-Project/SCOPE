@@ -11,7 +11,7 @@ from math import degrees
 from core.orbit_engine.groundstation_frames import GroundStationRuntimeContext
 from core.orbit_engine.time_utils import normalize_datetime_to_utc
 from core.orbit_engine.visibility_events import OverpassEvent
-from core.models.domain import (
+from core.models.propagation import (
     GlobalTrackPoint,
     OverpassProfilePoint,
     OverpassBlock,

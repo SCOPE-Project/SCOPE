@@ -10,13 +10,13 @@ backend_path = Path(__file__).resolve().parent.parent
 if str(backend_path) not in sys.path:
     sys.path.insert(0, str(backend_path))
 
-from core.models.domain import (
+from core.models.assets import (
     GroundStationInformation,
     SatelliteInformation,
     TimeInterval,
 )
 from core.orbit_engine.orekit_engine import run_orekit_engine
-from core.repository.propagation_repository import PropagationResultRepository
+from app.repositories import PropagationResultRepository
 
 
 def on_progress_updated(run_id: str, message: str, progress: int) -> None:

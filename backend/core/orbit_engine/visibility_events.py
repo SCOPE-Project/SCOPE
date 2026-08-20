@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 import jpype
 
-from core.models.domain import GroundStationInformation, SatelliteInformation, OverpassEvent
+from core.models.assets import GroundStationInformation, SatelliteInformation
+from core.models.propagation import OverpassEvent
 from core.orbit_engine.groundstation_frames import GroundStationRuntimeContext
 from core.orbit_engine.time_utils import normalize_datetime_to_utc
 

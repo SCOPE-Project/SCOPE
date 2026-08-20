@@ -1,6 +1,8 @@
+# app/models/propagation.py
 from pydantic import BaseModel
 from typing import List, Dict
-from core.models.domain import (
+
+from core.models.propagation import (
     PropagationMetadata,
     GlobalTrackPoint,
     OverpassProfilePoint,
@@ -8,6 +10,7 @@ from core.models.domain import (
     PropagationResult,
 )
 from core.orbit_engine.time_utils import to_utc_iso_string
+
 
 class PropagationMetadataDTO(BaseModel):
     task_id: str  # Web layer representation uses task_id
@@ -25,6 +28,7 @@ class PropagationMetadataDTO(BaseModel):
             global_track_step_seconds=domain.global_track_step_seconds,
             overpass_profile_step_seconds=domain.overpass_profile_step_seconds,
         )
+
 
 class GlobalTrackPointDTO(BaseModel):
     timestamp: str
@@ -44,6 +48,7 @@ class GlobalTrackPointDTO(BaseModel):
             longitude_deg=domain.longitude_deg,
             altitude_m=domain.altitude_m,
         )
+
 
 class OverpassProfilePointDTO(BaseModel):
     timestamp: str
@@ -65,6 +70,7 @@ class OverpassProfilePointDTO(BaseModel):
             azimuth_deg=domain.azimuth_deg,
             range_m=domain.range_m,
         )
+
 
 class OverpassBlockDTO(BaseModel):
     overpass_id: str
@@ -90,6 +96,7 @@ class OverpassBlockDTO(BaseModel):
                 OverpassProfilePointDTO.from_domain(p) for p in domain.high_res_trajectory
             ],
         )
+
 
 class PropagationResultDTO(BaseModel):
     metadata: PropagationMetadataDTO
