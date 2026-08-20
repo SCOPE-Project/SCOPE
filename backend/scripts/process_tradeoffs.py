@@ -1,4 +1,5 @@
 """
+WARNING: THIS SCRIPT IS DEPRECATED. Use the backend API instead.
 CLI Script: Process Trade-Off Groups & Schedule Multi-Pass Downlinks.
 
 Usage:
@@ -118,6 +119,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # Print Deprecation Warning
+    print("WARNING: THIS SCRIPT IS DEPRECATED. Use the backend API instead.")
     # 1. Fetch links from LinkRepository (Hard fail if missing)
     filter_run_id = args.filter_run_id
     links = LinkRepository.get_links(filter_run_id)

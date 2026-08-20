@@ -86,8 +86,11 @@ def main() -> None:
         required=True,
         help="End time in ISO 8601 format (e.g. '2026-08-18T12:00:00Z').",
     )
-
+    
     args = parser.parse_args()
+
+    # Print Deprecation Warning
+    print("WARNING: THIS SCRIPT IS DEPRECATED. Use the backend API instead.")
 
     # 1. Parse and validate time interval
     start_time = _parse_datetime(args.start_time)

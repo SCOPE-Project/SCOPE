@@ -1,4 +1,5 @@
 """
+WARNING: THIS SCRIPT CAN NOT WORK AS THE REPOSITORY IS ONLY STATIC AND WILL NEVER FIND THE RUN-ID
 CLI Script: Filter Potential Communication Links.
 
 Usage:
@@ -58,6 +59,9 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # Print Deprecation Warning
+    print("WARNING: THIS SCRIPT IS DEPRECATED. Use the backend API instead.")
+    
     # 1. Fetch PropagationResult from PropagationResultRepository (Hard fail if missing)
     run_id = args.run_id
     prop_result = PropagationResultRepository.get_result(run_id)

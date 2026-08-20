@@ -48,7 +48,7 @@ def main() -> None:
     )
 
     args = parser.parse_args()
-
+    
     print("=======================================================")
     print("  SatOS Asset Repository Initialization")
     print("=======================================================")
