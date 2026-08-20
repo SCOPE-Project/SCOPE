@@ -280,6 +280,8 @@ export default function App() {
   const [view, setView] = useState('landing')
   const [selectedSatellites, setSelectedSatellites] = useState([])
   const [selectedGroundStations, setSelectedGroundStations] = useState([])
+  const [minimumLinkElevationFilterDeg, setMinimumLinkElevationFilterDeg] = useState('')
+  const [minimumPeakElevationFilterDeg, setMinimumPeakElevationFilterDeg] = useState('')
   const [planningTimeMode, setPlanningTimeMode] = useState(DEFAULT_PLANNING_TIME_MODE)
   const [planningWindowStartDate, setPlanningWindowStartDate] = useState(DEFAULT_PLANNING_WINDOW_PRESET.startDate)
   const [planningWindowStartTime, setPlanningWindowStartTime] = useState(DEFAULT_PLANNING_WINDOW_PRESET.startTime)
@@ -391,6 +393,7 @@ export default function App() {
     satellites: true,
     groundStations: true,
     unavailableAssets: false,
+    linkFilters: true,
     mapView: true,
     overview: true,
     tradeOff: true,
@@ -1518,6 +1521,8 @@ export default function App() {
 
     setSelectedSatellites([])
     setSelectedGroundStations([])
+    setMinimumLinkElevationFilterDeg('')
+    setMinimumPeakElevationFilterDeg('')
     setPlanningTimeMode(DEFAULT_PLANNING_TIME_MODE)
     setPlanningWindowStartDate(planningWindowPreset.startDate)
     setPlanningWindowStartTime(planningWindowPreset.startTime)
@@ -1563,6 +1568,7 @@ export default function App() {
       satellites: true,
       groundStations: true,
       unavailableAssets: false,
+      linkFilters: true,
       mapView: true,
       overview: true,
       tradeOff: true,
@@ -1761,7 +1767,6 @@ export default function App() {
         setSatosAlive(true)
         setAssets(data.assets)
         setAssetSchedules(Array.isArray(data.schedules) ? data.schedules : [])
-        setView('workspace')
       } else {
         throw new Error("Invalid response format from server")
       }
@@ -1774,8 +1779,28 @@ export default function App() {
     }
   }
 
+  const applyOverviewLinkFilters = (rows) => rows.filter((row) => {
+    if (
+      minimumLinkElevationFilterValue !== null
+      && Number.isFinite(row.maxElevationDeg)
+      && row.maxElevationDeg < minimumLinkElevationFilterValue
+    ) {
+      return false
+    }
+
+    if (
+      minimumPeakElevationFilterValue !== null
+      && Number.isFinite(row.maxElevationDeg)
+      && row.maxElevationDeg < minimumPeakElevationFilterValue
+    ) {
+      return false
+    }
+
+    return true
+  })
+
   const handleLaunchScheduler = async () => {
-    if (!launchRequirementsMet) return
+    if (!launchRequirementsMet) return false
 
     const planningWindow = {
       startTime: planningDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime),
@@ -1785,12 +1810,12 @@ export default function App() {
 
     if (!planningWindow.startTime || !planningWindow.endTime) {
       setError('Enter a valid planning window before launching the scheduler.')
-      return
+      return false
     }
 
     if (new Date(planningWindow.endTime) <= new Date(planningWindow.startTime)) {
       setError('The planning window end must be after the start time.')
-      return
+      return false
     }
 
     setLaunchingScheduler(true)
@@ -1875,7 +1900,7 @@ export default function App() {
         [...selectedSatellites, ...selectedGroundStations],
       )
       const realRows = annotateRowsWithSchedulePriority(
-        buildOverviewRowsFromOverpasses(result?.payload?.overpass_blocks ?? []),
+        applyOverviewLinkFilters(buildOverviewRowsFromOverpasses(result?.payload?.overpass_blocks ?? [])),
         scheduleItems,
       )
 
@@ -1883,6 +1908,7 @@ export default function App() {
       setOverviewRows(realRows)
       setExtractionStatus('Completed')
       setExtractionProgress(100)
+      return true
     } catch (err) {
       const wasTerminated = err?.name === 'AbortError'
       if (!wasTerminated) {
@@ -1895,9 +1921,24 @@ export default function App() {
       setSidebarCollapsed(false)
       setExtractionStatus(wasTerminated ? 'Terminated' : 'Failed')
       setError(wasTerminated ? null : (err.message || 'Failed to extract overpasses from the backend.'))
+      return false
     } finally {
       schedulerAbortControllerRef.current = null
       setLaunchingScheduler(false)
+    }
+  }
+
+  const handleLoadScope = async () => {
+    if (loadScopeDisabled) {
+      return
+    }
+
+    setError(null)
+    const schedulerStarted = await handleLaunchScheduler()
+
+    if (schedulerStarted) {
+      setSchedulerLaunched(true)
+      setView('workspace')
     }
   }
 
@@ -2047,6 +2088,20 @@ export default function App() {
     () => assets.filter((asset) => normalizeAssetClassification(asset) === 'ineligible'),
     [assets],
   )
+  const missionAssetsLoaded = assets.length > 0
+  const parseOptionalDegreeInput = (value) => {
+    if (value.trim() === '') {
+      return null
+    }
+
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : Number.NaN
+  }
+  const minimumLinkElevationFilterValue = parseOptionalDegreeInput(minimumLinkElevationFilterDeg)
+  const minimumPeakElevationFilterValue = parseOptionalDegreeInput(minimumPeakElevationFilterDeg)
+  const linkFiltersValid = [minimumLinkElevationFilterValue, minimumPeakElevationFilterValue].every((value) => (
+    value === null || (!Number.isNaN(value) && value >= 0 && value <= 90)
+  ))
   const planningWindowComplete =
     planningWindowStartDate !== ''
     && planningWindowStartTime !== ''
@@ -2061,6 +2116,29 @@ export default function App() {
     planningWindowValid
     && selectedSatellites.length >= 1
     && selectedGroundStations.length >= 1
+    && linkFiltersValid
+  const loadMissionAssetsDisabled = loading || launchingScheduler || backendAlive !== true
+  const loadScopeDisabled =
+    loading
+    || launchingScheduler
+    || !missionAssetsLoaded
+    || !launchRequirementsMet
+  const loadScopeDisabledReason =
+    loading
+      ? 'Wait until the current request is finished.'
+      : launchingScheduler
+        ? 'SCOPE is currently starting.'
+        : !missionAssetsLoaded
+          ? 'Load SatOS mission data first to enable filtering.'
+          : !planningWindowValid
+            ? 'Enter a valid planning window with an end time after the start time.'
+            : selectedSatellites.length < 1
+              ? 'Select at least one satellite.'
+              : selectedGroundStations.length < 1
+                ? 'Select at least one ground station.'
+                : !linkFiltersValid
+                  ? 'Optional filter values must stay between 0° and 90°.'
+                  : ''
   const timeOptions = Array.from({ length: 96 }, (_, index) => {
     const hours = String(Math.floor(index / 4)).padStart(2, '0')
     const minutes = String((index % 4) * 15).padStart(2, '0')
@@ -3859,7 +3937,7 @@ export default function App() {
     return `${digitsOnly.slice(0, 2)}:${digitsOnly.slice(2)}`
   }
 
-  const renderTimeInput = (menuKey, value, setValue) => (
+  const renderTimeInput = (menuKey, value, setValue, disabled = false) => (
     <div
       className={`time-window-dropdown ${activeTimeMenu === menuKey ? 'time-window-dropdown--open' : ''}`}
       onBlur={(event) => {
@@ -3875,15 +3953,25 @@ export default function App() {
           placeholder="HH:MM"
           value={value}
           maxLength={5}
-          onFocus={() => setActiveTimeMenu(menuKey)}
+          disabled={disabled}
+          onFocus={() => {
+            if (!disabled) {
+              setActiveTimeMenu(menuKey)
+            }
+          }}
           onChange={(event) => setValue(formatTimeTextInput(event.target.value, value))}
           className="time-window-input time-window-input--combo"
         />
         <button
           type="button"
           className="time-window-input-toggle"
+          disabled={disabled}
           onMouseDown={(event) => event.preventDefault()}
-          onClick={() => setActiveTimeMenu((current) => (current === menuKey ? null : menuKey))}
+          onClick={() => {
+            if (!disabled) {
+              setActiveTimeMenu((current) => (current === menuKey ? null : menuKey))
+            }
+          }}
           aria-haspopup="listbox"
           aria-expanded={activeTimeMenu === menuKey}
           aria-label={`Toggle ${menuKey} time suggestions`}
@@ -3891,7 +3979,7 @@ export default function App() {
           <span className="time-window-select-arrow" aria-hidden="true">▾</span>
         </button>
       </div>
-      {activeTimeMenu === menuKey && (
+      {activeTimeMenu === menuKey && !disabled && (
         <div className="time-window-select-menu" role="listbox" aria-label={`${menuKey} time`}>
           {timeOptions.map((timeValue) => (
             <button
@@ -3914,7 +4002,7 @@ export default function App() {
     </div>
   )
 
-  const renderPlanningTimeActions = (target) => {
+  const renderPlanningTimeActions = (target, disabled = false) => {
     const targetLabel = target === 'start' ? 'Start' : 'End'
 
     return (
@@ -3923,6 +4011,7 @@ export default function App() {
           <button
             type="button"
             className="time-window-quick-button time-window-quick-button--current"
+            disabled={disabled}
             onClick={() => handleSetCurrentPlanningTime(target)}
           >
             Set current time
@@ -3930,6 +4019,7 @@ export default function App() {
           <button
             type="button"
             className="time-window-quick-button time-window-quick-button--reset"
+            disabled={disabled}
             onClick={() => handleResetPlanningTime(target)}
           >
             Reset
@@ -3941,6 +4031,7 @@ export default function App() {
             <button
               type="button"
               className="time-window-quick-button"
+              disabled={disabled}
               onClick={() => handleShiftPlanningTime(target, -60)}
             >
               -1h
@@ -3948,6 +4039,7 @@ export default function App() {
             <button
               type="button"
               className="time-window-quick-button"
+              disabled={disabled}
               onClick={() => handleShiftPlanningTime(target, 60)}
             >
               +1h
@@ -3960,6 +4052,7 @@ export default function App() {
             <button
               type="button"
               className="time-window-quick-button"
+              disabled={disabled}
               onClick={() => handleShiftPlanningTime(target, -24 * 60)}
             >
               -1 day
@@ -3967,6 +4060,7 @@ export default function App() {
             <button
               type="button"
               className="time-window-quick-button"
+              disabled={disabled}
               onClick={() => handleShiftPlanningTime(target, 24 * 60)}
             >
               +1 day
@@ -3977,54 +4071,373 @@ export default function App() {
     )
   }
 
+  const renderExtractionProgressPanel = () => (
+    <div className="overview-progress">
+      <div className="overview-progress-body">
+        <div className="overview-progress-heading">
+          <span className="overview-progress-title">Processing Log</span>
+          <span className="overview-progress-percent">{extractionProgress}%</span>
+        </div>
+        <div className="overview-progress-log" role="log" aria-live="polite">
+          {extractionMessages.length === 0 ? (
+            <div className="overview-progress-entry overview-progress-entry--placeholder">
+              Waiting for backend status updates.
+            </div>
+          ) : (
+            extractionMessages.map((entry) => (
+              <div key={entry.id} className="overview-progress-entry">
+                {entry.text}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+      <div className="overview-progress-footer">
+        <div
+          className="overview-progress-bar"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={extractionProgress}
+          aria-label="Overpass extraction progress"
+        >
+          <div
+            className="overview-progress-bar-fill"
+            style={{ width: `${Math.max(0, Math.min(100, extractionProgress))}%` }}
+          ></div>
+        </div>
+      </div>
+    </div>
+  )
+
+  const renderPlanningWindowContent = (disabled = false) => (
+    <div className={`time-window-panel ${disabled ? 'time-window-panel--disabled' : ''}`}>
+      <div className="time-window-header">
+        <div className="time-window-zone-toggle" role="group" aria-label="Planning interval time zone">
+          <button
+            type="button"
+            className={`time-window-zone-button ${planningTimeMode === 'utc' ? 'time-window-zone-button--active' : ''}`}
+            onClick={() => handlePlanningTimeModeChange('utc')}
+            aria-pressed={planningTimeMode === 'utc'}
+            disabled={disabled}
+          >
+            UTC
+          </button>
+          <button
+            type="button"
+            className={`time-window-zone-button ${planningTimeMode === 'local' ? 'time-window-zone-button--active' : ''}`}
+            onClick={() => handlePlanningTimeModeChange('local')}
+            aria-pressed={planningTimeMode === 'local'}
+            disabled={disabled}
+          >
+            Local
+          </button>
+        </div>
+      </div>
+      <div className="time-window-row">
+        <label className="time-window-field">
+          <span>Start Date</span>
+          <input
+            type="date"
+            value={planningWindowStartDate}
+            disabled={disabled}
+            onChange={(event) => {
+              setPlanningWindowStartDate(event.target.value)
+              event.target.blur()
+            }}
+            className="time-window-input"
+          />
+        </label>
+        <label className="time-window-field time-window-field--time">
+          <span>Start Time</span>
+          {renderTimeInput('start', planningWindowStartTime, setPlanningWindowStartTime, disabled)}
+        </label>
+      </div>
+      {renderPlanningTimeActions('start', disabled)}
+      <div className="time-window-row">
+        <label className="time-window-field">
+          <span>End Date</span>
+          <input
+            type="date"
+            value={planningWindowEndDate}
+            disabled={disabled}
+            onChange={(event) => {
+              setPlanningWindowEndDate(event.target.value)
+              event.target.blur()
+            }}
+            className="time-window-input"
+          />
+        </label>
+        <label className="time-window-field time-window-field--time">
+          <span>End Time</span>
+          {renderTimeInput('end', planningWindowEndTime, setPlanningWindowEndTime, disabled)}
+        </label>
+      </div>
+      {renderPlanningTimeActions('end', disabled)}
+      {planningWindowComplete && !planningWindowValid && (
+        <p className="time-window-error">
+          Enter a valid time window with an end time after the start time.
+        </p>
+      )}
+    </div>
+  )
+
+  const renderLinkFiltersContent = (disabled = false) => (
+    <div className="filter-grid">
+      <label className="filter-field">
+        <span>Minimum Link Elevation</span>
+        <div className="filter-input-shell">
+          <input
+            type="number"
+            min="0"
+            max="90"
+            step="0.1"
+            inputMode="decimal"
+            placeholder="Optional"
+            value={minimumLinkElevationFilterDeg}
+            disabled={disabled}
+            onChange={(event) => setMinimumLinkElevationFilterDeg(event.target.value)}
+            className="filter-input"
+          />
+          <span className="filter-input-unit">°</span>
+        </div>
+      </label>
+      <label className="filter-field">
+        <span>Minimum Peak Elevation</span>
+        <div className="filter-input-shell">
+          <input
+            type="number"
+            min="0"
+            max="90"
+            step="0.1"
+            inputMode="decimal"
+            placeholder="Optional"
+            value={minimumPeakElevationFilterDeg}
+            disabled={disabled}
+            onChange={(event) => setMinimumPeakElevationFilterDeg(event.target.value)}
+            className="filter-input"
+          />
+          <span className="filter-input-unit">°</span>
+        </div>
+      </label>
+      {!linkFiltersValid && (
+        <p className="filter-error">
+          Optional filter values must stay between 0° and 90°.
+        </p>
+      )}
+    </div>
+  )
+
+  const renderSatelliteOptionsContent = (configDisabled = false) => (
+    <div className="checkbox-list">
+      {satelliteAssets.map((asset) => (
+        <label
+          key={asset.name}
+          className={`checkbox-row ${asset.eligible && !configDisabled ? '' : 'checkbox-row--disabled'}`}
+        >
+          <input
+            type="checkbox"
+            checked={selectedSatellites.includes(asset.name)}
+            onChange={() => toggleSatellite(asset.name)}
+            disabled={!asset.eligible || configDisabled}
+          />
+          <span className="asset-name">{asset.name}</span>
+          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
+        </label>
+      ))}
+      {satelliteAssets.length === 0 && (
+        !configDisabled ? <p>No satellite assets available.</p> : null
+      )}
+    </div>
+  )
+
+  const renderGroundStationOptionsContent = (configDisabled = false) => (
+    <div className="checkbox-list">
+      {groundStationAssets.map((asset) => (
+        <label
+          key={asset.name}
+          className={`checkbox-row ${asset.eligible && !configDisabled ? '' : 'checkbox-row--disabled'}`}
+        >
+          <input
+            type="checkbox"
+            checked={selectedGroundStations.includes(asset.name)}
+            onChange={() => toggleGroundStation(asset.name)}
+            disabled={!asset.eligible || configDisabled}
+          />
+          <span className="asset-name">{asset.name}</span>
+          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
+        </label>
+      ))}
+      {groundStationAssets.length === 0 && (
+        !configDisabled ? <p>No ground-station assets available.</p> : null
+      )}
+    </div>
+  )
+
+  const renderUnavailableAssetsContent = (configDisabled = false) => (
+    <div className="checkbox-list">
+      {unavailableAssets.map((asset) => (
+        <div
+          key={asset.name}
+          className="checkbox-row checkbox-row--disabled checkbox-row--static"
+        >
+          <span className="asset-name">{asset.name}</span>
+          {asset.error && renderAssetWarning(asset.error)}
+        </div>
+      ))}
+      {unavailableAssets.length === 0 && (
+        <p>{configDisabled ? 'Unavailable assets will appear here after the mission asset load.' : 'No unclassified assets.'}</p>
+      )}
+    </div>
+  )
+
+  const renderAssetsLandingContent = (configDisabled = false) => (
+    <div className="landing-assets-panel">
+      <div className="landing-assets-group">
+        <button
+          type="button"
+          className="section-toggle"
+          onClick={() => toggleSection('satellites')}
+          disabled={configDisabled}
+        >
+          <span>Satellites</span>
+          <span className="section-toggle-icon" aria-hidden="true">
+            {renderSectionChevron(expandedSections.satellites)}
+          </span>
+        </button>
+        {expandedSections.satellites && renderSatelliteOptionsContent(configDisabled)}
+      </div>
+      <div className="landing-assets-group">
+        <button
+          type="button"
+          className="section-toggle"
+          onClick={() => toggleSection('groundStations')}
+          disabled={configDisabled}
+        >
+          <span>Ground Stations</span>
+          <span className="section-toggle-icon" aria-hidden="true">
+            {renderSectionChevron(expandedSections.groundStations)}
+          </span>
+        </button>
+        {expandedSections.groundStations && renderGroundStationOptionsContent(configDisabled)}
+      </div>
+      <div className="landing-assets-group">
+        <button
+          type="button"
+          className="section-toggle"
+          onClick={() => toggleSection('unavailableAssets')}
+          disabled={configDisabled}
+        >
+          <span>Unavailable Assets</span>
+          <span className="section-toggle-icon" aria-hidden="true">
+            {renderSectionChevron(expandedSections.unavailableAssets)}
+          </span>
+        </button>
+        {expandedSections.unavailableAssets && renderUnavailableAssetsContent(configDisabled)}
+      </div>
+    </div>
+  )
+
   if (view === 'landing') {
+    const filtersDisabled = !missionAssetsLoaded
+    const filterTooltip = 'Load SatOS mission data first to enable filtering.'
+
     return (
       <div className="app-shell">
         {appHeader(true)}
         <div className="app-content app-content--landing">
           <div className="landing-shell">
             <div className="landing-content">
-              <div className="landing-info" role="status" aria-live="polite">
-                <span className="landing-info-icon" aria-hidden="true">i</span>
-                <p className="landing-info-text">
-                  No assets loaded yet. Click the button to request from SatOS.
-                </p>
-              </div>
+              <div className={`landing-config-shell ${missionAssetsLoaded ? '' : 'landing-config-shell--disabled'}`}>
+                <div className="landing-config-header landing-config-header--primary">
+                  <button
+                    className="btn-fetch landing-action-button"
+                    onClick={fetchAssets}
+                    disabled={loadMissionAssetsDisabled}
+                  >
+                    {loading ? (
+                      <>
+                        <span className="loading-spinner"></span>
+                        Fetching...
+                      </>
+                    ) : (
+                      'Load Mission Assets'
+                    )}
+                  </button>
+                </div>
 
-              <div className="landing-actions">
-                <button
-                  className="btn-fetch"
-                  onClick={fetchAssets}
-                  disabled={loading || backendAlive !== true || satosAlive !== true}
-                >
-                  {loading ? (
-                    <>
-                      <span className="loading-spinner"></span>
-                      Fetching...
-                    </>
-                  ) : (
-                    'Load Mission Assets'
-                  )}
-                </button>
+                <div className="landing-config-divider"></div>
 
-                {error && (
-                  <div className="error-message">
-                    <strong>Error:</strong> {error}
+                <div className="landing-config-body landing-config-body--landing">
+                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
+                    <div className="landing-config-panel-header">
+                      <span className="landing-config-step">Time Window</span>
+                    </div>
+                    {renderPlanningWindowContent(!missionAssetsLoaded)}
+                    {!missionAssetsLoaded && (
+                      <span className="landing-panel-tooltip">{filterTooltip}</span>
+                    )}
+                  </section>
+
+                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
+                    <div className="landing-config-panel-header">
+                      <span className="landing-config-step">Assets</span>
+                    </div>
+                    {renderAssetsLandingContent(!missionAssetsLoaded)}
+                    {!missionAssetsLoaded && (
+                      <span className="landing-panel-tooltip">{filterTooltip}</span>
+                    )}
+                  </section>
+
+                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
+                    <div className="landing-config-panel-header">
+                      <span className="landing-config-step">Link Filters</span>
+                    </div>
+                    {renderLinkFiltersContent(!missionAssetsLoaded)}
+                    {!missionAssetsLoaded && (
+                      <span className="landing-panel-tooltip">{filterTooltip}</span>
+                    )}
+                  </section>
+                </div>
+
+                {showOverviewProgress && (
+                  <div className="landing-progress-shell">
+                    {renderExtractionProgressPanel()}
                   </div>
                 )}
 
-                {backendAlive === false && (
-                  <p className="results-warning">
-                    Please start your FastAPI server (<code>python run.py</code> in <code>backend/</code>) to test integration.
-                  </p>
-                )}
-
-                {backendAlive === true && satosAlive === false && (
-                  <p className="results-warning">
-                    Backend is online, but SatOS access failed. Check credentials or current SatOS availability.
-                  </p>
-                )}
+                <div className="landing-config-footer">
+                  <div className="landing-action-wrapper">
+                    {launchingScheduler ? (
+                      <button
+                        className="btn-fetch btn-terminate landing-action-button"
+                        onClick={handleTerminateScheduler}
+                      >
+                        Terminate
+                      </button>
+                    ) : (
+                      <button
+                        className="btn-fetch landing-action-button"
+                        onClick={handleLoadScope}
+                        disabled={loadScopeDisabled}
+                      >
+                        Load SCOPE
+                      </button>
+                    )}
+                    {!launchingScheduler && loadScopeDisabled && (
+                      <span className="landing-action-tooltip">
+                        {loadScopeDisabledReason}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
+
+              {error && (
+                <div className="error-message">
+                  <strong>Error:</strong> {error}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -4090,42 +4503,7 @@ export default function App() {
               <div id="overview-panel-content" className="panel-collapsible-content">
               <div className="overview-list">
               {showOverviewProgress ? (
-                <div className="overview-progress">
-                  <div className="overview-progress-body">
-                    <div className="overview-progress-heading">
-                      <span className="overview-progress-title">Processing Log</span>
-                      <span className="overview-progress-percent">{extractionProgress}%</span>
-                    </div>
-                    <div className="overview-progress-log" role="log" aria-live="polite">
-                      {extractionMessages.length === 0 ? (
-                        <div className="overview-progress-entry overview-progress-entry--placeholder">
-                          Waiting for backend status updates.
-                        </div>
-                      ) : (
-                        extractionMessages.map((entry) => (
-                          <div key={entry.id} className="overview-progress-entry">
-                            {entry.text}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                  <div className="overview-progress-footer">
-                    <div
-                      className="overview-progress-bar"
-                      role="progressbar"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={extractionProgress}
-                      aria-label="Overpass extraction progress"
-                    >
-                      <div
-                        className="overview-progress-bar-fill"
-                        style={{ width: `${Math.max(0, Math.min(100, extractionProgress))}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                </div>
+                renderExtractionProgressPanel()
               ) : (
                 <div className="overview-table-scroll">
                   <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
@@ -4289,13 +4667,13 @@ export default function App() {
                 {!calculatingTradeOffs && (
                   <span className="panel-action-tooltip">
                     {!schedulerLaunched
-                      ? 'Launch Communication Scheduler first and wait for extraction to complete.'
+                      ? 'Finish loading SCOPE and wait for extraction to complete.'
                       : !useDemoData
                         ? 'Trade-off calculation is not connected for real-data mode yet. Enable demo data to preview this workflow.'
                         : !tradeOffDemoAvailable
                           ? overviewRows.length > 0
                             ? 'All extracted overpasses are blocked by existing scheduled activities with higher priority.'
-                            : 'Launch the scheduler first so extracted overpasses are available for the simulated trade-off step.'
+                            : 'No extracted overpasses are available for the simulated trade-off step.'
                           : 'Calculate the simulated trade-off groups for the currently visible extracted overpasses.'}
                   </span>
                 )}
@@ -5381,79 +5759,7 @@ export default function App() {
                       {renderSectionChevron(expandedSections.timeWindow)}
                     </span>
                   </button>
-                  {expandedSections.timeWindow && (
-                    <div className="time-window-panel">
-                      <div className="time-window-header">
-                        <span className="time-window-title">Planning Interval</span>
-                        <div className="time-window-zone-toggle" role="group" aria-label="Planning interval time zone">
-                          <button
-                            type="button"
-                            className={`time-window-zone-button ${planningTimeMode === 'utc' ? 'time-window-zone-button--active' : ''}`}
-                            onClick={() => handlePlanningTimeModeChange('utc')}
-                            aria-pressed={planningTimeMode === 'utc'}
-                          >
-                            UTC
-                          </button>
-                          <button
-                            type="button"
-                            className={`time-window-zone-button ${planningTimeMode === 'local' ? 'time-window-zone-button--active' : ''}`}
-                            onClick={() => handlePlanningTimeModeChange('local')}
-                            aria-pressed={planningTimeMode === 'local'}
-                          >
-                            Local
-                          </button>
-                        </div>
-                      </div>
-                      <div className="time-window-row">
-                        <label className="time-window-field">
-                          <span>Start Date</span>
-                          <input
-                            type="date"
-                            value={planningWindowStartDate}
-                            onChange={(event) => {
-                              setPlanningWindowStartDate(event.target.value)
-                              event.target.blur()
-                            }}
-                            className="time-window-input"
-                          />
-                        </label>
-                        <label className="time-window-field time-window-field--time">
-                          <span>Start Time</span>
-                          {renderTimeInput('start', planningWindowStartTime, setPlanningWindowStartTime)}
-                        </label>
-                      </div>
-                      {renderPlanningTimeActions('start')}
-                      <div className="time-window-row">
-                        <label className="time-window-field">
-                          <span>End Date</span>
-                          <input
-                            type="date"
-                            value={planningWindowEndDate}
-                            onChange={(event) => {
-                              setPlanningWindowEndDate(event.target.value)
-                              event.target.blur()
-                            }}
-                            className="time-window-input"
-                          />
-                        </label>
-                        <label className="time-window-field time-window-field--time">
-                          <span>End Time</span>
-                          {renderTimeInput('end', planningWindowEndTime, setPlanningWindowEndTime)}
-                        </label>
-                      </div>
-                      {renderPlanningTimeActions('end')}
-                      {planningWindowComplete && !planningWindowValid && (
-                        <p className="time-window-error">
-                          Enter a valid time window with an end time after the start time.
-                        </p>
-                      )}
-                      <p className="time-window-note">
-                        {planningTimeMode === 'utc'
-                          ? 'Using UTC standard time. Propagation is limited to this interval.'
-                          : 'Using local time. Propagation is limited to this interval.'}
-                      </p>
-                    </div>
-                  )}
+                  {expandedSections.timeWindow && renderPlanningWindowContent()}
                 </div>
 
                 <div className="sidebar-block">
@@ -5547,6 +5853,20 @@ export default function App() {
                       {unavailableAssets.length === 0 && <p>No unclassified assets.</p>}
                     </div>
                   )}
+                </div>
+
+                <div className="sidebar-block">
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    onClick={() => toggleSection('linkFilters')}
+                  >
+                    <span>Link Filters</span>
+                    <span className="section-toggle-icon" aria-hidden="true">
+                      {renderSectionChevron(expandedSections.linkFilters)}
+                    </span>
+                  </button>
+                  {expandedSections.linkFilters && renderLinkFiltersContent()}
                 </div>
               </div>
 
