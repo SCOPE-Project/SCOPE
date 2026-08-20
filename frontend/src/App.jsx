@@ -296,6 +296,7 @@ export default function App() {
   const [launchingScheduler, setLaunchingScheduler] = useState(false)
   const [schedulerLaunched, setSchedulerLaunched] = useState(false)
   const [overviewRows, setOverviewRows] = useState([])
+  const [showUnavailableOverviewRows, setShowUnavailableOverviewRows] = useState(true)
   const [satelliteTracks, setSatelliteTracks] = useState({})
   const [extractionStatus, setExtractionStatus] = useState('Not started')
   const [extractionProgress, setExtractionProgress] = useState(0)
@@ -305,7 +306,13 @@ export default function App() {
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
-  const [selectedTradeOffOption, setSelectedTradeOffOption] = useState(null)
+  const [selectedTradeOffOption, setSelectedTradeOffOption] = useState({})
+  const [warningTooltip, setWarningTooltip] = useState({
+    visible: false,
+    message: '',
+    x: 0,
+    y: 0,
+  })
   const [overviewPanelWidth, setOverviewPanelWidth] = useState(58)
   // Which panel currently occupies which of the 5 layout slots. The top row
   // (topLeft/topRight) sits side by side with a width-resizer between them;
@@ -587,7 +594,8 @@ export default function App() {
     setUseDemoData((current) => !current)
     setError(null)
     setOverviewRows((current) =>
-      current
+      assignAvailableLinkIds(
+        current
         .filter((row) => !row.demoGenerated)
         .map((row) => ({
           ...row,
@@ -595,12 +603,13 @@ export default function App() {
           tradeOffScore: '—',
           tradeOffColorIndex: null,
         }))
+      )
     )
     setCalculatingTradeOffs(false)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
-    setSelectedTradeOffOption(null)
+    setSelectedTradeOffOption({})
     setMarkedTimelineLinkId(null)
     setMarkedTradeOffOptionId(null)
     setConfirmingSchedule(false)
@@ -661,6 +670,7 @@ export default function App() {
       .filter((group) => group.rows.length > 1)
       .map((group, groupIndex) => {
         const tradeOffId = `TO-${String(groupIndex + 1).padStart(2, '0')}`
+        const tradeOffGroupId = `tradeoff-${tradeOffId}`
         const colorIndex = groupIndex % TRADE_OFF_ACCENT_COLORS.length
 
         const options = group.rows
@@ -670,6 +680,7 @@ export default function App() {
             const totalScoreValue = Math.round(20 + durationScore + elevationScore)
 
             return {
+              tradeOffGroupId,
               optionId: `${tradeOffId}-${row.overpassId}`,
               overpassId: row.overpassId,
               satId: row.satId,
@@ -700,7 +711,7 @@ export default function App() {
         })
 
         return {
-          id: `tradeoff-${tradeOffId}`,
+          id: tradeOffGroupId,
           title: tradeOffId,
           resourceLabel: group.satId,
           reason: `${group.satId} has overlapping downlink opportunities in this planning window and can only serve one of them.`,
@@ -879,6 +890,75 @@ export default function App() {
   const getTimeZoneFormatOptions = (timeMode) =>
     timeMode === 'utc' ? { timeZone: 'UTC' } : {}
 
+  const formatOverviewDateLabel = (date, timeMode) =>
+    date.toLocaleDateString([], {
+      day: '2-digit',
+      month: 'short',
+      ...getTimeZoneFormatOptions(timeMode),
+    })
+
+  const formatOverviewTimeLabel = (date, timeMode) =>
+    date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      ...getTimeZoneFormatOptions(timeMode),
+    })
+
+  const getOverviewDayKey = (date, timeMode) =>
+    formatPlanningDateFields(date, timeMode).date
+
+  const getOverviewDayOffset = (startDate, endDate, timeMode) => {
+    if (getOverviewDayKey(startDate, timeMode) === getOverviewDayKey(endDate, timeMode)) {
+      return 0
+    }
+
+    const startDayTimestamp = timeMode === 'utc'
+      ? Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate())
+      : new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime()
+    const endDayTimestamp = timeMode === 'utc'
+      ? Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate())
+      : new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime()
+
+    return Math.max(0, Math.round((endDayTimestamp - startDayTimestamp) / 86400000))
+  }
+
+  const formatOverviewStartDateTime = (
+    value,
+    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
+  ) => {
+    if (!value) {
+      return '—'
+    }
+
+    const parsed = new Date(value)
+    if (!Number.isFinite(parsed.getTime())) {
+      return '—'
+    }
+
+    return `${formatOverviewDateLabel(parsed, timeMode)} ${formatOverviewTimeLabel(parsed, timeMode)}`
+  }
+
+  const formatOverviewEndDateTime = (
+    startValue,
+    endValue,
+    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
+  ) => {
+    if (!startValue || !endValue) {
+      return '—'
+    }
+
+    const startDate = new Date(startValue)
+    const endDate = new Date(endValue)
+    if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime())) {
+      return '—'
+    }
+
+    const dayOffset = getOverviewDayOffset(startDate, endDate, timeMode)
+    const timeLabel = formatOverviewTimeLabel(endDate, timeMode)
+
+    return dayOffset > 0 ? `${timeLabel} +${dayOffset}` : timeLabel
+  }
+
   const formatDateTimeCompact = (
     value,
     timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
@@ -910,6 +990,7 @@ export default function App() {
   }
 
   const formatOverpassDisplayId = (index) => `OP-${String(index + 1).padStart(3, '0')}`
+  const formatLinkDisplayId = (index) => `L-${String(index + 1).padStart(3, '0')}`
 
   const buildOverviewRowsFromOverpasses = (overpassBlocks) =>
     [...overpassBlocks]
@@ -920,6 +1001,7 @@ export default function App() {
       })
       .map((block, index) => ({
         overpassId: formatOverpassDisplayId(index),
+        linkId: null,
         backendOverpassId: block.overpass_id,
         satId: block.satellite_name,
         gsId: block.groundstation_name,
@@ -929,6 +1011,8 @@ export default function App() {
         endTime: block.end_time,
         maxElevation: formatElevation(block.max_elevation_deg),
         maxElevationDeg: block.max_elevation_deg,
+        availabilityStatus: block.availability_status ?? (block.rejection_reason ? 'unavailable' : 'available'),
+        rejectionReason: block.rejection_reason ?? null,
       }))
 
   const buildCurrentScheduleItems = (schedules, relevantScheduleNames) => {
@@ -960,6 +1044,35 @@ export default function App() {
         const rightTimestamp = toTimestamp(right.startTime) ?? 0
         return leftTimestamp - rightTimestamp
       })
+  }
+
+  const isUnavailableOverviewRow = (row) => (
+    row.scheduleBlocked
+    || row.availabilityStatus === 'filtered'
+    || row.availabilityStatus === 'blocked'
+    || row.availabilityStatus === 'unavailable'
+    || Boolean(row.rejectionReason)
+  )
+
+  const assignAvailableLinkIds = (rows) => {
+    let availableIndex = 0
+
+    return rows.map((row) => {
+      if (isUnavailableOverviewRow(row)) {
+        return {
+          ...row,
+          linkId: '—',
+        }
+      }
+
+      const nextLinkId = formatLinkDisplayId(availableIndex)
+      availableIndex += 1
+
+      return {
+        ...row,
+        linkId: nextLinkId,
+      }
+    })
   }
 
   const hasTimeOverlap = (startA, endA, startB, endB) => startA < endB && endA > startB
@@ -1003,12 +1116,17 @@ export default function App() {
   const annotateRowsWithSchedulePriority = (rows, scheduleItems) =>
     rows.map((row) => {
       const blockingActivity = getBlockingScheduledActivity(row, scheduleItems)
+      const rejectionReason = blockingActivity
+        ? `${row.overpassId} is blocked because ${blockingActivity?.label ?? 'a scheduled activity'} on ${blockingActivity?.detail ?? 'the current schedule'} has priority.`
+        : row.rejectionReason ?? null
 
       return {
         ...row,
         scheduleBlocked: Boolean(blockingActivity),
         scheduleBlockLabel: blockingActivity?.label ?? null,
         scheduleBlockAsset: blockingActivity?.detail ?? null,
+        availabilityStatus: blockingActivity ? 'blocked' : (row.availabilityStatus ?? 'available'),
+        rejectionReason,
       }
     })
 
@@ -1141,7 +1259,7 @@ export default function App() {
   }
 
   const getSelectedTradeOffForGroup = (group) =>
-    group.options.find((option) => option.optionId === selectedTradeOffOption)
+    group.options.find((option) => option.optionId === selectedTradeOffOption[group.id])
     ?? group.options.find((option) => option.recommended)
     ?? group.options[0]
 
@@ -1537,6 +1655,7 @@ export default function App() {
     setLaunchingScheduler(false)
     setSchedulerLaunched(false)
     setOverviewRows([])
+    setShowUnavailableOverviewRows(true)
     setSatelliteTracks({})
     setExtractionStatus('Not started')
     setExtractionProgress(0)
@@ -1545,7 +1664,7 @@ export default function App() {
     setTradeOffsCalculated(false)
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
-    setSelectedTradeOffOption(null)
+    setSelectedTradeOffOption({})
     setActiveMapAssetId(null)
     setActivePlanningWindow(null)
     setTimelineNow(Date.now())
@@ -1779,13 +1898,15 @@ export default function App() {
     }
   }
 
-  const applyOverviewLinkFilters = (rows) => rows.filter((row) => {
+  const applyOverviewLinkFilters = (rows) => rows.map((row) => {
+    const filterReasons = []
+
     if (
       minimumLinkElevationFilterValue !== null
       && Number.isFinite(row.maxElevationDeg)
       && row.maxElevationDeg < minimumLinkElevationFilterValue
     ) {
-      return false
+      filterReasons.push('Filtered by link elevation threshold.')
     }
 
     if (
@@ -1793,10 +1914,25 @@ export default function App() {
       && Number.isFinite(row.maxElevationDeg)
       && row.maxElevationDeg < minimumPeakElevationFilterValue
     ) {
-      return false
+      filterReasons.push('Filtered by peak elevation threshold.')
     }
 
-    return true
+    if (filterReasons.length === 0) {
+      return row
+    }
+
+    if (row.availabilityStatus && row.availabilityStatus !== 'available') {
+      return {
+        ...row,
+        rejectionReason: [row.rejectionReason, ...filterReasons].filter(Boolean).join(' '),
+      }
+    }
+
+    return {
+      ...row,
+      availabilityStatus: 'filtered',
+      rejectionReason: filterReasons.join(' '),
+    }
   })
 
   const handleLaunchScheduler = async () => {
@@ -1834,7 +1970,7 @@ export default function App() {
     setTradeOffsCalculated(false)
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
-    setSelectedTradeOffOption(null)
+    setSelectedTradeOffOption({})
     setExpandedTimelineGroups({})
     setExpandedTimelineSections({ satellites: true, groundStations: true })
     setMarkedTimelineLinkId(null)
@@ -1905,7 +2041,7 @@ export default function App() {
       )
 
       setSatelliteTracks(result?.payload?.global_tracks ?? {})
-      setOverviewRows(realRows)
+      setOverviewRows(assignAvailableLinkIds(realRows))
       setExtractionStatus('Completed')
       setExtractionProgress(100)
       return true
@@ -1974,11 +2110,17 @@ export default function App() {
 
     const { enrichedRows, groups } = tradeOffState
 
-    setOverviewRows(enrichedRows)
+    setOverviewRows(assignAvailableLinkIds(enrichedRows))
     setTradeOffCards(groups)
     setActiveTradeOffCardIndex(0)
     focusTimelineOnTradeOffCard(groups[0])
-    setSelectedTradeOffOption(groups[0]?.options.find((option) => option.recommended)?.optionId ?? null)
+    setSelectedTradeOffOption(
+      Object.fromEntries(
+        groups
+          .map((group) => [group.id, group.options.find((option) => option.recommended)?.optionId ?? group.options[0]?.optionId ?? null])
+          .filter(([, optionId]) => optionId !== null)
+      )
+    )
     setTradeOffsCalculated(true)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
@@ -2277,7 +2419,17 @@ export default function App() {
     launchingScheduler
     || extractionStatus === 'Queued'
     || extractionStatus === 'Running'
-  const schedulableOverviewRows = overviewRows.filter((row) => !row.scheduleBlocked)
+  const getOverviewAvailabilityLabel = (row) => {
+    if (row.availabilityStatus === 'filtered') return 'Filtered'
+    if (row.scheduleBlocked || row.availabilityStatus === 'blocked') return 'Blocked'
+    if (row.availabilityStatus === 'unavailable') return 'Unavailable'
+    return null
+  }
+  const isOverviewRowUnavailable = (row) => isUnavailableOverviewRow(row)
+  const schedulableOverviewRows = overviewRows.filter((row) => !isOverviewRowUnavailable(row))
+  const visibleOverviewRows = showUnavailableOverviewRows
+    ? overviewRows
+    : overviewRows.filter((row) => !isOverviewRowUnavailable(row))
   const tradeOffDemoAvailable = useDemoData && schedulerLaunched && schedulableOverviewRows.length > 0
   const finalScheduleRows = useMemo(
     () => getFinalScheduleRows(overviewRows, tradeOffCards, tradeOffsCalculated),
@@ -3293,8 +3445,43 @@ export default function App() {
   ])
 
   const formatGb = (value) => `${value >= 100 ? Math.round(value) : value.toFixed(1)} GB`
+  const showWarningTooltip = (message, event) => {
+    if (!message) return
+
+    setWarningTooltip({
+      visible: true,
+      message,
+      x: event?.clientX ?? 0,
+      y: event?.clientY ?? 0,
+    })
+  }
+
+  const moveWarningTooltip = (event) => {
+    setWarningTooltip((current) => (
+      current.visible
+        ? { ...current, x: event?.clientX ?? current.x, y: event?.clientY ?? current.y }
+        : current
+    ))
+  }
+
+  const hideWarningTooltip = () => {
+    setWarningTooltip((current) => (
+      current.visible
+        ? { ...current, visible: false }
+        : current
+    ))
+  }
+
   const renderAssetWarning = (message) => (
-    <span className="asset-warning" aria-label={message}>
+    <span
+      className="asset-warning"
+      aria-label={message}
+      onMouseEnter={(event) => showWarningTooltip(message, event)}
+      onMouseMove={moveWarningTooltip}
+      onMouseLeave={hideWarningTooltip}
+      onFocus={(event) => showWarningTooltip(message, event)}
+      onBlur={hideWarningTooltip}
+    >
       <svg
         className="asset-warning-icon"
         viewBox="0 0 24 24"
@@ -3310,7 +3497,6 @@ export default function App() {
           fill="#fff"
         />
       </svg>
-      <span className="asset-warning-tooltip">{message}</span>
     </span>
   )
 
@@ -3673,7 +3859,10 @@ export default function App() {
   // expanded, scrolled to the link. The navigational marking is cleared -- its
   // red comparison curve showed an alternative you have just decided about.
   const handleSelectTradeOffOption = (option) => {
-    setSelectedTradeOffOption(option.optionId)
+    setSelectedTradeOffOption((current) => ({
+      ...current,
+      [option.tradeOffGroupId]: option.optionId,
+    }))
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
     setMarkedTimelineLinkId(null)
@@ -4461,29 +4650,40 @@ export default function App() {
               </div>
               </div>
               <div className="panel-heading-actions">
-                <div
-                  className={`overview-inline-status ${
-                    extractionStatus === 'Completed'
-                      ? 'overview-inline-status--online'
-                      : extractionStatus === 'Running' || extractionStatus === 'Queued'
-                        ? 'overview-inline-status--checking'
-                        : 'overview-inline-status--offline'
-                  }`}
-                >
+                <div className="overview-inline-status">
                   {schedulerLaunched && (
                     <div className="overview-count-inline">
                       <span className="overview-status-label">Overpasses</span>
-                      <span className="overview-count-value">{overviewRows.length}</span>
+                      <span className="overview-count-value">{visibleOverviewRows.length}</span>
                     </div>
                   )}
-                  <div className="overview-status-block">
-                    <span className="overview-status-label">Status</span>
-                    <div className="overview-status-value">
-                      <span className="app-status-dot" aria-hidden="true"></span>
-                      <span className="overview-status-text">{extractionStatus}</span>
+                  {schedulerLaunched && (
+                    <div className="overview-count-inline">
+                      <span className="overview-status-label">Available Links</span>
+                      <span className="overview-count-value">{schedulableOverviewRows.length}</span>
                     </div>
-                  </div>
+                  )}
                 </div>
+                {schedulerLaunched && (
+                  <div className="overview-table-visibility-toggle" role="group" aria-label="Overview visibility filter">
+                    <button
+                      type="button"
+                      className={`overview-table-toggle-button ${showUnavailableOverviewRows ? 'overview-table-toggle-button--active' : ''}`}
+                      onClick={() => setShowUnavailableOverviewRows(true)}
+                      aria-pressed={showUnavailableOverviewRows}
+                    >
+                      Show all
+                    </button>
+                    <button
+                      type="button"
+                      className={`overview-table-toggle-button ${!showUnavailableOverviewRows ? 'overview-table-toggle-button--active' : ''}`}
+                      onClick={() => setShowUnavailableOverviewRows(false)}
+                      aria-pressed={!showUnavailableOverviewRows}
+                    >
+                      Show available
+                    </button>
+                  </div>
+                )}
                 <button
                   type="button"
                   className="panel-collapse-toggle"
@@ -4508,12 +4708,14 @@ export default function App() {
                 <div className="overview-table-scroll">
                   <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
                     <span>Overpass ID</span>
+                    <span>Status</span>
+                    <span>Link ID</span>
                     <span>Sat ID</span>
                     <span>GS ID</span>
                     <span>Start</span>
                     <span>End</span>
-                    <span>Max Elev.</span>
                     <span>Duration</span>
+                    <span>Max Elev.</span>
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--tradeoff">
                         <span>Trade-Off ID</span>
@@ -4534,29 +4736,18 @@ export default function App() {
                     )}
                     {tradeOffsCalculated && <span>Select</span>}
                   </div>
-                  {overviewRows.length === 0 ? (
+                  {visibleOverviewRows.length === 0 ? (
                     <>
                       <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                        <span>OP-001</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                      </div>
-                      <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                        <span>OP-002</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
-                        <span>Pending</span>
+                        <span>{showUnavailableOverviewRows ? 'OP-001' : 'No available overpasses'}</span>
+                        <span>—</span>
+                        <span>{showUnavailableOverviewRows ? 'L-001' : '—'}</span>
+                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
+                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
+                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
+                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
+                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
+                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
@@ -4565,8 +4756,12 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      {overviewRows.map((row) => {
+                      {visibleOverviewRows.map((row) => {
                         const rowOption = getOptionForOverpassId(row.overpassId)
+                        const rowUnavailable = isOverviewRowUnavailable(row)
+                        const rowFiltered = row.availabilityStatus === 'filtered'
+                        const rowAvailabilityLabel = getOverviewAvailabilityLabel(row)
+                        const rowRejectionReason = row.rejectionReason ?? getScheduleBlockMessage(row)
                         const isRecommendedRow = tradeOffsCalculated
                           && row.tradeOffId !== '—'
                           && row.tradeOffScore !== '—'
@@ -4574,42 +4769,46 @@ export default function App() {
                         // The Trade-Off panel used to own this; the Overview is
                         // the only place it lives now.
                         const isSelectableRow = tradeOffsCalculated
-                          && !row.scheduleBlocked
+                          && !rowUnavailable
                           && row.tradeOffId !== '—'
                           && rowOption !== null
                         const isSelectedRow = isSelectableRow
-                          && selectedTradeOffOption === rowOption.optionId
+                          && selectedTradeOffOption[rowOption.tradeOffGroupId] === rowOption.optionId
                         const rowBudget = rowOption ? getOptionLinkBudget(rowOption) : null
 
                         return (
                           <div
                             key={row.overpassId}
-                            className={`overview-list-row ${row.scheduleBlocked ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${isSelectedRow ? 'overview-list-row--selected' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
+                            className={`overview-list-row ${rowUnavailable ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${isSelectedRow ? 'overview-list-row--selected' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
                           >
                             <span className="overview-overpass-cell">
                               <span>{row.overpassId}</span>
+                              {rowUnavailable && rowRejectionReason ? renderAssetWarning(rowRejectionReason) : null}
+                            </span>
+                            <span className="overview-status-cell">
                               {isRecommendedRow ? (
                                 <span className="overview-row-note overview-row-note--recommended">
                                   Recommended
                                 </span>
                               ) : null}
-                              {row.scheduleBlocked && (
-                                <span
-                                  className="overview-row-note"
-                                  title={getScheduleBlockMessage(row)}
-                                >
-                                  Blocked
+                              {rowUnavailable && !rowFiltered && rowAvailabilityLabel ? (
+                                <span className="overview-row-note">
+                                  {rowAvailabilityLabel}
                                 </span>
-                              )}
+                              ) : null}
+                              {!isRecommendedRow && !rowUnavailable ? <span className="overview-status-empty">—</span> : null}
                             </span>
+                            <span className="overview-linkid-cell">{row.linkId ?? '—'}</span>
                             <span>{row.satId}</span>
                             <span>{row.gsId}</span>
-                            <span>{formatDateTimeCompact(row.startTime)}</span>
-                            <span>{formatDateTimeCompact(row.endTime)}</span>
-                            <span>{row.maxElevation ?? '—'}</span>
+                            <span>{formatOverviewStartDateTime(row.startTime)}</span>
+                            <span>{formatOverviewEndDateTime(row.startTime, row.endTime)}</span>
                             <span>{row.duration}</span>
+                            <span>{row.maxElevation ?? '—'}</span>
                             {tradeOffsCalculated && (
-                              row.tradeOffId !== '—'
+                              rowUnavailable
+                                ? <span className="overview-tradeoff-cell">—</span>
+                                : row.tradeOffId !== '—'
                                 ? (
                                   <span className="overview-tradeoff-cell">
                                     <button
@@ -4754,7 +4953,7 @@ export default function App() {
                             data-option-id={option.optionId}
                             className={[
                               'tradeoff-option',
-                              selectedTradeOffOption === option.optionId ? 'tradeoff-option--selected' : '',
+                              selectedTradeOffOption[option.tradeOffGroupId] === option.optionId ? 'tradeoff-option--selected' : '',
                               markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
                             ].filter(Boolean).join(' ')}
                             style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
@@ -4794,7 +4993,7 @@ export default function App() {
                               className="tradeoff-select-button"
                               onClick={() => handleSelectTradeOffOption(option)}
                             >
-                              {selectedTradeOffOption === option.optionId ? 'Selected' : 'Select'}
+                              {selectedTradeOffOption[option.tradeOffGroupId] === option.optionId ? 'Selected' : 'Select'}
                             </button>
                           </div>
                         )
@@ -6005,6 +6204,18 @@ export default function App() {
       <div className="app-content">
         {pageContent}
       </div>
+
+      {warningTooltip.visible && (
+        <div
+          className="app-hover-tooltip"
+          style={{
+            left: `${Math.max(12, Math.min(warningTooltip.x + 16, window.innerWidth - 320))}px`,
+            top: `${Math.max(12, Math.min(warningTooltip.y + 18, window.innerHeight - 120))}px`,
+          }}
+        >
+          {warningTooltip.message}
+        </div>
+      )}
 
       {confirmingSchedule && (
         <div className="workspace-lock-overlay" role="status" aria-live="polite">
