@@ -431,19 +431,41 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
   ```json
   {
     "filter_run_id": "filt-9988-7766-5544",
-    "initial_buffer_levels_mb": {
-      "Sat1": 200.0,
-      "Sat2": 500.0
+    "satellite_buffer_configs": {
+      "Sat1": {
+        "capacity_mb": 3000.0,
+        "initial_level_mb": 200.0,
+        "payload_generation_rate_mbps": 12.0,
+        "downlink_rate_mbps": 50.0
+      },
+      "Sat2": {
+        "capacity_mb": 5000.0,
+        "initial_level_mb": 500.0,
+        "payload_generation_rate_mbps": 20.0,
+        "downlink_rate_mbps": 75.0
+      }
     },
-    "scoring_strategy": "buffer_overflow_avoidance",
-    "urgency_alpha": 2.0
+    "default_buffer_config": {
+      "capacity_mb": 2000.0,
+      "initial_level_mb": 0.0,
+      "payload_generation_rate_mbps": 15.0,
+      "downlink_rate_mbps": 25.0
+    },
+    "scoring_config": {
+      "name": "buffer_overflow_avoidance",
+      "parameters": {
+        "alpha": 2.0,
+        "exponent": 2.0
+      }
+    }
   }
   ```
 * **Internal Action:**
   1. Fetches candidate links from `LinkRepository` by `filter_run_id`.
-  2. Builds `ConflictStructure` over eligible links (`is_eligible == True`).
-  3. Spawns `SchedulingSession` with unique `session_id`.
-  4. Executes initial Multi-Pass Forward Simulation.
+  2. Resolves per-satellite buffer configurations (`capacity_mb`, `initial_level_mb`, `payload_generation_rate_mbps`, `downlink_rate_mbps`) from user inputs and default fallbacks.
+  3. Builds `ConflictStructure` over eligible links (`is_eligible == True`).
+  4. Spawns `SchedulingSession` with unique `session_id`.
+  5. Executes initial Multi-Pass Forward Simulation.
 * **Response:** `TaskReceiptResponse` (`{ "task_id": "session-uuid-001", "status": "Queued" }`).
 
 ---

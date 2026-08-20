@@ -28,7 +28,15 @@ class SchedulingSessionManager:
         filter_run_id: str,
         candidate_links: List[LinkBlock],
         asset_schedules: Optional[Dict[str, List[Activity]]] = None,
+        satellite_configs: Optional[Dict[str, SatelliteBufferConfig]] = None,
         initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
+        buffer_capacities_mb: Optional[Dict[str, float]] = None,
+        payload_generation_rates_mbps: Optional[Dict[str, float]] = None,
+        downlink_rates_mbps: Optional[Dict[str, float]] = None,
+        default_capacity_mb: float = 2000.0,
+        default_initial_level_mb: float = 0.0,
+        default_payload_generation_rate_mbps: float = 15.0,
+        default_downlink_rate_mbps: float = 25.0,
         scoring_strategy: str = "buffer_overflow_avoidance",
         scoring_parameters: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
@@ -49,19 +57,48 @@ class SchedulingSessionManager:
         conflict_structure = build_conflict_structure(eligible_links)
 
         # Set up satellite buffer configurations
+        configs_dict = dict(satellite_configs or {})
         initial_buffers = initial_buffer_levels_mb or {}
-        satellite_configs: Dict[str, SatelliteBufferConfig] = {}
+        capacities = buffer_capacities_mb or {}
+        generation_rates = payload_generation_rates_mbps or {}
+        downlink_rates = downlink_rates_mbps or {}
 
+        resolved_satellite_configs: Dict[str, SatelliteBufferConfig] = {}
+
+        # 1. Ingest any explicitly provided SatelliteBufferConfig objects
+        for sat, cfg in configs_dict.items():
+            resolved_satellite_configs[sat] = cfg
+
+        # 2. Ensure every satellite present in candidate_links has a complete config
         for link in candidate_links:
             sat = link.satellite_name
-            if sat not in satellite_configs:
-                satellite_configs[sat] = SatelliteBufferConfig(
+            if sat not in resolved_satellite_configs:
+                resolved_satellite_configs[sat] = SatelliteBufferConfig(
                     satellite_name=sat,
-                    capacity_mb=2000.0,
-                    initial_level_mb=initial_buffers.get(sat, 0.0),
-                    payload_generation_rate_mbps=15.0,
-                    downlink_rate_mbps=25.0,
+                    capacity_mb=capacities.get(sat, default_capacity_mb),
+                    initial_level_mb=initial_buffers.get(sat, default_initial_level_mb),
+                    payload_generation_rate_mbps=generation_rates.get(sat, default_payload_generation_rate_mbps),
+                    downlink_rate_mbps=downlink_rates.get(sat, default_downlink_rate_mbps),
                 )
+            else:
+                existing = resolved_satellite_configs[sat]
+                new_init = initial_buffers.get(sat, existing.initial_level_mb)
+                new_cap = capacities.get(sat, existing.capacity_mb)
+                new_gen = generation_rates.get(sat, existing.payload_generation_rate_mbps)
+                new_dl = downlink_rates.get(sat, existing.downlink_rate_mbps)
+                if (
+                    new_init != existing.initial_level_mb
+                    or new_cap != existing.capacity_mb
+                    or new_gen != existing.payload_generation_rate_mbps
+                    or new_dl != existing.downlink_rate_mbps
+                ):
+                    resolved_satellite_configs[sat] = SatelliteBufferConfig(
+                        satellite_name=sat,
+                        capacity_mb=new_cap,
+                        initial_level_mb=new_init,
+                        payload_generation_rate_mbps=new_gen,
+                        downlink_rate_mbps=new_dl,
+                    )
 
         user_overrides: Dict[str, OverrideState] = {}
         schedules_map = asset_schedules or {}
@@ -75,7 +112,7 @@ class SchedulingSessionManager:
         current_plan, satellite_profiles = active_scheduler.solve(
             candidate_links=links_by_id,
             user_overrides=user_overrides,
-            satellite_configs=satellite_configs,
+            satellite_configs=resolved_satellite_configs,
             conflict_structure=conflict_structure,
             asset_schedules=schedules_map,
             scoring_rule=active_scoring,
@@ -86,7 +123,7 @@ class SchedulingSessionManager:
             filter_run_id=filter_run_id,
             candidate_links=links_by_id,
             user_overrides=user_overrides,
-            satellite_configs=satellite_configs,
+            satellite_configs=resolved_satellite_configs,
             conflict_structure=conflict_structure,
             active_scoring_strategy=scoring_strategy,
             scoring_parameters=params,

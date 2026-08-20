@@ -16,6 +16,7 @@ from app.models.scheduling import (
     LinkBlockDTO,
     SessionPlanDTO,
     ScoringStrategyConfigDTO,
+    SatelliteBufferConfigDTO,
 )
 
 
@@ -76,6 +77,8 @@ def run_filter_links_task(
     orbit_engine_run_id: str,
     min_aos_los_elevation_deg: Optional[float] = None,
     min_peak_elevation_deg: Optional[float] = None,
+    default_downlink_rate_mbps: float = 25.0,
+    satellite_downlink_rates_mbps: Optional[Dict[str, float]] = None,
 ):
     """
     Executes the dedicated link derivation and filtering task.
@@ -93,6 +96,8 @@ def run_filter_links_task(
             asset_schedules=asset_schedules,
             min_aos_los_elevation_deg=min_aos_los_elevation_deg,
             min_peak_elevation_deg=min_peak_elevation_deg,
+            default_downlink_rate_mbps=default_downlink_rate_mbps,
+            satellite_downlink_rates_mbps=satellite_downlink_rates_mbps,
             filter_run_id=task_id,
         )
 
@@ -126,6 +131,11 @@ def run_process_trade_offs_task(
     task_id: str, 
     filter_run_id: str,
     initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
+    satellite_buffer_configs: Optional[Dict[str, SatelliteBufferConfigDTO]] = None,
+    default_buffer_config: Optional[SatelliteBufferConfigDTO] = None,
+    buffer_capacities_mb: Optional[Dict[str, float]] = None,
+    payload_generation_rates_mbps: Optional[Dict[str, float]] = None,
+    downlink_rates_mbps: Optional[Dict[str, float]] = None,
     scoring_config: Optional[ScoringStrategyConfigDTO] = None,
 ):
     """
@@ -146,11 +156,29 @@ def run_process_trade_offs_task(
         strat_name = scoring_config.name
         strat_params = scoring_config.parameters
 
+        sat_configs = {}
+        if satellite_buffer_configs:
+            for sat_name, dto in satellite_buffer_configs.items():
+                sat_configs[sat_name] = dto.to_domain(sat_name)
+
+        def_cap = default_buffer_config.capacity_mb if default_buffer_config else 2000.0
+        def_init = default_buffer_config.initial_level_mb if default_buffer_config else 0.0
+        def_gen = default_buffer_config.payload_generation_rate_mbps if default_buffer_config else 15.0
+        def_dl = default_buffer_config.downlink_rate_mbps if default_buffer_config else 25.0
+
         session = SchedulingSessionManager.create_session(
             filter_run_id=filter_run_id,
             candidate_links=candidate_links,
             asset_schedules=asset_schedules,
+            satellite_configs=sat_configs if sat_configs else None,
             initial_buffer_levels_mb=initial_buffer_levels_mb,
+            buffer_capacities_mb=buffer_capacities_mb,
+            payload_generation_rates_mbps=payload_generation_rates_mbps,
+            downlink_rates_mbps=downlink_rates_mbps,
+            default_capacity_mb=def_cap,
+            default_initial_level_mb=def_init,
+            default_payload_generation_rate_mbps=def_gen,
+            default_downlink_rate_mbps=def_dl,
             scoring_strategy=strat_name,
             scoring_parameters=strat_params,
             scoring_rule=scoring_rule,

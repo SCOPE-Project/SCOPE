@@ -155,3 +155,147 @@ def test_trade_off_request_model_structured():
     sreq2 = StrategyUpdateRequest(name="buffer_overflow_avoidance", parameters={"alpha": 2.0, "exponent": 3.0})
     assert sreq2.name == "buffer_overflow_avoidance"
     assert sreq2.parameters == {"alpha": 2.0, "exponent": 3.0}
+
+
+def test_session_manager_custom_buffer_configs():
+    from core.models.scheduling import SatelliteBufferConfig
+
+    filter_id = "test_custom_buf"
+    t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+    t_end = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
+
+    l1 = LinkBlock(link_id="L1", overpass_id="op1", satellite_name="Sat-Alpha", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+    l2 = LinkBlock(link_id="L2", overpass_id="op2", satellite_name="Sat-Beta", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+
+    LinkRepository.save_links(filter_id, [l1, l2])
+
+    # 1. Custom configs via explicit SatelliteBufferConfig
+    custom_cfg = {
+        "Sat-Alpha": SatelliteBufferConfig(
+            satellite_name="Sat-Alpha",
+            capacity_mb=5000.0,
+            initial_level_mb=1200.0,
+            payload_generation_rate_mbps=30.0,
+            downlink_rate_mbps=60.0,
+        )
+    }
+
+    session = SchedulingSessionManager.create_session(
+        filter_run_id=filter_id,
+        candidate_links=[l1, l2],
+        satellite_configs=custom_cfg,
+        buffer_capacities_mb={"Sat-Beta": 3500.0},
+        initial_buffer_levels_mb={"Sat-Beta": 400.0},
+        payload_generation_rates_mbps={"Sat-Beta": 10.0},
+        downlink_rates_mbps={"Sat-Beta": 40.0},
+        default_capacity_mb=2000.0,
+    )
+
+    assert session.satellite_configs["Sat-Alpha"].capacity_mb == 5000.0
+    assert session.satellite_configs["Sat-Alpha"].initial_level_mb == 1200.0
+    assert session.satellite_configs["Sat-Alpha"].payload_generation_rate_mbps == 30.0
+    assert session.satellite_configs["Sat-Alpha"].downlink_rate_mbps == 60.0
+
+    assert session.satellite_configs["Sat-Beta"].capacity_mb == 3500.0
+    assert session.satellite_configs["Sat-Beta"].initial_level_mb == 400.0
+    assert session.satellite_configs["Sat-Beta"].payload_generation_rate_mbps == 10.0
+    assert session.satellite_configs["Sat-Beta"].downlink_rate_mbps == 40.0
+
+
+def test_trade_off_request_with_buffer_configs_dto():
+    from app.models.tasks import TradeOffRequest
+    from app.models.scheduling import SatelliteBufferConfigDTO, SessionPlanDTO
+    from app.services.task_orchestrator import run_process_trade_offs_task
+    from app.services import state_manager
+
+    filter_id = "test_dto_filter"
+    t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+    t_end = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
+
+    l1 = LinkBlock(link_id="L_DTO_1", overpass_id="op1", satellite_name="Sat-X", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+    LinkRepository.save_links(filter_id, [l1])
+
+    req = TradeOffRequest(
+        filter_run_id=filter_id,
+        satellite_buffer_configs={
+            "Sat-X": SatelliteBufferConfigDTO(
+                capacity_mb=4000.0,
+                initial_level_mb=800.0,
+                payload_generation_rate_mbps=20.0,
+                downlink_rate_mbps=50.0,
+            )
+        },
+        default_buffer_config=SatelliteBufferConfigDTO(
+            capacity_mb=1000.0,
+            initial_level_mb=100.0,
+            payload_generation_rate_mbps=5.0,
+            downlink_rate_mbps=10.0,
+        ),
+    )
+
+    task_id = "task_dto_test"
+    state_manager.create_task_entry()
+    state_manager.update_task(task_id, status="queued", message="Queued")
+
+    run_process_trade_offs_task(
+        task_id=task_id,
+        filter_run_id=req.filter_run_id,
+        initial_buffer_levels_mb=req.initial_buffer_levels_mb,
+        satellite_buffer_configs=req.satellite_buffer_configs,
+        default_buffer_config=req.default_buffer_config,
+        scoring_config=req.scoring_config,
+    )
+
+    result = state_manager.get_task_result(task_id)
+    assert result.status == "completed"
+    plan_payload: SessionPlanDTO = result.payload
+    assert "Sat-X" in plan_payload.satellite_configs
+    assert plan_payload.satellite_configs["Sat-X"].capacity_mb == 4000.0
+    assert plan_payload.satellite_configs["Sat-X"].initial_level_mb == 800.0
+    assert plan_payload.satellite_configs["Sat-X"].payload_generation_rate_mbps == 20.0
+    assert plan_payload.satellite_configs["Sat-X"].downlink_rate_mbps == 50.0
+
+
+def test_filter_pipeline_custom_downlink_rate():
+    from core.models.propagation import PropagationResult, PropagationMetadata, OverpassBlock
+
+    prop = PropagationResult(
+        metadata=PropagationMetadata(
+            run_id="test_run",
+            start_time=datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc),
+        ),
+        overpass_blocks=[
+            OverpassBlock(
+                overpass_id="op_sat1",
+                satellite_name="Sat-1",
+                groundstation_name="GS-1",
+                start_time=datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc),
+                duration_seconds=600.0,
+                max_elevation_deg=45.0,
+            ),
+            OverpassBlock(
+                overpass_id="op_sat2",
+                satellite_name="Sat-2",
+                groundstation_name="GS-1",
+                start_time=datetime(2026, 8, 18, 11, 0, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 8, 18, 11, 10, 0, tzinfo=timezone.utc),
+                duration_seconds=600.0,
+                max_elevation_deg=45.0,
+            )
+        ]
+    )
+
+    _, links = derive_and_filter_links(
+        propagation_result=prop,
+        default_downlink_rate_mbps=10.0,
+        satellite_downlink_rates_mbps={"Sat-2": 50.0},
+    )
+
+    link1 = next(l for l in links if l.satellite_name == "Sat-1")
+    link2 = next(l for l in links if l.satellite_name == "Sat-2")
+
+    assert link1.estimated_data_capacity_mb == 600.0 * 10.0   # 6000 MB
+    assert link2.estimated_data_capacity_mb == 600.0 * 50.0   # 30000 MB
+

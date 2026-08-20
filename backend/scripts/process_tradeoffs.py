@@ -112,6 +112,42 @@ def main() -> None:
         help="Comma-separated initial satellite buffer levels in MB (e.g. 'Sat1_Group1=500.0,Sat2_Group1=200.0').",
     )
     parser.add_argument(
+        "--capacities", "-c",
+        type=str,
+        default="",
+        help="Comma-separated satellite buffer capacities in MB (e.g. 'Sat1_Group1=3000.0,Sat2_Group1=4000.0').",
+    )
+    parser.add_argument(
+        "--generation-rates", "-g",
+        type=str,
+        default="",
+        help="Comma-separated satellite payload generation rates in MB/s (e.g. 'Sat1_Group1=10.0,Sat2_Group1=20.0').",
+    )
+    parser.add_argument(
+        "--downlink-rates", "-d",
+        type=str,
+        default="",
+        help="Comma-separated satellite downlink transmission rates in MB/s (e.g. 'Sat1_Group1=50.0,Sat2_Group1=100.0').",
+    )
+    parser.add_argument(
+        "--default-capacity",
+        type=float,
+        default=2000.0,
+        help="Default buffer capacity in MB for any unlisted satellite (default: 2000.0).",
+    )
+    parser.add_argument(
+        "--default-generation-rate",
+        type=float,
+        default=15.0,
+        help="Default payload generation data rate in MB/s for any unlisted satellite (default: 15.0).",
+    )
+    parser.add_argument(
+        "--default-downlink-rate",
+        type=float,
+        default=25.0,
+        help="Default downlink transmission data rate in MB/s for any unlisted satellite (default: 25.0).",
+    )
+    parser.add_argument(
         "--commit-to-satos",
         action="store_true",
         help="Push confirmed scheduled link activities directly to SatOS schedule.",
@@ -130,9 +166,12 @@ def main() -> None:
 
     print(f"Loaded {len(links)} candidate links from LinkRepository (Filter Run ID: {filter_run_id}).")
 
-    # 2. Parse initial buffers and hyperparameters
+    # 2. Parse initial buffers, capacities, rates, and hyperparameters
     try:
         initial_buffers = parse_key_value_pairs(args.initial_buffers) if args.initial_buffers else None
+        capacities = parse_key_value_pairs(args.capacities) if args.capacities else None
+        generation_rates = parse_key_value_pairs(args.generation_rates) if args.generation_rates else None
+        downlink_rates = parse_key_value_pairs(args.downlink_rates) if args.downlink_rates else None
         strategy_params = parse_generic_params(args.strategy_params) if args.strategy_params else {}
     except ValueError as e:
         print(f"HARD FAIL: Invalid parameter format: {e}", file=sys.stderr)
@@ -152,6 +191,12 @@ def main() -> None:
         candidate_links=links,
         asset_schedules=asset_scheds,
         initial_buffer_levels_mb=initial_buffers,
+        buffer_capacities_mb=capacities,
+        payload_generation_rates_mbps=generation_rates,
+        downlink_rates_mbps=downlink_rates,
+        default_capacity_mb=args.default_capacity,
+        default_payload_generation_rate_mbps=args.default_generation_rate,
+        default_downlink_rate_mbps=args.default_downlink_rate,
         scoring_strategy=args.strategy,
         scoring_parameters=strategy_params,
     )

@@ -10,6 +10,7 @@ from core.models.scheduling import (
     BufferProfilePoint,
     BufferOverflowEvent,
     SatelliteBufferProfile,
+    SatelliteBufferConfig,
     SchedulingSession,
 )
 from core.orbit_engine.time_utils import to_utc_iso_string
@@ -68,6 +69,38 @@ class FilterResultDTO(BaseModel):
     baseline_blocked_links_count: int
     elevation_excluded_links_count: int
     links: List[LinkBlockDTO]
+
+
+# ========================================
+# Satellite Buffer Configuration DTOs
+# ========================================
+
+class SatelliteBufferConfigDTO(BaseModel):
+    satellite_name: Optional[str] = Field(default=None, description="Satellite name/identifier")
+    capacity_mb: float = Field(default=2000.0, gt=0, description="Buffer capacity in MB")
+    initial_level_mb: float = Field(default=0.0, ge=0, description="Initial buffer level in MB")
+    payload_generation_rate_mbps: float = Field(default=15.0, ge=0, description="Payload generation data rate in MB/s")
+    downlink_rate_mbps: float = Field(default=25.0, gt=0, description="Downlink transmission data rate in MB/s")
+
+    def to_domain(self, satellite_name: Optional[str] = None) -> SatelliteBufferConfig:
+        name = satellite_name or self.satellite_name or ""
+        return SatelliteBufferConfig(
+            satellite_name=name,
+            capacity_mb=self.capacity_mb,
+            initial_level_mb=self.initial_level_mb,
+            payload_generation_rate_mbps=self.payload_generation_rate_mbps,
+            downlink_rate_mbps=self.downlink_rate_mbps,
+        )
+
+    @classmethod
+    def from_domain(cls, domain: SatelliteBufferConfig) -> "SatelliteBufferConfigDTO":
+        return cls(
+            satellite_name=domain.satellite_name,
+            capacity_mb=domain.capacity_mb,
+            initial_level_mb=domain.initial_level_mb,
+            payload_generation_rate_mbps=domain.payload_generation_rate_mbps,
+            downlink_rate_mbps=domain.downlink_rate_mbps,
+        )
 
 
 # ========================================
@@ -214,6 +247,7 @@ class SessionPlanDTO(BaseModel):
     filter_run_id: str
     active_scoring_strategy: str
     scoring_config: Optional[ScoringStrategyConfigDTO] = None
+    satellite_configs: Optional[Dict[str, SatelliteBufferConfigDTO]] = None
     current_plan: Dict[str, ScheduledLinkStatusDTO]
     trade_off_groups: Dict[str, TradeOffGroupDTO]
     conflict_reasons: Dict[str, str]
@@ -229,6 +263,10 @@ class SessionPlanDTO(BaseModel):
                 name=domain.active_scoring_strategy,
                 parameters=domain.scoring_parameters or {},
             ),
+            satellite_configs={
+                sat: SatelliteBufferConfigDTO.from_domain(cfg)
+                for sat, cfg in domain.satellite_configs.items()
+            } if domain.satellite_configs else {},
             current_plan={
                 link_id: ScheduledLinkStatusDTO.from_domain(status)
                 for link_id, status in domain.current_plan.items()

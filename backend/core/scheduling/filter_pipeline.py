@@ -84,6 +84,7 @@ def derive_and_filter_links(
     min_aos_los_elevation_deg: Optional[float] = None,
     min_peak_elevation_deg: Optional[float] = None,
     default_downlink_rate_mbps: float = 25.0,
+    satellite_downlink_rates_mbps: Optional[Dict[str, float]] = None,
     filter_run_id: Optional[str] = None,
 ) -> Tuple[str, List[LinkBlock]]:
     """
@@ -98,6 +99,7 @@ def derive_and_filter_links(
         filter_run_id = str(uuid.uuid4())
 
     schedules_map = asset_schedules or {}
+    sat_downlink_rates = satellite_downlink_rates_mbps or {}
     derived_links: List[LinkBlock] = []
 
     for idx, overpass in enumerate(propagation_result.overpass_blocks, start=1):
@@ -134,8 +136,9 @@ def derive_and_filter_links(
             derived_links.append(link)
             continue
 
+        dl_rate = sat_downlink_rates.get(overpass.satellite_name, default_downlink_rate_mbps)
         duration_sec = max(0.0, (trimmed_end - trimmed_start).total_seconds())
-        estimated_capacity_mb = round(duration_sec * default_downlink_rate_mbps, 2)
+        estimated_capacity_mb = round(duration_sec * dl_rate, 2)
 
         # 2. Check for Collisions with Immutable Baseline SatOS Activities
         sat_activities = schedules_map.get(overpass.satellite_name, [])

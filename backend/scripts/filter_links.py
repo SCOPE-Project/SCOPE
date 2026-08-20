@@ -30,8 +30,28 @@ credentials_path = backend_dir / "SatOS_credentials" / "credentials.env"
 if credentials_path.exists():
     load_dotenv(credentials_path)
 
+from typing import Dict, Optional
 from app.repositories import PropagationResultRepository, LinkRepository, AssetRepository
 from core.scheduling.filter_pipeline import derive_and_filter_links
+
+
+def parse_key_value_pairs(kv_string: str) -> Dict[str, float]:
+    """Parse comma-separated key=value pairs into a float dictionary."""
+    result: Dict[str, float] = {}
+    if not kv_string:
+        return result
+    for pair in kv_string.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            raise ValueError(f"Invalid key=value format in '{pair}'. Expected 'KEY=FLOAT'.")
+        k, v = pair.split("=", 1)
+        try:
+            result[k.strip()] = float(v.strip())
+        except ValueError:
+            raise ValueError(f"Value for key '{k}' must be a float, got '{v}'.")
+    return result
 
 
 def main() -> None:
@@ -56,6 +76,18 @@ def main() -> None:
         default=None,
         help="Optional minimum peak elevation threshold (deg) for eligibility.",
     )
+    parser.add_argument(
+        "--downlink-rate", "-d",
+        type=float,
+        default=25.0,
+        help="Default downlink transmission data rate in MB/s for estimated capacity (default: 25.0).",
+    )
+    parser.add_argument(
+        "--satellite-downlink-rates",
+        type=str,
+        default="",
+        help="Comma-separated per-satellite downlink transmission data rates in MB/s (e.g. 'Sat1=50.0,Sat2=100.0').",
+    )
 
     args = parser.parse_args()
 
@@ -72,15 +104,24 @@ def main() -> None:
     print(f"Loaded {len(prop_result.overpass_blocks)} overpass(es) from PropagationResultRepository (Run ID: {run_id}).")
     print(f"Applying filters: min_aos_los={args.min_aos_los_elevation}°, min_peak={args.min_peak_elevation}°...")
 
-    # 2. Fetch baseline activity schedules from AssetRepository
+    # 2. Parse satellite downlink rates if provided
+    try:
+        sat_dl_rates = parse_key_value_pairs(args.satellite_downlink_rates) if args.satellite_downlink_rates else None
+    except ValueError as e:
+        print(f"HARD FAIL: Invalid parameter format: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # 3. Fetch baseline activity schedules from AssetRepository
     asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
 
-    # 3. Derive and filter links
+    # 4. Derive and filter links
     filter_run_id, links = derive_and_filter_links(
         propagation_result=prop_result,
         asset_schedules=asset_schedules,
         min_aos_los_elevation_deg=args.min_aos_los_elevation,
         min_peak_elevation_deg=args.min_peak_elevation,
+        default_downlink_rate_mbps=args.downlink_rate,
+        satellite_downlink_rates_mbps=sat_dl_rates,
     )
 
     # 4. Save to LinkRepository
