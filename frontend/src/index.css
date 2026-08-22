@@ -1942,9 +1942,9 @@ body {
 }
 
 .overview-list-grid--with-tradeoffs {
-  grid-template-columns: 0.56fr 0.56fr 0.4fr 0.44fr 0.46fr 0.44fr 0.4fr 0.32fr 0.34fr 0.42fr 0.25fr 0.3fr 0.32fr 0.42fr;
+  grid-template-columns: 0.46fr 0.62fr 0.4fr 0.44fr 0.46fr 0.42fr 0.38fr 0.3fr 0.32fr 0.4fr 0.24fr 0.28fr 0.42fr;
   column-gap: 0.02rem;
-  min-width: 1200px;
+  min-width: 1120px;
 }
 
 .overview-list-header,
@@ -2046,6 +2046,10 @@ body {
   text-align: left;
   padding-left: 0.2rem;
   padding-right: 0.08rem;
+}
+
+.overview-header-cell--controls {
+  padding-left: 0.36rem;
 }
 
 .overview-header-note {
@@ -5070,7 +5074,7 @@ body {
   }
 
   .overview-list-grid--with-tradeoffs {
-    min-width: 1100px;
+    min-width: 1040px;
   }
 
   .overview-list-grid {

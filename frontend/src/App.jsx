@@ -2064,6 +2064,18 @@ export default function App() {
     if (status === 'ineligible') return 'Ineligible'
     return 'Eligible'
   }
+
+  const getOverviewControlTooltip = (state) => {
+    if (state === 'auto') {
+      return 'Auto: keep the backend scheduling decision.'
+    }
+
+    if (state === 'pinned') {
+      return 'Pinned: force this link to stay scheduled.'
+    }
+
+    return 'Excluded: force this link to stay unscheduled.'
+  }
   const isOverviewRowUnavailable = (row) => isUnavailableOverviewRow(row)
   const schedulableOverviewRows = overviewRows.filter((row) => getOverviewRowStatus(row) === 'eligible')
   const visibleOverviewRows = showUnavailableOverviewRows
@@ -4576,11 +4588,10 @@ export default function App() {
                     )}
                     {tradeOffsCalculated && <span>Offloaded</span>}
                     {tradeOffsCalculated && (
-                      <span className="overview-header-cell overview-header-cell--data">
-                        <span>Override</span>
+                      <span className="overview-header-cell overview-header-cell--controls">
+                        <span>Controls</span>
                       </span>
                     )}
-                    {tradeOffsCalculated && <span>Controls</span>}
                   </div>
                   {visibleOverviewRows.length === 0 ? (
                     <>
@@ -4594,7 +4605,6 @@ export default function App() {
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
@@ -4690,11 +4700,6 @@ export default function App() {
                               </span>
                             )}
                             {tradeOffsCalculated && (
-                              <span className="overview-data-cell">
-                                {row.overrideState ?? 'auto'}
-                              </span>
-                            )}
-                            {tradeOffsCalculated && (
                               <span className="overview-select-cell">
                                 {isSelectableRow ? (
                                   <span className="overview-override-controls" role="group" aria-label={`Override ${getOverviewDisplayLinkId(row)}`}>
@@ -4706,7 +4711,12 @@ export default function App() {
                                         onClick={() => handleLinkOverride(overrideOption, state)}
                                         disabled={Boolean(overridingLinkId)}
                                         aria-pressed={row.overrideState === state}
-                                        title={state === 'auto' ? 'Return to automatic scheduling' : state === 'pinned' ? 'Force this link on' : 'Force this link off'}
+                                        title={getOverviewControlTooltip(state)}
+                                        onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
+                                        onMouseMove={moveWarningTooltip}
+                                        onMouseLeave={hideWarningTooltip}
+                                        onFocus={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
+                                        onBlur={hideWarningTooltip}
                                       >
                                         {state === 'auto' ? 'A' : state === 'pinned' ? 'P' : 'X'}
                                       </button>
