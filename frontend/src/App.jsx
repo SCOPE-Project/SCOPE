@@ -150,7 +150,8 @@ export default function App() {
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
-  const timelinePlaybackDomRef = useRef({ markers: [], bars: [], thumb: null, label: null })
+  const timelinePlayheadDraggingRef = useRef(false)
+  const timelinePlaybackDomRef = useRef({ playhead: null, bars: [], label: null })
   const timelinePlaybackLastTextSyncRef = useRef(0)
   const missionMapRef = useRef(null)
   const visibleMapAssetListRef = useRef(null)
@@ -2515,29 +2516,48 @@ export default function App() {
   const timelinePlayheadOffsetMinutes = timelineBaseTimestamp !== null
     ? (timelinePlayheadTimestamp - timelineBaseTimestamp) / 60000
     : null
-  const timelinePlayheadWindowRatio = (
-    planningWindowStartTimestamp !== null
-    && planningWindowEndTimestamp !== null
-    && planningWindowEndTimestamp > planningWindowStartTimestamp
+  const timelinePlayheadCanvasRatio = (
+    timelinePlayheadOffsetMinutes !== null
+    && timelineModel?.totalMinutes > 0
   )
-    ? Math.max(0, Math.min(1, (
-      (timelinePlayheadTimestamp - planningWindowStartTimestamp)
-      / (planningWindowEndTimestamp - planningWindowStartTimestamp)
-    )))
+    ? timelinePlayheadOffsetMinutes / timelineModel.totalMinutes
     : null
 
   const refreshTimelinePlaybackDom = () => {
-    const root = splitPanelsRef.current
+    const root = timelinePanelRef.current
     if (!root) {
-      timelinePlaybackDomRef.current = { markers: [], bars: [], thumb: null, label: null }
+      timelinePlaybackDomRef.current = { playhead: null, bars: [], label: null }
       return
     }
 
     timelinePlaybackDomRef.current = {
-      markers: [...root.querySelectorAll('[data-timeline-playhead]')],
+      playhead: root.querySelector('[data-timeline-playhead]'),
       bars: [...root.querySelectorAll('[data-playback-start][data-playback-end]')],
-      thumb: root.querySelector('[data-playback-thumb]'),
       label: root.querySelector('[data-playback-label]'),
+    }
+  }
+
+  const positionTimelinePlayhead = (timestamp) => {
+    const playhead = timelinePlaybackDomRef.current.playhead
+    const scrollContainer = timelineScrollRef.current
+    if (!playhead || !scrollContainer) {
+      return
+    }
+
+    const ratio = (
+      timelineBaseTimestamp !== null
+      && timelineDurationMs > 0
+    )
+      ? (timestamp - timelineBaseTimestamp) / timelineDurationMs
+      : null
+    const visible = ratio !== null && ratio >= 0 && ratio <= 1
+
+    playhead.hidden = !visible
+    if (visible) {
+      // Label, handle and dashed line are one viewport overlay. This is the
+      // only X-coordinate used for rendering and pointer input, so zoom and
+      // horizontal scrolling cannot separate those pieces.
+      playhead.style.left = `${(ratio * timelineWidthPx) - scrollContainer.scrollLeft}px`
     }
   }
 
@@ -2546,35 +2566,9 @@ export default function App() {
       return
     }
 
-    const { markers, bars, thumb, label } = timelinePlaybackDomRef.current
-    const timelineRatio = (
-      timelineBaseTimestamp !== null
-      && timelineDurationMs > 0
-    )
-      ? (timestamp - timelineBaseTimestamp) / timelineDurationMs
-      : null
-    const windowRatio = (
-      planningWindowStartTimestamp !== null
-      && planningWindowEndTimestamp !== null
-      && planningWindowEndTimestamp > planningWindowStartTimestamp
-    )
-      ? (timestamp - planningWindowStartTimestamp)
-        / (planningWindowEndTimestamp - planningWindowStartTimestamp)
-      : null
-
-    markers.forEach((marker) => {
-      const visible = timelineRatio !== null && timelineRatio >= 0 && timelineRatio <= 1
-      marker.hidden = !visible
-      if (visible) {
-        marker.style.left = `${timelineRatio * 100}%`
-      }
-    })
-
-    if (thumb && windowRatio !== null) {
-      thumb.style.left = `${Math.max(0, Math.min(1, windowRatio)) * 100}%`
-      const slider = timelinePlayheadSliderRef.current
-      slider?.setAttribute('aria-valuenow', String(Math.round(timestamp)))
-    }
+    const { bars, label } = timelinePlaybackDomRef.current
+    positionTimelinePlayhead(timestamp)
+    timelinePlayheadSliderRef.current?.setAttribute('aria-valuenow', String(Math.round(timestamp)))
 
     bars.forEach((bar) => {
       const startTimestamp = Number(bar.dataset.playbackStart)
@@ -2597,26 +2591,9 @@ export default function App() {
     missionMapRef.current?.setPlayheadTime(timestamp)
   }
 
-  // `.timeline-time-canvas` (the scrollable/zoomable element holding the
-  // day bands, ticks, schedule blocks and the playhead marker line) is
-  // deliberately given `padding-inline: 50%` -- half a viewport's width of
-  // blank space on each side -- so the very first/last moments of the
-  // window can still be scrolled into the center of the viewport instead
-  // of being stuck against the hard edge. That padding shifts where a
-  // percentage-based `left` on its children actually lands on screen: a
-  // child at `left: r*100%` renders at
-  //   (canvas's own left edge, post-scroll) + halfViewportWidth + r*timelineWidthPx
-  // The separate playhead slider/thumb above (see the CSS comment on
-  // .timeline-playhead-slider) has no such padding -- it renders at
-  // `frameLeft + r*viewportWidth`. Setting scrollLeft to just
-  // `r*timelineWidthPx` (pinning the target pixel to the viewport's left
-  // edge) ignores that half-viewport padding entirely, so the line and the
-  // thumb would land up to a whole extra half-viewport-width apart. Adding
-  // that same halfViewportWidth term back into scrollLeft, and scaling the
-  // rest by (timelineWidthPx - viewportWidth) so scrollLeft still reaches
-  // exactly its native [0, canvas scroll max] range, is what makes the two
-  // line up at any ratio, zoom level, or viewport size -- not just at the
-  // very start of the window.
+  // Maps a timestamp ratio to the scroll position used by playback/live
+  // follow. The canvas has no horizontal padding, so this is also the same
+  // coordinate space used by the playhead overlay.
   const getTimelineScrollLeftForRatio = (ratio) => {
     const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
     return ratio * Math.max(0, timelineWidthPx - viewportWidthPx)
@@ -2738,73 +2715,10 @@ export default function App() {
     target?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
   }, [markedTradeOffOptionId, activeTradeOffCardIndex])
 
-  // The datetime thumb above used to be positioned as a fraction of the
-  // playhead SLIDER's own (fixed, always-full-window-width) box -- a
-  // completely different physical scale than the marker line inside the
-  // scrollable/zoomable canvas below, which is positioned as a fraction of
-  // the much wider (at any zoom > 1x) canvas, then cropped/panned by the
-  // canvas's own scroll position. Those two only ever lined up right after
-  // something explicitly re-synced the scroll position to match the ratio
-  // (a slider drag, a marker-line drag, or the live-follow effect) -- the
-  // moment a person freely panned/scrolled the canvas by hand (scrollbar,
-  // trackpad) without touching the playhead, the thumb stayed put at its
-  // window-ratio position while the line drifted wherever the pan left it,
-  // which is exactly the "why is it still disconnected" symptom.
-  //
-  // Fixing this properly means the thumb can no longer be positioned purely
-  // from React state/CSS percentages: it has to track the canvas's actual,
-  // possibly-manually-scrolled scrollLeft on every scroll, not just when
-  // the playhead itself changes. So instead this reads the DOM directly and
-  // imperatively sets the thumb's pixel offset -- mirroring the exact
-  // formula the marker line's own on-screen position resolves to (see the
-  // getTimelineScrollLeftForRatio comment above): canvas-relative pixel
-  // position of the playhead, minus however far the canvas is currently
-  // scrolled. Since the slider sits at the same left edge and width as the
-  // scroll frame, that difference is directly usable as the thumb's `left`
-  // in pixels. This guarantees the thumb and the line are always the same
-  // screen X, regardless of *how* the view got there.
-  // The thumb is positioned on exactly the scale its drag handler reads from:
-  // a fraction of the SLIDER's own width across the planning window
-  // (timelinePlayheadWindowRatio), set as a percentage in the JSX below.
-  //
-  // It used to be positioned from the CANVAS instead -- canvas-relative pixels
-  // minus scrollLeft -- which is a different scale entirely, since the canvas
-  // is zoomed and scrolled. Input and output disagreeing is what forced the
-  // drag handlers to scroll the canvas along to paper over the mismatch, and
-  // that is the coupling being removed here.
-
-  // The playhead slider is a separate control from the scrollable timeline
-  // below it: scrolling/panning the timeline (`.timeline-scroll`) never
-  // changes the current time value, and clicking the timeline background no
-  // longer does either. Only grabbing and dragging this slider's thumb (or
-  // using the keyboard while it's focused) moves the current time.
-  const computeTimelineTimestampFromSliderClientX = (clientX) => {
-    const slider = timelinePlayheadSliderRef.current
-    if (
-      !slider
-      || planningWindowStartTimestamp === null
-      || planningWindowEndTimestamp === null
-    ) {
-      return null
-    }
-
-    const rect = slider.getBoundingClientRect()
-    if (rect.width <= 0) {
-      return null
-    }
-
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    return planningWindowStartTimestamp
-      + (ratio * (planningWindowEndTimestamp - planningWindowStartTimestamp))
-  }
-
-  // Playhead and canvas are deliberately independent: moving the playhead
-  // never scrolls the timeline, and scrolling the timeline never moves the
-  // playhead. The slider spans the full planning window while the canvas shows
-  // whatever slice is scrolled into view, so the dashed marker line simply
-  // leaves the viewport when you drag the thumb past the visible range -- that
-  // is the honest depiction of two independent positions, not a glitch. Live
-  // mode is the one exception, and it is an opt-in follow mode.
+  // Pointer drags and playback animate only the playhead/map nodes each frame;
+  // React receives the committed value at the end of a drag. This keeps the
+  // map responsive without allowing an unrelated render to snap the handle
+  // back to an older timestamp.
   const previewTimelinePlayheadTime = (timestamp, syncText = true) => {
     const clampedTimestamp = clampToPlanningWindow(timestamp)
     timelinePlayheadTimeRef.current = clampedTimestamp
@@ -2824,11 +2738,13 @@ export default function App() {
     }
 
     event.preventDefault()
+    event.stopPropagation()
     event.currentTarget.setPointerCapture(event.pointerId)
+    timelinePlayheadDraggingRef.current = true
     setTimelineLive(false)
     setTimelinePlaying(false)
 
-    const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
+    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
     if (nextTimestamp !== null) {
       setTimelinePlayheadTime(previewTimelinePlayheadTime(nextTimestamp))
     }
@@ -2839,25 +2755,23 @@ export default function App() {
       return
     }
 
-    const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
+    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
     if (nextTimestamp !== null) {
       previewTimelinePlayheadTime(nextTimestamp)
     }
   }
 
   const handleTimelinePlayheadPointerUp = (event) => {
+    event.stopPropagation()
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    timelinePlayheadDraggingRef.current = false
     commitTimelinePlayheadTime()
   }
 
-  // The playhead marker line(s) and the datetime label live inside
-  // `.timeline-time-canvas` -- the scrollable/zoomable region -- rather than
-  // the fixed, always-full-width playhead slider above it, so a screen X
-  // position has to be translated back through the canvas's own current
-  // scroll offset and its padding-inline:50% buffer (see the big comment
-  // above getTimelineScrollLeftForRatio) to land on the right ratio.
+  // Convert the pointer's screen X through the canvas's current scroll and
+  // zoom. Rendering uses this exact coordinate in reverse.
   const computeTimelineRatioFromCanvasClientX = (clientX) => {
     const scrollContainer = timelineScrollRef.current
     if (!scrollContainer || timelineWidthPx <= 0) {
@@ -2883,46 +2797,6 @@ export default function App() {
     }
 
     return timelineBaseTimestamp + (ratio * timelineDurationMs)
-  }
-
-  // Lets a person click-and-drag the shared playhead marker line itself to
-  // move the current time, not just the small slider thumb above. Mirrors
-  // handleTimelinePlayheadPointerDown/Move/Up, just reading position from
-  // the scrollable canvas instead of the fixed slider.
-  const handleTimelineMarkerLinePointerDown = (event) => {
-    if (event.button !== undefined && event.button !== 0) {
-      return
-    }
-
-    event.preventDefault()
-    event.stopPropagation()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    setTimelineLive(false)
-    setTimelinePlaying(false)
-
-    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
-    if (nextTimestamp !== null) {
-      setTimelinePlayheadTime(previewTimelinePlayheadTime(nextTimestamp))
-    }
-  }
-
-  const handleTimelineMarkerLinePointerMove = (event) => {
-    if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      return
-    }
-
-    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
-    if (nextTimestamp !== null) {
-      previewTimelinePlayheadTime(nextTimestamp)
-    }
-  }
-
-  const handleTimelineMarkerLinePointerUp = (event) => {
-    event.stopPropagation()
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    commitTimelinePlayheadTime()
   }
 
   // Mirrors the map's Ctrl/⌘ + scroll-to-zoom gesture: a plain wheel event
@@ -3165,7 +3039,7 @@ export default function App() {
   // node cache after commits so an unrelated render cannot leave those nodes
   // displaying the older committed timestamp.
   useLayoutEffect(() => {
-    if (!timelinePlaying) {
+    if (!timelinePlaying && !timelinePlayheadDraggingRef.current) {
       timelinePlayheadTimeRef.current = timelinePlayheadTimestamp
     }
     refreshTimelinePlaybackDom()
@@ -3180,6 +3054,35 @@ export default function App() {
     timelinePlayheadTimestamp,
     timelinePlaying,
     timelineRenderRows,
+    timelineWidthPx,
+  ])
+
+  // Horizontal scrolling changes the playhead's viewport X without changing
+  // its timestamp. Keep the one combined playhead overlay on the same canvas
+  // coordinate whenever the native scrollbar, range control or trackpad pans.
+  useLayoutEffect(() => {
+    const scrollContainer = timelineScrollRef.current
+    if (!scrollContainer) {
+      return undefined
+    }
+
+    const syncPositionAfterScroll = () => {
+      positionTimelinePlayhead(
+        timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp,
+      )
+    }
+
+    syncPositionAfterScroll()
+    scrollContainer.addEventListener('scroll', syncPositionAfterScroll, { passive: true })
+    return () => scrollContainer.removeEventListener('scroll', syncPositionAfterScroll)
+  // Positioning closes over the current canvas bounds and is refreshed when
+  // either of them changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    expandedSections.timeline,
+    timelineHasRows,
+    timelineBaseTimestamp,
+    timelineDurationMs,
     timelineWidthPx,
   ])
 
@@ -5662,40 +5565,35 @@ export default function App() {
                       >
                         Hold Ctrl (⌘ on Mac) + scroll to zoom the timeline
                       </span>
-                      <div
-                      ref={timelinePlayheadSliderRef}
-                      className="timeline-playhead-slider"
-                      aria-hidden={timelinePlayheadWindowRatio === null}
-                      role={timelinePlayheadWindowRatio !== null ? 'slider' : undefined}
-                      tabIndex={timelinePlayheadWindowRatio !== null ? 0 : -1}
-                      aria-label="Current time shown on the map"
-                      aria-valuemin={planningWindowStartTimestamp ?? undefined}
-                      aria-valuemax={planningWindowEndTimestamp ?? undefined}
-                      aria-valuenow={timelinePlayheadWindowRatio !== null ? timelinePlayheadTimestamp : undefined}
-                      aria-valuetext={timelinePlayheadWindowRatio !== null ? formatTimelinePlayheadDateTime(timelinePlayheadTimestamp) : undefined}
-                      onPointerDown={handleTimelinePlayheadPointerDown}
-                      onPointerMove={handleTimelinePlayheadPointerMove}
-                      onPointerUp={handleTimelinePlayheadPointerUp}
-                      onPointerCancel={handleTimelinePlayheadPointerUp}
-                      onKeyDown={handleTimelinePlayheadKeyDown}
-                    >
-                        {timelinePlayheadWindowRatio !== null && (
-                          <div
-                            className="timeline-playhead-thumb"
-                            data-playback-thumb
-                            style={{ left: `${timelinePlayheadWindowRatio * 100}%` }}
-                            aria-hidden="true"
-                          >
-                            <span className="timeline-playhead-handle" aria-hidden="true"></span>
-                            <span className="timeline-playhead-label">
-                              {timelineLive && <span className="timeline-playhead-live">Live</span>}
-                              <span data-playback-label>
-                                {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
-                              </span>
+                      {timelinePlayheadCanvasRatio !== null
+                        && timelinePlayheadCanvasRatio >= 0
+                        && timelinePlayheadCanvasRatio <= 1 && (
+                        <div
+                          ref={timelinePlayheadSliderRef}
+                          className="timeline-playhead-slider"
+                          data-timeline-playhead
+                          role="slider"
+                          tabIndex="0"
+                          aria-label="Current time shown on the map"
+                          aria-valuemin={planningWindowStartTimestamp ?? undefined}
+                          aria-valuemax={planningWindowEndTimestamp ?? undefined}
+                          aria-valuenow={timelinePlayheadTimestamp}
+                          aria-valuetext={formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
+                          onPointerDown={handleTimelinePlayheadPointerDown}
+                          onPointerMove={handleTimelinePlayheadPointerMove}
+                          onPointerUp={handleTimelinePlayheadPointerUp}
+                          onPointerCancel={handleTimelinePlayheadPointerUp}
+                          onKeyDown={handleTimelinePlayheadKeyDown}
+                        >
+                          <span className="timeline-playhead-handle" aria-hidden="true"></span>
+                          <span className="timeline-playhead-label">
+                            {timelineLive && <span className="timeline-playhead-live">Live</span>}
+                            <span data-playback-label>
+                              {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
                             </span>
-                          </div>
-                        )}
-                      </div>
+                          </span>
+                        </div>
+                      )}
                       <div
                         ref={timelineScrollRef}
                         className={`timeline-scroll ${timelineIsFit ? 'timeline-scroll--fit' : ''}`}
@@ -5851,20 +5749,6 @@ export default function App() {
                           </div>
                         )
                       })}
-                      {timelinePlayheadOffsetMinutes !== null
-                        && timelinePlayheadOffsetMinutes >= 0
-                        && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
-                        <div
-                          className="timeline-playhead-marker-line timeline-playhead-marker-line--full"
-                          data-timeline-playhead
-                          aria-hidden="true"
-                          style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                          onPointerDown={handleTimelineMarkerLinePointerDown}
-                          onPointerMove={handleTimelineMarkerLinePointerMove}
-                          onPointerUp={handleTimelineMarkerLinePointerUp}
-                          onPointerCancel={handleTimelineMarkerLinePointerUp}
-                        ></div>
-                      )}
                         </div>
                       </div>
                     </div>
