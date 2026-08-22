@@ -3723,21 +3723,7 @@ export default function App() {
     setError(null)
 
     try {
-      let updatedPlan = sessionPlan
-      if (overrideState === 'pinned') {
-        const group = tradeOffCards.find((card) => card.id === option.tradeOffGroupId)
-        const previousPinned = group?.options.find(
-          (candidate) => candidate.linkId !== option.linkId && candidate.overrideState === 'pinned',
-        )
-        if (previousPinned) {
-          updatedPlan = await applySessionOverride(sessionId, {
-            link_id: previousPinned.linkId,
-            override_state: 'auto',
-          })
-        }
-      }
-
-      updatedPlan = await applySessionOverride(updatedPlan.session_id, {
+      const updatedPlan = await applySessionOverride(sessionId, {
         link_id: option.linkId,
         override_state: overrideState,
       })
@@ -4707,13 +4693,11 @@ export default function App() {
                     )}
                     {tradeOffsCalculated && <span>Offloaded</span>}
                     {tradeOffsCalculated && (
-                      <span className="overview-header-cell overview-header-cell--controls">
-                        <span>Controls</span>
-                      </span>
+                      <span>Controls</span>
                     )}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--schedule">
-                        <span>Schedule</span>
+                        <span>Select</span>
                       </span>
                     )}
                   </div>
@@ -4854,9 +4838,21 @@ export default function App() {
                             )}
                             {tradeOffsCalculated && (
                               <span className="overview-schedule-state-cell">
-                                <span className={`overview-schedule-state ${row.isScheduled ? 'overview-schedule-state--scheduled' : 'overview-schedule-state--unscheduled'}`}>
-                                  {row.isScheduled ? 'Scheduled' : 'Unscheduled'}
-                                </span>
+                                {isSelectableRow ? (
+                                  <button
+                                    type="button"
+                                    className={`overview-select-button ${row.isScheduled ? 'overview-select-button--selected' : ''}`}
+                                    onClick={() => handleLinkOverride(
+                                      overrideOption,
+                                      row.overrideState === 'pinned' ? 'auto' : 'pinned',
+                                    )}
+                                    disabled={Boolean(overridingLinkId)}
+                                  >
+                                    Select
+                                  </button>
+                                ) : (
+                                  <span className="overview-select-empty">—</span>
+                                )}
                               </span>
                             )}
                           </div>
