@@ -35,6 +35,20 @@
   padding: 0;
 }
 
+/* Numeric values are entered explicitly; browser stepper arrows are hidden
+   consistently in Chromium/WebKit and Firefox. */
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 body {
   font-family: var(--font-family);
   background: var(--bg-page);
@@ -3696,6 +3710,42 @@ body {
   scrollbar-gutter: stable;
   scrollbar-width: auto;
   outline: none;
+}
+
+.timeline-horizontal-scroll-control {
+  display: grid;
+  grid-template-columns: auto minmax(8rem, 1fr);
+  align-items: center;
+  gap: 0.62rem;
+  width: 100%;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.timeline-horizontal-scroll-control input {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent-primary);
+  cursor: ew-resize;
+}
+
+.timeline-horizontal-scroll-control input:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.timeline-horizontal-scroll-control--floating {
+  position: fixed;
+  z-index: 238;
+  bottom: 0.72rem;
+  padding: 0.48rem 0.62rem;
+  border: 1px solid #aebbc6;
+  border-radius: 0.24rem;
+  background: rgba(250, 252, 253, 0.98);
+  box-shadow: 0 7px 20px rgba(31, 42, 51, 0.2);
 }
 
 .timeline-scroll--fit {

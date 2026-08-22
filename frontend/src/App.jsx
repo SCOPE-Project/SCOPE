@@ -143,6 +143,7 @@ export default function App() {
   const splitDragCleanupRef = useRef(null)
   const timelineScrollRef = useRef(null)
   const timelineScrollFrameRef = useRef(null)
+  const timelineHorizontalRangeRef = useRef(null)
   const timelineLayoutKeyRef = useRef('')
   const timelineProgrammaticScrollRef = useRef(false)
   const timelinePlayheadSliderRef = useRef(null)
@@ -305,6 +306,11 @@ export default function App() {
     x: 0,
     y: 0,
   })
+  const [timelineHorizontalControl, setTimelineHorizontalControl] = useState({
+    visible: false,
+    left: 0,
+    width: 0,
+  })
   const [expandedSections, setExpandedSections] = useState({
     timeWindow: true,
     satellites: true,
@@ -441,6 +447,29 @@ export default function App() {
     if (timelineTooltipHideTimeoutRef.current !== null) {
       window.clearTimeout(timelineTooltipHideTimeoutRef.current)
       timelineTooltipHideTimeoutRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const isNumberInput = (target) => (
+      target instanceof HTMLInputElement && target.type === 'number'
+    )
+    const preventNumberInputStepping = (event) => {
+      if (isNumberInput(event.target) && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault()
+      }
+    }
+    const preventNumberInputWheel = (event) => {
+      if (isNumberInput(event.target) && document.activeElement === event.target) {
+        event.preventDefault()
+      }
+    }
+
+    document.addEventListener('keydown', preventNumberInputStepping, true)
+    document.addEventListener('wheel', preventNumberInputWheel, { capture: true, passive: false })
+    return () => {
+      document.removeEventListener('keydown', preventNumberInputStepping, true)
+      document.removeEventListener('wheel', preventNumberInputWheel, true)
     }
   }, [])
 
@@ -2365,6 +2394,85 @@ export default function App() {
     observer.observe(frame)
     return () => observer.disconnect()
   }, [expandedSections.timeline, timelineHasRows, view])
+
+  useLayoutEffect(() => {
+    const scrollContainer = timelineScrollRef.current
+    const range = timelineHorizontalRangeRef.current
+    if (!scrollContainer || !range) {
+      return undefined
+    }
+
+    const syncHorizontalRange = () => {
+      const maxScrollLeft = timelineIsFit
+        ? 0
+        : Math.max(0, scrollContainer.scrollWidth - scrollContainer.clientWidth)
+      range.max = String(maxScrollLeft)
+      range.disabled = timelineIsFit || maxScrollLeft <= 0
+      range.value = String(Math.min(maxScrollLeft, scrollContainer.scrollLeft))
+      range.setAttribute('aria-valuemax', String(Math.round(maxScrollLeft)))
+      range.setAttribute('aria-valuenow', String(Math.round(scrollContainer.scrollLeft)))
+    }
+
+    syncHorizontalRange()
+    scrollContainer.addEventListener('scroll', syncHorizontalRange, { passive: true })
+    return () => scrollContainer.removeEventListener('scroll', syncHorizontalRange)
+  }, [
+    expandedSections.timeline,
+    timelineHasRows,
+    timelineHorizontalControl.visible,
+    timelineIsFit,
+    timelineWidthPx,
+  ])
+
+  useLayoutEffect(() => {
+    const panel = timelinePanelRef.current
+    const scrollContainer = panel?.closest('.workspace-main')
+    if (!panel || !scrollContainer || !schedulerLaunched || !expandedSections.timeline) {
+      setTimelineHorizontalControl((current) => (
+        current.visible ? { ...current, visible: false } : current
+      ))
+      return undefined
+    }
+
+    const updateHorizontalControl = () => {
+      const panelRect = panel.getBoundingClientRect()
+      const headerBottom = document.querySelector('.app-header')?.getBoundingClientRect().bottom ?? 0
+      const visible = panelRect.bottom > headerBottom && panelRect.top < window.innerHeight
+
+      if (!visible) {
+        setTimelineHorizontalControl((current) => (
+          current.visible ? { ...current, visible: false } : current
+        ))
+        return
+      }
+
+      const labelRect = panel.querySelector('.timeline-label-column')?.getBoundingClientRect()
+      const left = Math.max(panelRect.left + 16, labelRect?.right ?? panelRect.left + 16)
+      const right = Math.min(window.innerWidth - 16, panelRect.right - 16)
+      const width = Math.max(180, right - left)
+
+      setTimelineHorizontalControl((current) => (
+        current.visible && Math.abs(current.left - left) < 0.5 && Math.abs(current.width - width) < 0.5
+          ? current
+          : { visible: true, left, width }
+      ))
+    }
+
+    updateHorizontalControl()
+    scrollContainer.addEventListener('scroll', updateHorizontalControl, { passive: true })
+    window.addEventListener('resize', updateHorizontalControl)
+
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateHorizontalControl)
+    observer?.observe(panel)
+
+    return () => {
+      scrollContainer.removeEventListener('scroll', updateHorizontalControl)
+      window.removeEventListener('resize', updateHorizontalControl)
+      observer?.disconnect()
+    }
+  }, [expandedSections.timeline, schedulerLaunched, timelineHasRows, view])
 
   const getTimelineRowHeight = (renderRow) => {
     if (renderRow.type === 'section') {
@@ -6195,6 +6303,35 @@ export default function App() {
           )}
           {renderTimelineTooltipContent(timelineTooltip.item, timelineTooltip.pinned)}
         </div>
+      ), document.body)}
+
+      {timelineHorizontalControl.visible && createPortal((
+        <label
+          className="timeline-horizontal-scroll-control timeline-horizontal-scroll-control--floating"
+          style={{
+            left: `${timelineHorizontalControl.left}px`,
+            width: `${timelineHorizontalControl.width}px`,
+          }}
+        >
+          <span>Horizontal position</span>
+          <input
+            ref={timelineHorizontalRangeRef}
+            type="range"
+            min="0"
+            max={timelineIsFit ? 0 : Math.max(0, timelineWidthPx - timelineViewportWidthPx)}
+            step="1"
+            defaultValue="0"
+            disabled={timelineIsFit}
+            aria-label="Horizontal timeline position"
+            onInput={(event) => {
+              const scrollLeft = Number(event.currentTarget.value)
+              if (timelineScrollRef.current && Number.isFinite(scrollLeft)) {
+                setTimelineLive(false)
+                timelineScrollRef.current.scrollLeft = scrollLeft
+              }
+            }}
+          />
+        </label>
       ), document.body)}
 
       {confirmingSchedule && (
