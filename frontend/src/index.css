@@ -1941,8 +1941,12 @@ body {
   color: #1f5f31;
 }
 
-.overview-list-row:nth-child(odd) {
-  background: var(--bg-panel);
+.overview-list-row--tradeoff-band-a {
+  background: #f7f9fb;
+}
+
+.overview-list-row--tradeoff-band-b {
+  background: #f1f5f8;
 }
 
 .overview-list-header span,
@@ -2048,10 +2052,10 @@ body {
   justify-content: center;
   min-width: 0;
   padding: 0.14rem 0.42rem;
-  border: 1px solid color-mix(in srgb, var(--tradeoff-accent) 46%, white);
+  border: 1px solid #9eb2c1;
   border-radius: 0.14rem;
-  background: color-mix(in srgb, var(--tradeoff-accent) 16%, white);
-  color: color-mix(in srgb, var(--tradeoff-accent) 74%, black);
+  background: #f8fbfd;
+  color: #2f4b60;
   font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.03em;
