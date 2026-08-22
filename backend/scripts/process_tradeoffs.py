@@ -208,9 +208,16 @@ def main() -> None:
             downlink_rate_mbps=downlink_rates.get(sat, args.default_downlink_rate) if downlink_rates else args.default_downlink_rate,
         )
 
+    scenario_start, scenario_end = LinkRepository.get_time_window(filter_run_id)
+    if scenario_start is None or scenario_end is None:
+        print(f"HARD FAIL: Scenario time window (start_time, end_time) could not be resolved from LinkRepository metadata for filter run '{filter_run_id}'.", file=sys.stderr)
+        sys.exit(1)
+
     session = SchedulingSessionManager.create_session(
         filter_run_id=args.filter_run_id,
         candidate_links=links,
+        scenario_start=scenario_start,
+        scenario_end=scenario_end,
         asset_schedules=asset_scheds,
         satellite_configs=satellite_configs if satellite_configs else None,
         default_capacity_mb=args.default_capacity,

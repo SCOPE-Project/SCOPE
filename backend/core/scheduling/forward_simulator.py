@@ -47,39 +47,21 @@ class ForwardSimulationScheduler(BaseScheduler):
         if scoring_rule is None:
             scoring_rule = BufferUrgencyScoringRule()
 
-        # 1. Determine Scenario Time Horizon Bounds [T_start, T_end]
+        # 1. Validate Scenario Time Horizon Bounds [T_start, T_end]
         if scenario_start is None or scenario_end is None:
-            all_link_times = []
-            for l in candidate_links.values():
-                all_link_times.append(l.start_time)
-                all_link_times.append(l.end_time)
-
-            if all_link_times:
-                min_link_t = min(all_link_times)
-                max_link_t = max(all_link_times)
-                # Expand to include activities within +/- 24h of candidate links if not specified
-                activity_starts = [
-                    _ensure_utc(act.start_event.timestamp)
-                    for acts in asset_schedules.values()
-                    for act in acts
-                    if act.start_event and getattr(act.start_event, "timestamp", None) is not None
-                    and abs((_ensure_utc(act.start_event.timestamp) - min_link_t).total_seconds()) <= 86400 * 2
-                ]
-                activity_ends = [
-                    _ensure_utc(act.end_event.timestamp)
-                    for acts in asset_schedules.values()
-                    for act in acts
-                    if act.end_event and getattr(act.end_event, "timestamp", None) is not None
-                    and abs((_ensure_utc(act.end_event.timestamp) - max_link_t).total_seconds()) <= 86400 * 2
-                ]
-                scenario_start = min([min_link_t] + activity_starts) if scenario_start is None else scenario_start
-                scenario_end = max([max_link_t] + activity_ends) if scenario_end is None else scenario_end
-            else:
-                scenario_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
-                scenario_end = datetime(2026, 1, 2, tzinfo=timezone.utc)
+            raise ValueError(
+                "Forward simulation requires explicit scenario_start and scenario_end boundaries. "
+                "No fallback horizon expansion is permitted."
+            )
 
         scenario_start = _ensure_utc(scenario_start)
         scenario_end = _ensure_utc(scenario_end)
+
+        if scenario_end <= scenario_start:
+            raise ValueError(
+                f"scenario_end ({scenario_end.isoformat()}) must be strictly after scenario_start ({scenario_start.isoformat()})."
+            )
+
 
         # 2. Initialize State Tracking for Satellites
         current_buffer: Dict[str, float] = {
