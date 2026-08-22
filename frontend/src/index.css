@@ -35,6 +35,20 @@
   padding: 0;
 }
 
+/* Numeric values are entered explicitly; browser stepper arrows are hidden
+   consistently in Chromium/WebKit and Firefox. */
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 body {
   font-family: var(--font-family);
   background: var(--bg-page);

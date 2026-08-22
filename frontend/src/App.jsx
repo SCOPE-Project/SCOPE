@@ -451,6 +451,29 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    const isNumberInput = (target) => (
+      target instanceof HTMLInputElement && target.type === 'number'
+    )
+    const preventNumberInputStepping = (event) => {
+      if (isNumberInput(event.target) && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault()
+      }
+    }
+    const preventNumberInputWheel = (event) => {
+      if (isNumberInput(event.target) && document.activeElement === event.target) {
+        event.preventDefault()
+      }
+    }
+
+    document.addEventListener('keydown', preventNumberInputStepping, true)
+    document.addEventListener('wheel', preventNumberInputWheel, { capture: true, passive: false })
+    return () => {
+      document.removeEventListener('keydown', preventNumberInputStepping, true)
+      document.removeEventListener('wheel', preventNumberInputWheel, true)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!schedulerLaunched || !timelineLive) {
       return undefined
     }
