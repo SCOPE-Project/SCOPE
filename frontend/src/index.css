@@ -3363,7 +3363,9 @@ body {
 
 .timeline-toolbar-groups {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 0.44rem;
   width: 100%;
 }
@@ -3647,6 +3649,11 @@ body {
   outline: none;
 }
 
+.timeline-scroll--fit {
+  overflow-x: hidden;
+  padding-bottom: 0;
+}
+
 .timeline-scroll:focus-visible {
   box-shadow: inset 0 0 0 2px rgba(185, 87, 31, 0.34);
 }
@@ -3758,6 +3765,13 @@ body {
   left: 0;
   right: 0;
   height: 1.9rem;
+  cursor: ew-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.timeline-playhead-slider:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(185, 87, 31, 0.34);
 }
 
 .timeline-playhead-thumb {
@@ -3766,16 +3780,11 @@ body {
   bottom: 0.2rem;
   width: 1.1rem;
   transform: translateX(-50%);
-  cursor: grab;
-  touch-action: none;
+  pointer-events: none;
   outline: none;
   background: none;
   border: none;
   padding: 0;
-}
-
-.timeline-playhead-thumb:active {
-  cursor: grabbing;
 }
 
 .timeline-playhead-handle {
@@ -3791,7 +3800,7 @@ body {
   box-shadow: 0 1px 4px rgba(31, 42, 51, 0.35);
 }
 
-.timeline-playhead-thumb:focus-visible .timeline-playhead-handle {
+.timeline-playhead-slider:focus-visible .timeline-playhead-handle {
   box-shadow: 0 0 0 3px rgba(185, 87, 31, 0.35);
 }
 
@@ -3813,15 +3822,10 @@ body {
   font-weight: 700;
   line-height: 1.2;
   white-space: nowrap;
-  /* Draggable, like the rest of the thumb: this label is a DOM child of
-     .timeline-playhead-thumb, so pointer events on it bubble up to that
-     div's onPointerDown/Move/Up handlers even though it visually overflows
-     the thumb's own narrow hit box. */
-  pointer-events: auto;
-  cursor: grab;
+  pointer-events: none;
 }
 
-.timeline-playhead-thumb:active .timeline-playhead-label {
+.timeline-playhead-slider:active {
   cursor: grabbing;
 }
 
@@ -4110,14 +4114,15 @@ body {
 .timeline-bar {
   position: absolute;
   top: 0.56rem;
-  min-width: 2.4rem;
+  box-sizing: border-box;
+  min-width: 2px;
   height: 2.32rem;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: flex-start;
   gap: 0.12rem;
-  padding: 0.27rem 0.36rem;
+  padding: 0;
   border-radius: 0.2rem;
   border: 1px solid transparent;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
@@ -4651,7 +4656,24 @@ body {
 
 .timeline-label-cell--selected,
 .timeline-track-row--selected {
-  background: rgba(46, 118, 184, 0.08);
+  background: rgba(47, 168, 83, 0.07);
+}
+
+/* Keep the planning-window boundary labels inside the fitted canvas. Without
+   these edge alignments the last label alone made the scroll area wider than
+   the selected window even though the canvas itself already fit exactly. */
+.timeline-axis-marker:first-child > span {
+  left: 0;
+  transform: translateX(0);
+}
+
+.timeline-axis-marker:last-child > span {
+  left: 0;
+  transform: translateX(-100%);
+}
+
+.timeline-axis-marker:last-child {
+  border-left: 0;
 }
 
 .timeline-label-cell--link.timeline-label-cell--marked,
@@ -4667,48 +4689,47 @@ body {
   background:
     repeating-linear-gradient(
       -45deg,
-      rgba(127, 141, 156, 0.16) 0,
-      rgba(127, 141, 156, 0.16) 6px,
-      rgba(245, 247, 249, 0.92) 6px,
-      rgba(245, 247, 249, 0.92) 12px
+      rgba(145, 157, 168, 0.18) 0,
+      rgba(145, 157, 168, 0.18) 6px,
+      rgba(246, 248, 249, 0.94) 6px,
+      rgba(246, 248, 249, 0.94) 12px
     ),
-    #eef2f6;
-  border-color: rgba(90, 109, 128, 0.34);
-  color: #4a5b6c;
+    #eef2f4;
+  border-color: #c9d0d6;
+  color: #596773;
 }
 
+.timeline-bar--current,
 .timeline-bar--blocking {
-  background: #dce8f6;
-  border-color: rgba(0, 57, 117, 0.38);
+  background: #d94848;
+  border-color: #a82e2e;
+  color: #fff;
 }
 
 .timeline-bar--selected {
-  background: #edf4fb;
-  border-color: rgba(46, 118, 184, 0.42);
+  background: #2faa53;
+  border-color: #1d7c39;
+  color: #fff;
 }
 
 .timeline-bar--pinned {
-  background: #fff4cf;
-  border-color: #c28a16;
-  box-shadow: inset 0 0 0 1px rgba(194, 138, 22, 0.32);
+  background: #2faa53;
+  border-color: #176c31;
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
 }
 
 .timeline-bar--excluded {
-  background:
-    repeating-linear-gradient(
-      -45deg,
-      #eef1f4 0,
-      #eef1f4 6px,
-      #d8dee4 6px,
-      #d8dee4 10px
-    );
-  border-color: #8996a3;
-  color: #53616d;
+  background: #aab5bf;
+  border-color: #7d8994;
+  color: #263746;
 }
 
-.timeline-bar--candidate {
-  background: #f3f6fa;
-  border-color: rgba(108, 128, 148, 0.28);
+.timeline-bar--candidate,
+.timeline-bar--neutral {
+  background: #aeb8c2;
+  border-color: #7e8a95;
+  color: #253746;
 }
 
 .timeline-bar--group-row {
@@ -4731,28 +4752,32 @@ body {
 }
 
 .timeline-bar--link-row.timeline-bar--current {
-  background: #f9eee2;
+  background: #d94848;
 }
 
 .timeline-bar--link-row.timeline-bar--blocking {
-  background: #f9eee2;
+  background: #d94848;
 }
 
-.timeline-bar--link-row.timeline-bar--selected {
-  background: #eff7ef;
+.timeline-bar--link-row.timeline-bar--selected,
+.timeline-bar--link-row.timeline-bar--pinned {
+  background: #bde8c8;
+  border-color: #62b878;
+  color: #173e23;
 }
 
 .timeline-bar--link-row.timeline-bar--candidate {
-  background: #f6f8fa;
+  background: #aeb8c2;
 }
 
 .timeline-bar--link-row.timeline-bar--fixed,
 .timeline-bar--link-row.timeline-bar--recommended {
-  background: #eff7ef;
+  background: #bde8c8;
+  border-color: #62b878;
 }
 
 .timeline-bar--link-row.timeline-bar--neutral {
-  background: #f6f8fa;
+  background: #aeb8c2;
 }
 
 .timeline-bar--static {
@@ -4773,6 +4798,20 @@ body {
   filter: none;
 }
 
+/* Clicking a trade-off link keeps its alternatives legible and pushes every
+   unrelated link into the background without hiding any schedule context. */
+.timeline-bar--context-dimmed,
+.timeline-bar--context-dimmed.timeline-bar--dimmed {
+  opacity: 0.2;
+  filter: grayscale(1) saturate(0.15);
+}
+
+.timeline-bar--context-dimmed:hover,
+.timeline-bar--context-dimmed:focus-visible {
+  opacity: 0.46;
+  filter: grayscale(0.8) saturate(0.35);
+}
+
 /* Marking is navigation, not selection -- deliberately a ring rather than the
    filled treatment the Trade-Off panel uses for an actual selection. */
 .timeline-bar--marked {
@@ -4784,7 +4823,7 @@ body {
   z-index: 7;
 }
 
-.timeline-bar--pinned {
+.timeline-bar--tooltip-pinned {
   z-index: 8;
 }
 

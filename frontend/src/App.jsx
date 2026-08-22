@@ -274,6 +274,7 @@ export default function App() {
   const [timelinePlaying, setTimelinePlaying] = useState(false)
   const [timelinePlaybackSpeed, setTimelinePlaybackSpeed] = useState(1)
   const [timelineZoomLevel, setTimelineZoomLevel] = useState(TIMELINE_DEFAULT_ZOOM_LEVEL)
+  const [timelineViewportWidthPx, setTimelineViewportWidthPx] = useState(0)
   // null means "use the preset multiplier from timelineZoomLevel"; a number
   // means the person has zoomed continuously with Ctrl/⌘ + scroll (mirroring
   // the map's Ctrl-gated wheel zoom) and that exact value overrides the
@@ -955,10 +956,11 @@ export default function App() {
 
         return {
           kind: 'link',
-          linkId: row.overpassId,
+          linkId: row.backendLinkId ?? row.linkId,
+          overpassId: row.overpassId,
           satId: row.satId,
           gsId: row.gsId,
-          label: row.overpassId,
+          label: row.backendLinkId ?? row.linkId,
           detail: hasTradeOff
             ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
             : `${row.satId} → ${row.gsId}`,
@@ -1099,7 +1101,7 @@ export default function App() {
     const mapToTimelineItem = (item) => ({
       ...item,
       startMinutes: (item.startTimestamp - baseTimestamp) / 60000,
-      durationMinutes: Math.max(5, (item.endTimestamp - item.startTimestamp) / 60000),
+      durationMinutes: Math.max(1 / 60, (item.endTimestamp - item.startTimestamp) / 60000),
     })
 
     const layerVisible = (layer) => timelineLayers[layer] !== false
@@ -2141,9 +2143,22 @@ export default function App() {
     tradeOffsCalculated,
   ])
   const timelineZoomMultiplier = timelineCustomZoomMultiplier ?? 1
+  const timelineFitWidthPx = timelineViewportWidthPx > 0
+    ? timelineViewportWidthPx
+    : timelineModel?.widthPx ?? 0
   const timelineWidthPx = timelineModel
-    ? Math.round(timelineModel.widthPx * timelineZoomMultiplier)
+    ? Math.max(1, Math.round(timelineFitWidthPx * timelineZoomMultiplier))
     : 0
+  const timelineIsFit = timelineZoomMultiplier <= TIMELINE_MIN_ZOOM_MULTIPLIER
+  const focusedTimelineTradeOffId = useMemo(() => {
+    if (!markedTimelineLinkId) {
+      return null
+    }
+
+    return tradeOffCards.find((card) => (
+      card.options.some((option) => option.linkId === markedTimelineLinkId)
+    ))?.id ?? null
+  }, [markedTimelineLinkId, tradeOffCards])
   const timelineSections = useMemo(
     () => (timelineModel?.sections ?? []).filter((section) => section.groups.length > 0),
     [timelineModel],
@@ -2184,6 +2199,31 @@ export default function App() {
   // all" rather than how many -- otherwise every expand/collapse would yank
   // the timeline back to the playhead.
   const timelineHasRows = timelineRenderRows.length > 0
+
+  useLayoutEffect(() => {
+    const frame = timelineScrollFrameRef.current
+    if (!frame || !expandedSections.timeline || !timelineHasRows) {
+      return undefined
+    }
+
+    const updateViewportWidth = () => {
+      const nextWidth = Math.floor(frame.clientWidth)
+      if (nextWidth > 0) {
+        setTimelineViewportWidthPx((current) => (current === nextWidth ? current : nextWidth))
+      }
+    }
+
+    updateViewportWidth()
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateViewportWidth)
+      return () => window.removeEventListener('resize', updateViewportWidth)
+    }
+
+    const observer = new ResizeObserver(updateViewportWidth)
+    observer.observe(frame)
+    return () => observer.disconnect()
+  }, [expandedSections.timeline, timelineHasRows, view])
 
   const getTimelineRowHeight = (renderRow) => {
     if (renderRow.type === 'section') {
@@ -2344,7 +2384,8 @@ export default function App() {
 
     if (thumb && windowRatio !== null) {
       thumb.style.left = `${Math.max(0, Math.min(1, windowRatio)) * 100}%`
-      thumb.setAttribute('aria-valuenow', String(Math.round(timestamp)))
+      const slider = timelinePlayheadSliderRef.current
+      slider?.setAttribute('aria-valuenow', String(Math.round(timestamp)))
     }
 
     bars.forEach((bar) => {
@@ -2362,7 +2403,7 @@ export default function App() {
     if (syncText && label) {
       const formatted = formatTimelinePlayheadDateTime(timestamp)
       label.textContent = formatted
-      thumb?.setAttribute('aria-valuetext', formatted)
+      timelinePlayheadSliderRef.current?.setAttribute('aria-valuetext', formatted)
     }
 
     missionMapRef.current?.setPlayheadTime(timestamp)
@@ -3208,7 +3249,7 @@ export default function App() {
   const renderTimelineTooltipContent = (item, pinned = false) => (
     <>
       <div className="timeline-hover-tooltip-header">
-        <strong>{item.label}</strong>
+        <strong>{item.kind === 'link' ? `Link ID: ${item.linkId}` : item.label}</strong>
         {item.tradeOffId ? (
           <span className="timeline-hover-tooltip-pill">{item.tradeOffId}</span>
         ) : item.kind === 'activity' ? (
@@ -3651,7 +3692,7 @@ export default function App() {
       setOverridingLinkId(null)
     }
 
-    setMarkedTimelineLinkId(option.overpassId)
+    setMarkedTimelineLinkId(option.linkId)
     setMarkedTradeOffOptionId(option.optionId)
   }
 
@@ -3723,13 +3764,14 @@ export default function App() {
     .find((option) => option.overpassId === overpassId) ?? null
 
   const handleOverviewTradeOffClick = (row) => {
-    markLinkForNavigation(row.overpassId, getOptionForOverpassId(row.overpassId)?.optionId ?? null)
+    const option = getOptionForOverpassId(row.overpassId)
+    markLinkForNavigation(
+      row.backendLinkId ?? row.linkId,
+      option?.optionId ?? row.backendLinkId ?? row.linkId ?? null,
+    )
   }
 
   const renderTimelineBar = (item, rowType = 'link') => {
-    const itemWidthPx = (item.durationMinutes / timelineModel.totalMinutes) * timelineWidthPx
-    const compactBar = itemWidthPx < 112
-    const tinyBar = itemWidthPx < 46
     const isLink = item.kind === 'link'
     const isGroupRow = rowType === 'group'
     const laneStepRem = isGroupRow ? 3.08 : 2.34
@@ -3739,6 +3781,9 @@ export default function App() {
     // carry the same linkId, so marking one visibly marks the other -- that is
     // the "visuelle Verknuepfung" the asset rows exist for.
     const marked = isLink && markedTimelineLinkId !== null && markedTimelineLinkId === item.linkId
+    const outsideFocusedTradeOff = isLink
+      && focusedTimelineTradeOffId !== null
+      && item.tradeOffId !== focusedTimelineTradeOffId
     const pinned = timelineTooltip.pinned && timelineTooltip.item?.id === item.id
 
     return (
@@ -3748,12 +3793,11 @@ export default function App() {
         className={[
           'timeline-bar',
           `timeline-bar--${item.variant}`,
-          compactBar ? 'timeline-bar--compact' : '',
-          tinyBar ? 'timeline-bar--tiny' : '',
           isTimelineItemAtPlayhead(item) ? 'timeline-bar--playhead-active' : '',
           item.dimmed ? 'timeline-bar--dimmed' : '',
+          outsideFocusedTradeOff ? 'timeline-bar--context-dimmed' : '',
           marked ? 'timeline-bar--marked' : '',
-          pinned ? 'timeline-bar--pinned' : '',
+          pinned ? 'timeline-bar--tooltip-pinned' : '',
           isGroupRow ? 'timeline-bar--group-row' : 'timeline-bar--link-row',
           isLink ? '' : 'timeline-bar--static',
         ].filter(Boolean).join(' ')}
@@ -3773,25 +3817,8 @@ export default function App() {
         onBlur={scheduleTimelineTooltipHide}
         aria-pressed={isLink ? marked : undefined}
         aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
-      >
-        <span className="timeline-bar-content">
-          {item.recommended && !tinyBar && (
-            <span className="timeline-bar-marker" aria-hidden="true"></span>
-          )}
-          <span className="timeline-bar-title">
-            {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
-          </span>
-        </span>
-      </button>
+      ></button>
     )
-  }
-
-  const getCompactTimelineLabel = (label) => {
-    if (label.length <= 8 || label.startsWith('OP-')) {
-      return label
-    }
-
-    return label.split(' ')[0]
   }
 
   const renderSectionChevron = (expanded) => (
@@ -4678,10 +4705,10 @@ export default function App() {
                                   <span className="overview-tradeoff-cell">
                                     <button
                                       type="button"
-                                      className={`overview-tradeoff-button ${markedTimelineLinkId === row.overpassId ? 'overview-tradeoff-button--marked' : ''}`}
+                                      className={`overview-tradeoff-button ${markedTimelineLinkId === (row.backendLinkId ?? row.linkId) ? 'overview-tradeoff-button--marked' : ''}`}
                                       onClick={() => handleOverviewTradeOffClick(row)}
-                                      aria-pressed={markedTimelineLinkId === row.overpassId}
-                                      title={`Show ${row.tradeOffId} and mark ${row.overpassId}`}
+                                      aria-pressed={markedTimelineLinkId === (row.backendLinkId ?? row.linkId)}
+                                      title={`Show ${row.tradeOffId} and mark link ${row.backendLinkId ?? row.linkId}`}
                                     >
                                       {renderTradeOffPill(row.tradeOffId)}
                                     </button>
@@ -5209,8 +5236,6 @@ export default function App() {
                           Ground Stations
                         </button>
                       </div>
-                    </div>
-                    <div className="timeline-toolbar-row">
                       <div className="timeline-toggle-group" role="group" aria-label="Timeline playback">
                         <button
                           type="button"
@@ -5238,7 +5263,6 @@ export default function App() {
                           ))}
                         </div>
                       </div>
-                      <div className="timeline-toolbar-spacer"></div>
                       <div className="timeline-toggle-group" role="group" aria-label="Timeline zoom">
                         <div className="timeline-zoom-control">
                           <button
@@ -5360,27 +5384,28 @@ export default function App() {
                         Hold Ctrl (⌘ on Mac) + scroll to zoom the timeline
                       </span>
                       <div
-                        ref={timelinePlayheadSliderRef}
-                        className="timeline-playhead-slider"
-                        aria-hidden={timelinePlayheadWindowRatio === null}
-                      >
+                      ref={timelinePlayheadSliderRef}
+                      className="timeline-playhead-slider"
+                      aria-hidden={timelinePlayheadWindowRatio === null}
+                      role={timelinePlayheadWindowRatio !== null ? 'slider' : undefined}
+                      tabIndex={timelinePlayheadWindowRatio !== null ? 0 : -1}
+                      aria-label="Current time shown on the map"
+                      aria-valuemin={planningWindowStartTimestamp ?? undefined}
+                      aria-valuemax={planningWindowEndTimestamp ?? undefined}
+                      aria-valuenow={timelinePlayheadWindowRatio !== null ? timelinePlayheadTimestamp : undefined}
+                      aria-valuetext={timelinePlayheadWindowRatio !== null ? formatTimelinePlayheadDateTime(timelinePlayheadTimestamp) : undefined}
+                      onPointerDown={handleTimelinePlayheadPointerDown}
+                      onPointerMove={handleTimelinePlayheadPointerMove}
+                      onPointerUp={handleTimelinePlayheadPointerUp}
+                      onPointerCancel={handleTimelinePlayheadPointerUp}
+                      onKeyDown={handleTimelinePlayheadKeyDown}
+                    >
                         {timelinePlayheadWindowRatio !== null && (
                           <div
                             className="timeline-playhead-thumb"
                             data-playback-thumb
                             style={{ left: `${timelinePlayheadWindowRatio * 100}%` }}
-                            role="slider"
-                            tabIndex="0"
-                            aria-label="Current time shown on the map"
-                            aria-valuemin={planningWindowStartTimestamp ?? undefined}
-                            aria-valuemax={planningWindowEndTimestamp ?? undefined}
-                            aria-valuenow={timelinePlayheadTimestamp}
-                            aria-valuetext={formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
-                            onPointerDown={handleTimelinePlayheadPointerDown}
-                            onPointerMove={handleTimelinePlayheadPointerMove}
-                            onPointerUp={handleTimelinePlayheadPointerUp}
-                            onPointerCancel={handleTimelinePlayheadPointerUp}
-                            onKeyDown={handleTimelinePlayheadKeyDown}
+                            aria-hidden="true"
                           >
                             <span className="timeline-playhead-handle" aria-hidden="true"></span>
                             <span className="timeline-playhead-label">
@@ -5394,7 +5419,7 @@ export default function App() {
                       </div>
                       <div
                         ref={timelineScrollRef}
-                        className="timeline-scroll"
+                        className={`timeline-scroll ${timelineIsFit ? 'timeline-scroll--fit' : ''}`}
                         tabIndex="0"
                         role="region"
                         aria-label="Interactive planning timeline"
@@ -5697,7 +5722,7 @@ export default function App() {
                     <div className="timeline-scroll-frame data-volume-scroll-frame">
                       <div
                         ref={dataVolumeScrollRef}
-                        className="timeline-scroll"
+                        className={`timeline-scroll ${timelineIsFit ? 'timeline-scroll--fit' : ''}`}
                         tabIndex="0"
                         role="region"
                         aria-label="On-board data volume over the planning window"
