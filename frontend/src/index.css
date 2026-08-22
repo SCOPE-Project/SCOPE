@@ -3869,45 +3869,29 @@ body {
   transform: translateX(-50%) translateY(0);
 }
 
-/*
- * The playhead slider is deliberately separate from `.timeline-scroll`
- * below it: it always spans the full planning window (never zoomed or
- * panned), and its thumb is the ONLY way to change the current time shown
- * on the map. Scrolling or clicking the timeline underneath must never
- * move it -- see handleTimelinePlayheadPointerDown/Move/Up in App.jsx.
- */
+/* One viewport overlay owns the datetime label, grab handle and dashed line.
+   Its X is derived from the zoomed canvas position minus scrollLeft, which
+   keeps every visual and the pointer input on exactly the same coordinate. */
 .timeline-playhead-slider {
   position: absolute;
   z-index: 16;
   top: 0;
-  left: 0;
-  right: 0;
-  height: 1.9rem;
+  bottom: 1rem;
+  width: 12px;
+  margin-left: -6px;
   cursor: ew-resize;
   touch-action: none;
   outline: none;
 }
 
 .timeline-playhead-slider:focus-visible {
-  box-shadow: inset 0 0 0 2px rgba(185, 87, 31, 0.34);
-}
-
-.timeline-playhead-thumb {
-  position: absolute;
-  top: 0;
-  bottom: 0.2rem;
-  width: 1.1rem;
-  transform: translateX(-50%);
-  pointer-events: none;
-  outline: none;
-  background: none;
-  border: none;
-  padding: 0;
+  border-radius: 999px;
 }
 
 .timeline-playhead-handle {
   position: absolute;
-  bottom: 0;
+  z-index: 1;
+  top: 1.05rem;
   left: 50%;
   transform: translateX(-50%);
   width: 0.85rem;
@@ -3916,6 +3900,18 @@ body {
   background: #b9571f;
   border: 2px solid #fff8f1;
   box-shadow: 0 1px 4px rgba(31, 42, 51, 0.35);
+}
+
+.timeline-playhead-slider::after {
+  content: '';
+  position: absolute;
+  top: 1.9rem;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  border-left: 2px dashed #b9571f;
+  transform: translateX(-1px);
+  pointer-events: none;
 }
 
 .timeline-playhead-slider:focus-visible .timeline-playhead-handle {
@@ -4196,37 +4192,6 @@ body {
   font-size: 0.68rem;
   font-weight: 600;
   white-space: nowrap;
-}
-
-/* Marker showing where the playhead slider's current time falls within the
-   (possibly scrolled/zoomed) timeline content below. Draggable, like the
-   slider thumb above: the element itself is a wider (10px) invisible hit
-   target centered on the visible dashed line (drawn via ::after) so a thin
-   line is still easy to grab -- see handleTimelineMarkerLinePointerDown. */
-.timeline-playhead-marker-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 10px;
-  margin-left: -5px;
-  z-index: 4;
-  cursor: ew-resize;
-  touch-action: none;
-}
-
-.timeline-playhead-marker-line::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 5px;
-  width: 0;
-  border-left: 2px dashed #b9571f;
-  pointer-events: none;
-}
-
-.timeline-playhead-marker-line--full {
-  z-index: 5;
 }
 
 .timeline-bar {
