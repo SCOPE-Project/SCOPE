@@ -134,6 +134,8 @@ For the current frontend controls, the recommended request is:
 }
 ```
 
+Only use these three configs. The others are irrelevant for the frontend for now.
+
 `satellite_name` may be included inside a buffer configuration DTO, but it should be omitted here because the key in `satellite_buffer_configs` already identifies the satellite.
 
 The complete accepted request contract is:
