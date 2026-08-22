@@ -62,6 +62,14 @@ const DEFAULT_DATA_START_FILL_GB = 40
 const DEFAULT_DATA_GENERATION_MBPS = 100
 const DEFAULT_DATA_CAPACITY_GB = 100
 const DEFAULT_DOWNLINK_RATE_MBPS = 25
+const DEFAULT_TRADE_OFF_STRATEGY = 'buffer_overflow_avoidance'
+const DEFAULT_SCORING_ALPHA = 2
+const DEFAULT_SCORING_EXPONENT = 2
+const TRADE_OFF_STRATEGIES = [
+  { value: 'buffer_overflow_avoidance', label: 'Buffer overflow avoidance' },
+  { value: 'max_downlink_throughput', label: 'Maximum downlink throughput' },
+  { value: 'max_pass_duration', label: 'Maximum pass duration' },
+]
 
 class MapErrorBoundary extends Component {
   state = { error: null }
@@ -239,6 +247,9 @@ export default function App() {
   const [dataGenerationMbps, setDataGenerationMbps] = useState(DEFAULT_DATA_GENERATION_MBPS)
   const [dataCapacityGb, setDataCapacityGb] = useState(DEFAULT_DATA_CAPACITY_GB)
   const [dataDownlinkRateMbps, setDataDownlinkRateMbps] = useState(DEFAULT_DOWNLINK_RATE_MBPS)
+  const [tradeOffStrategy, setTradeOffStrategy] = useState(DEFAULT_TRADE_OFF_STRATEGY)
+  const [scoringAlpha, setScoringAlpha] = useState(DEFAULT_SCORING_ALPHA)
+  const [scoringExponent, setScoringExponent] = useState(DEFAULT_SCORING_EXPONENT)
   // Shared height (px) of the top row (Overview/Trade-Off by default);
   // both panels stretch to this height and scroll their own content
   // internally. 346px is 60% of the panels' original fixed 36rem (576px)
@@ -306,6 +317,8 @@ export default function App() {
     groundStations: true,
     unavailableAssets: false,
     linkFilters: true,
+    bufferConfig: true,
+    tradeOffConfig: true,
     mapView: true,
     overview: true,
     tradeOff: true,
@@ -1268,6 +1281,8 @@ export default function App() {
       groundStations: true,
       unavailableAssets: false,
       linkFilters: true,
+      bufferConfig: true,
+      tradeOffConfig: true,
       mapView: true,
       overview: true,
       tradeOff: true,
@@ -1278,6 +1293,9 @@ export default function App() {
     setDataGenerationMbps(DEFAULT_DATA_GENERATION_MBPS)
     setDataCapacityGb(DEFAULT_DATA_CAPACITY_GB)
     setDataDownlinkRateMbps(DEFAULT_DOWNLINK_RATE_MBPS)
+    setTradeOffStrategy(DEFAULT_TRADE_OFF_STRATEGY)
+    setScoringAlpha(DEFAULT_SCORING_ALPHA)
+    setScoringExponent(DEFAULT_SCORING_EXPONENT)
     setConfirmingSchedule(false)
     setConfirmationProgress(0)
     setConfirmationStep('')
@@ -1673,7 +1691,13 @@ export default function App() {
   }
 
   const handleCalculateTradeOffs = async () => {
-    if (!schedulerLaunched || !filterRunId || overviewRows.length === 0 || !bufferConfigValid) return
+    if (
+      !schedulerLaunched
+      || !filterRunId
+      || overviewRows.length === 0
+      || !bufferConfigValid
+      || !tradeOffConfigValid
+    ) return
 
     setCalculatingTradeOffs(true)
     setError(null)
@@ -1688,8 +1712,10 @@ export default function App() {
           downlink_rate_mbps: dataDownlinkRateValue,
         },
         scoring_config: {
-          name: 'buffer_overflow_avoidance',
-          parameters: { alpha: 2.0, exponent: 2.0 },
+          name: tradeOffStrategy,
+          parameters: tradeOffStrategy === 'buffer_overflow_avoidance'
+            ? { alpha: scoringAlphaValue, exponent: scoringExponentValue }
+            : {},
         },
       })
       const result = await pollBackendTaskResult(receipt.task_id, {
@@ -1820,16 +1846,36 @@ export default function App() {
   const dataStartFillValueGb = Number(dataStartFillGb)
   const dataGenerationRateValue = Number(dataGenerationMbps)
   const dataDownlinkRateValue = Number(dataDownlinkRateMbps)
+  const scoringAlphaValue = Number(scoringAlpha)
+  const scoringExponentValue = Number(scoringExponent)
   const bufferConfigValid = (
-    Number.isFinite(dataCapacityValueGb)
+    String(dataCapacityGb).trim() !== ''
+    && Number.isFinite(dataCapacityValueGb)
     && dataCapacityValueGb > 0
+    && String(dataStartFillGb).trim() !== ''
     && Number.isFinite(dataStartFillValueGb)
     && dataStartFillValueGb >= 0
     && dataStartFillValueGb <= dataCapacityValueGb
+    && String(dataGenerationMbps).trim() !== ''
     && Number.isFinite(dataGenerationRateValue)
     && dataGenerationRateValue >= 0
+    && String(dataDownlinkRateMbps).trim() !== ''
     && Number.isFinite(dataDownlinkRateValue)
     && dataDownlinkRateValue > 0
+  )
+  const tradeOffConfigValid = (
+    TRADE_OFF_STRATEGIES.some((strategy) => strategy.value === tradeOffStrategy)
+    && (
+      tradeOffStrategy !== 'buffer_overflow_avoidance'
+      || (
+        String(scoringAlpha).trim() !== ''
+        && Number.isFinite(scoringAlphaValue)
+        && scoringAlphaValue >= 0
+        && String(scoringExponent).trim() !== ''
+        && Number.isFinite(scoringExponentValue)
+        && scoringExponentValue > 0
+      )
+    )
   )
   const planningWindowComplete =
     planningWindowStartDate !== ''
@@ -1847,6 +1893,7 @@ export default function App() {
     && selectedGroundStations.length >= 1
     && linkFiltersValid
     && bufferConfigValid
+    && tradeOffConfigValid
   const loadMissionAssetsDisabled = loading || launchingScheduler || backendAlive !== true
   const loadScopeDisabled =
     loading
@@ -1870,7 +1917,9 @@ export default function App() {
                   ? 'Optional filter values must stay between 0° and 90°.'
                   : !bufferConfigValid
                     ? 'Enter a valid buffer configuration and keep initial fill at or below capacity.'
-                  : ''
+                    : !tradeOffConfigValid
+                      ? 'Enter a valid trade-off scoring configuration.'
+                      : ''
   const timeOptions = Array.from({ length: 96 }, (_, index) => {
     const hours = String(Math.floor(index / 4)).padStart(2, '0')
     const minutes = String((index % 4) * 15).padStart(2, '0')
@@ -2052,6 +2101,7 @@ export default function App() {
     && filteredLinks.some((link) => link.is_eligible)
     && schedulableOverviewRows.length > 0
     && bufferConfigValid
+    && tradeOffConfigValid
   const finalScheduleRows = getScheduledRows(overviewRows)
   const confirmScheduleAvailable =
     Boolean(sessionId)
@@ -4063,6 +4113,145 @@ export default function App() {
     </div>
   )
 
+  const renderBufferConfigContent = (disabled = false) => (
+    <div className={`scheduling-config ${disabled ? 'scheduling-config--disabled' : ''}`}>
+      <div className="scheduling-config-grid">
+        <label className="filter-field">
+          <span>Capacity</span>
+          <div className="filter-input-shell">
+            <input
+              type="number"
+              min="0.001"
+              step="10"
+              inputMode="decimal"
+              value={dataCapacityGb}
+              disabled={disabled}
+              aria-invalid={!bufferConfigValid}
+              onChange={(event) => setDataCapacityGb(event.target.value)}
+              className="filter-input"
+            />
+            <span className="filter-input-unit">GB</span>
+          </div>
+        </label>
+        <label className="filter-field">
+          <span>Initial Fill</span>
+          <div className="filter-input-shell">
+            <input
+              type="number"
+              min="0"
+              step="10"
+              inputMode="decimal"
+              value={dataStartFillGb}
+              disabled={disabled}
+              aria-invalid={!bufferConfigValid}
+              onChange={(event) => setDataStartFillGb(event.target.value)}
+              className="filter-input"
+            />
+            <span className="filter-input-unit">GB</span>
+          </div>
+        </label>
+        <label className="filter-field">
+          <span>Payload Generation</span>
+          <div className="filter-input-shell">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              inputMode="decimal"
+              value={dataGenerationMbps}
+              disabled={disabled}
+              aria-invalid={!bufferConfigValid}
+              onChange={(event) => setDataGenerationMbps(event.target.value)}
+              className="filter-input"
+            />
+            <span className="filter-input-unit">MB/s</span>
+          </div>
+        </label>
+        <label className="filter-field">
+          <span>Downlink Rate</span>
+          <div className="filter-input-shell">
+            <input
+              type="number"
+              min="0.001"
+              step="0.1"
+              inputMode="decimal"
+              value={dataDownlinkRateMbps}
+              disabled={disabled}
+              aria-invalid={!bufferConfigValid}
+              onChange={(event) => setDataDownlinkRateMbps(event.target.value)}
+              className="filter-input"
+            />
+            <span className="filter-input-unit">MB/s</span>
+          </div>
+        </label>
+      </div>
+      <p className="scheduling-config-note">
+        Backend defaults for selected satellites. The downlink rate is also used when filtering links.
+      </p>
+      {!bufferConfigValid && (
+        <p className="filter-error">
+          Capacity and downlink rate must be positive; initial fill must be between zero and capacity.
+        </p>
+      )}
+    </div>
+  )
+
+  const renderTradeOffConfigContent = (disabled = false) => (
+    <div className={`scheduling-config ${disabled ? 'scheduling-config--disabled' : ''}`}>
+      <label className="filter-field">
+        <span>Scoring Strategy</span>
+        <select
+          value={tradeOffStrategy}
+          disabled={disabled}
+          onChange={(event) => setTradeOffStrategy(event.target.value)}
+          className="filter-input scheduling-config-select"
+        >
+          {TRADE_OFF_STRATEGIES.map((strategy) => (
+            <option key={strategy.value} value={strategy.value}>{strategy.label}</option>
+          ))}
+        </select>
+      </label>
+      {tradeOffStrategy === 'buffer_overflow_avoidance' && (
+        <div className="scheduling-config-grid scheduling-config-grid--parameters">
+          <label className="filter-field">
+            <span>Urgency Alpha</span>
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              inputMode="decimal"
+              value={scoringAlpha}
+              disabled={disabled}
+              aria-invalid={!tradeOffConfigValid}
+              onChange={(event) => setScoringAlpha(event.target.value)}
+              className="filter-input"
+            />
+          </label>
+          <label className="filter-field">
+            <span>Urgency Exponent</span>
+            <input
+              type="number"
+              min="0.001"
+              step="0.1"
+              inputMode="decimal"
+              value={scoringExponent}
+              disabled={disabled}
+              aria-invalid={!tradeOffConfigValid}
+              onChange={(event) => setScoringExponent(event.target.value)}
+              className="filter-input"
+            />
+          </label>
+        </div>
+      )}
+      <p className="scheduling-config-note">
+        Applied by the backend the next time Calculate Trade-Offs runs.
+      </p>
+      {!tradeOffConfigValid && (
+        <p className="filter-error">Alpha must be zero or greater and exponent must be positive.</p>
+      )}
+    </div>
+  )
+
   const renderSatelliteOptionsContent = (configDisabled = false) => (
     <div className="checkbox-list">
       {satelliteAssets.map((asset) => (
@@ -4231,6 +4420,20 @@ export default function App() {
                     {!missionAssetsLoaded && (
                       <span className="landing-panel-tooltip">{filterTooltip}</span>
                     )}
+                  </section>
+
+                  <section className="landing-config-panel">
+                    <div className="landing-config-panel-header">
+                      <span className="landing-config-step">Buffer Configuration</span>
+                    </div>
+                    {renderBufferConfigContent()}
+                  </section>
+
+                  <section className="landing-config-panel">
+                    <div className="landing-config-panel-header">
+                      <span className="landing-config-step">Trade-Off Configuration</span>
+                    </div>
+                    {renderTradeOffConfigContent()}
                   </section>
                 </div>
 
@@ -4538,6 +4741,8 @@ export default function App() {
                       : !tradeOffAvailable
                         ? !bufferConfigValid
                           ? 'Enter a valid buffer configuration; initial fill cannot exceed capacity.'
+                          : !tradeOffConfigValid
+                            ? 'Enter a valid trade-off scoring configuration.'
                           : overviewRows.length > 0
                           ? 'All backend-filtered links are ineligible.'
                           : 'No filtered links are available.'
@@ -5756,6 +5961,34 @@ export default function App() {
                     </span>
                   </button>
                   {expandedSections.linkFilters && renderLinkFiltersContent()}
+                </div>
+
+                <div className="sidebar-block">
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    onClick={() => toggleSection('bufferConfig')}
+                  >
+                    <span>Buffer Configuration</span>
+                    <span className="section-toggle-icon" aria-hidden="true">
+                      {renderSectionChevron(expandedSections.bufferConfig)}
+                    </span>
+                  </button>
+                  {expandedSections.bufferConfig && renderBufferConfigContent()}
+                </div>
+
+                <div className="sidebar-block">
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    onClick={() => toggleSection('tradeOffConfig')}
+                  >
+                    <span>Trade-Off Configuration</span>
+                    <span className="section-toggle-icon" aria-hidden="true">
+                      {renderSectionChevron(expandedSections.tradeOffConfig)}
+                    </span>
+                  </button>
+                  {expandedSections.tradeOffConfig && renderTradeOffConfigContent()}
                 </div>
               </div>
 

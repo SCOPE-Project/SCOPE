@@ -192,7 +192,7 @@ body {
 }
 
 .landing-content {
-  width: min(100%, 1080px);
+  width: min(100%, 1280px);
   padding: 2.25rem 1.5rem 2.5rem;
   margin: 0 auto;
   display: flex;
@@ -490,6 +490,49 @@ body {
   color: var(--error-text);
   font-size: 0.8rem;
   line-height: 1.35;
+}
+
+.scheduling-config {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.scheduling-config--disabled {
+  opacity: 0.65;
+}
+
+.scheduling-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.scheduling-config-select {
+  appearance: auto;
+  padding-right: 0.65rem;
+}
+
+.scheduling-config .filter-input-shell .filter-input {
+  padding-right: 3.35rem;
+}
+
+.scheduling-config-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.scheduling-config input[aria-invalid="true"],
+.scheduling-config select[aria-invalid="true"] {
+  border-color: var(--error-border);
+}
+
+.workspace-sidebar .scheduling-config-grid {
+  grid-template-columns: 1fr;
 }
 
 @media (max-width: 1080px) {
