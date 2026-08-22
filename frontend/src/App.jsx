@@ -4592,6 +4592,11 @@ export default function App() {
                         <span>Controls</span>
                       </span>
                     )}
+                    {tradeOffsCalculated && (
+                      <span className="overview-header-cell overview-header-cell--schedule">
+                        <span>Schedule</span>
+                      </span>
+                    )}
                   </div>
                   {visibleOverviewRows.length === 0 ? (
                     <>
@@ -4605,6 +4610,7 @@ export default function App() {
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
+                        {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
@@ -4725,6 +4731,13 @@ export default function App() {
                                 ) : (
                                   <span className="overview-select-empty">—</span>
                                 )}
+                              </span>
+                            )}
+                            {tradeOffsCalculated && (
+                              <span className="overview-schedule-state-cell">
+                                <span className={`overview-schedule-state ${row.isScheduled ? 'overview-schedule-state--scheduled' : 'overview-schedule-state--unscheduled'}`}>
+                                  {row.isScheduled ? 'Scheduled' : 'Unscheduled'}
+                                </span>
                               </span>
                             )}
                           </div>
