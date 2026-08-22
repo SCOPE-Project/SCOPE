@@ -641,6 +641,10 @@ const syncAssetMarkers = (
       'mission-map-marker--active',
       activeAssetId === asset.id,
     )
+    markerRecord.element.setAttribute(
+      'aria-pressed',
+      activeAssetId === asset.id ? 'true' : 'false',
+    )
     if (markerRecord.popup.isOpen) {
       syncAssetPopupContent(markerRecord.popupContent, asset, timeMode)
     }
@@ -1011,6 +1015,15 @@ const MissionMap = memo(forwardRef(function MissionMap({
 
     const handlePointerDown = (event) => {
       if (event.pointerType === 'mouse' && event.button !== 0) {
+        return
+      }
+
+      // Marker buttons own their pointer interaction. Capturing their
+      // pointer here for map panning can retarget pointerup/click to the map
+      // container, so the marker's native button click never fires. Letting
+      // the button complete its click also keeps mouse, touch, and keyboard
+      // selection behavior consistent.
+      if (event.target?.closest?.('.mission-map-marker')) {
         return
       }
 

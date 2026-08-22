@@ -1,4 +1,5 @@
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   interpolateTrackPosition,
   prepareTrackPoints,
@@ -151,6 +152,7 @@ export default function App() {
   const timelinePlaybackDomRef = useRef({ markers: [], bars: [], thumb: null, label: null })
   const timelinePlaybackLastTextSyncRef = useRef(0)
   const missionMapRef = useRef(null)
+  const visibleMapAssetListRef = useRef(null)
   const tradeOffCardListRef = useRef(null)
   const timelinePanelRef = useRef(null)
   const timelineWheelHintRef = useRef(null)
@@ -2038,6 +2040,25 @@ export default function App() {
   // "nothing selected" state to land on.
   const activeMapAsset = visibleMapAssets.find((asset) => asset.id === activeMapAssetId) ?? null
 
+  const handleSelectMapAsset = useCallback((assetId) => {
+    setActiveMapAssetId(assetId)
+    if (!assetId) {
+      return
+    }
+
+    requestAnimationFrame(() => {
+      const assetCard = [...(visibleMapAssetListRef.current?.querySelectorAll(
+        '.map-asset-card',
+      ) ?? [])].find((card) => card.dataset.mapAssetId === assetId)
+
+      assetCard?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'nearest',
+      })
+    })
+  }, [])
+
   const currentScheduleItems = useMemo(() => buildCurrentScheduleItems(
     assetSchedules,
     [...selectedSatellites, ...selectedGroundStations],
@@ -3144,7 +3165,10 @@ export default function App() {
     clearTimelineTooltipHideTimeout()
 
     setTimelineTooltip((current) => {
-      if (current.pinned && !pinned && current.item?.id !== item.id) {
+      // Once opened by click, hover/focus events caused by content moving
+      // under the pointer while the workspace scrolls must not turn the
+      // dialog back into a cursor-following tooltip.
+      if (current.pinned && !pinned) {
         return current
       }
 
@@ -5011,7 +5035,7 @@ export default function App() {
                         assets={visibleMapAssets}
                         satelliteTracks={preparedSatelliteTracks}
                         activeAssetId={activeMapAsset?.id ?? null}
-                        onSelectAsset={setActiveMapAssetId}
+                        onSelectAsset={handleSelectMapAsset}
                         timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
                         showGroundStationVisibility={showGroundStationVisibilityCircles}
                         showSatelliteVisibility={showSatelliteVisibilityCircles}
@@ -5118,11 +5142,13 @@ export default function App() {
                   <div className="map-sidebar-section">
                     <h3>Visible Assets</h3>
                     {visibleMapAssets.length > 0 ? (
-                      <div className="map-asset-card-list">
+                      <div ref={visibleMapAssetListRef} className="map-asset-card-list">
                         {visibleMapAssets.map((asset) => (
                           <button
                             key={asset.id}
                             type="button"
+                            data-map-asset-id={asset.id}
+                            aria-pressed={activeMapAsset?.id === asset.id}
                             className={`map-asset-card ${
                               activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
                             }`}
@@ -6051,7 +6077,7 @@ export default function App() {
         </div>
       )}
 
-      {timelineTooltip.visible && timelineTooltip.item && (
+      {timelineTooltip.visible && timelineTooltip.item && createPortal((
         <div
           className={`timeline-hover-tooltip ${timelineTooltip.pinned ? 'timeline-hover-tooltip--pinned' : ''}`}
           role={timelineTooltip.pinned ? 'dialog' : 'tooltip'}
@@ -6082,7 +6108,7 @@ export default function App() {
           )}
           {renderTimelineTooltipContent(timelineTooltip.item, timelineTooltip.pinned)}
         </div>
-      )}
+      ), document.body)}
 
       {confirmingSchedule && (
         <div className="workspace-lock-overlay" role="status" aria-live="polite">
