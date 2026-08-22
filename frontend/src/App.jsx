@@ -36,7 +36,7 @@ const TIMELINE_LAYERS = [
 ]
 const TIMELINE_WHEEL_ZOOM_STEP = 0.6
 const TIMELINE_MIN_ZOOM_MULTIPLIER = 1
-const TIMELINE_MAX_ZOOM_MULTIPLIER = 24
+const TIMELINE_FIT_EDGE_INSET_PX = 14
 const TIMELINE_PLAYBACK_SPEEDS = [1, 2, 4, 8, 16, 32, 64, 128]
 const DEFAULT_PLANNING_TIME_MODE = 'utc'
 const MAP_PANEL_CHROME_OVERHEAD_PX = 88
@@ -120,8 +120,10 @@ const parsePlanningDateFields = (dateValue, timeValue, timeMode) => {
 }
 
 const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start = new Date()) => {
-  const end = new Date(start.getTime() + 60 * 60000)
-  const startFields = formatPlanningDateFields(start, timeMode)
+  const roundedStart = new Date(start)
+  roundedStart.setMinutes(0, 0, 0)
+  const end = new Date(roundedStart.getTime() + 60 * 60000)
+  const startFields = formatPlanningDateFields(roundedStart, timeMode)
   const endFields = formatPlanningDateFields(end, timeMode)
 
   return {
@@ -129,7 +131,7 @@ const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start 
     startTime: startFields.time,
     endDate: endFields.date,
     endTime: endFields.time,
-    startIso: start.toISOString(),
+    startIso: roundedStart.toISOString(),
     endIso: end.toISOString(),
   }
 }
@@ -144,8 +146,6 @@ export default function App() {
   const timelineScrollRef = useRef(null)
   const timelineScrollFrameRef = useRef(null)
   const timelineHorizontalRangeRef = useRef(null)
-  const timelineLayoutKeyRef = useRef('')
-  const timelineProgrammaticScrollRef = useRef(false)
   const timelinePlayheadSliderRef = useRef(null)
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
@@ -264,9 +264,8 @@ export default function App() {
   const [showGroundTracks, setShowGroundTracks] = useState(true)
   const [groundTrackWindowHours, setGroundTrackWindowHours] = useState(6)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
-  const [timelineNow, setTimelineNow] = useState(() => Date.now())
   const [timelinePlayheadTime, setTimelinePlayheadTime] = useState(() => Date.now())
-  const [timelineLive, setTimelineLive] = useState(true)
+  const [timelineLive, setTimelineLive] = useState(false)
   const [timelinePlaying, setTimelinePlaying] = useState(false)
   const [timelinePlaybackSpeed, setTimelinePlaybackSpeed] = useState(1)
   const [timelineZoomLevel, setTimelineZoomLevel] = useState(TIMELINE_DEFAULT_ZOOM_LEVEL)
@@ -305,6 +304,7 @@ export default function App() {
     visible: false,
     pinned: false,
     item: null,
+    anchorItemId: null,
     x: 0,
     y: 0,
   })
@@ -474,18 +474,6 @@ export default function App() {
       document.removeEventListener('wheel', preventNumberInputWheel, true)
     }
   }, [])
-
-  useEffect(() => {
-    if (!schedulerLaunched || !timelineLive) {
-      return undefined
-    }
-
-    const intervalId = window.setInterval(() => {
-      setTimelineNow(Date.now())
-    }, 1000)
-
-    return () => window.clearInterval(intervalId)
-  }, [schedulerLaunched, timelineLive])
 
   useEffect(() => () => {
     if (splitDragCleanupRef.current) {
@@ -1200,15 +1188,34 @@ export default function App() {
     const satelliteGroups = satelliteNames.map((name) => buildAssetGroup('satellite', name))
     const groundStationGroups = groundStationNames.map((name) => buildAssetGroup('ground_station', name))
 
-    const ticks = Array.from({ length: Math.floor(totalMinutes / 60) + 2 }, (_, index) => {
-      const offsetMinutes = index * 60
-      const tickDate = new Date(baseDate.getTime() + offsetMinutes * 60000)
-      return {
-        offsetMinutes,
-        date: tickDate,
-        label: formatTimelineHour(tickDate, timeMode),
+    const firstTickDate = new Date(baseDate.getTime())
+    if (timeMode === 'utc') {
+      firstTickDate.setUTCMinutes(0, 0, 0)
+      if (firstTickDate.getTime() < baseDate.getTime()) {
+        firstTickDate.setUTCHours(firstTickDate.getUTCHours() + 1)
       }
-    }).filter((tick) => tick.offsetMinutes <= totalMinutes)
+    } else {
+      firstTickDate.setMinutes(0, 0, 0)
+      if (firstTickDate.getTime() < baseDate.getTime()) {
+        firstTickDate.setHours(firstTickDate.getHours() + 1)
+      }
+    }
+
+    const ticks = []
+    for (
+      let tickDate = new Date(firstTickDate.getTime());
+      tickDate.getTime() <= baseDate.getTime() + totalMinutes * 60000;
+      tickDate = new Date(tickDate.getTime() + 60 * 60000)
+    ) {
+      const offsetMinutes = (tickDate.getTime() - baseDate.getTime()) / 60000
+      if (offsetMinutes >= 0 && offsetMinutes <= totalMinutes) {
+        ticks.push({
+          offsetMinutes,
+          date: tickDate,
+          label: formatTimelineHour(tickDate, timeMode),
+        })
+      }
+    }
 
     return {
       baseDate,
@@ -1286,9 +1293,11 @@ export default function App() {
     setTimelineTradeOffViewId(null)
     setActiveMapAssetId(null)
     setActivePlanningWindow(null)
+    const planningWindowStartTimestamp = new Date(planningWindowPreset.startIso).getTime()
     setTimelineNow(Date.now())
-    setTimelinePlayheadTime(Date.now())
-    setTimelineLive(true)
+    setTimelinePlayheadTime(planningWindowStartTimestamp)
+    timelinePlayheadTimeRef.current = planningWindowStartTimestamp
+    setTimelineLive(false)
     setTimelinePlaying(false)
     setTimelinePlaybackSpeed(1)
     setTimelineZoomLevel(TIMELINE_DEFAULT_ZOOM_LEVEL)
@@ -1534,7 +1543,7 @@ export default function App() {
     setExtractionProgress(0)
     setExtractionMessages([
       {
-        id: `queued-${timelineNow}`,
+        id: `queued-${Date.now()}`,
         text: 'Task queued. Waiting for backend processing to start.',
       },
     ])
@@ -1562,10 +1571,10 @@ export default function App() {
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
-    const schedulerLaunchTime = timelineNow
-    setTimelineNow(schedulerLaunchTime)
+    const schedulerLaunchTime = new Date(planningWindow.startTime).getTime()
     setTimelinePlayheadTime(schedulerLaunchTime)
-    setTimelineLive(true)
+    timelinePlayheadTimeRef.current = schedulerLaunchTime
+    setTimelineLive(false)
     setTimelinePlaying(false)
     setSidebarCollapsed(true)
 
@@ -1990,9 +1999,24 @@ export default function App() {
       Math.min(planningWindowEndTimestamp, timestamp),
     )
   }
-  const timelinePlayheadTimestamp = clampToPlanningWindow(
-    timelineLive ? timelineNow : timelinePlayheadTime,
-  )
+  const timelinePlayheadTimestamp = clampToPlanningWindow(timelinePlayheadTime)
+
+  useEffect(() => {
+    if (
+      !schedulerLaunched
+      || planningWindowStartTimestamp === null
+      || timelinePlaying
+      || timelinePlayheadDraggingRef.current
+    ) {
+      return
+    }
+
+    timelinePlayheadTimeRef.current = planningWindowStartTimestamp
+    setTimelinePlayheadTime((current) => (
+      current === planningWindowStartTimestamp ? current : planningWindowStartTimestamp
+    ))
+    setTimelineLive(false)
+  }, [planningWindowStartTimestamp, schedulerLaunched, timelinePlaying])
 
   const getSatelliteTrackCoordinates = useCallback((assetName) => (
     interpolateTrackPosition(preparedSatelliteTracks[assetName], timelinePlayheadTimestamp)
@@ -2169,6 +2193,10 @@ export default function App() {
     && bufferConfigValid
     && tradeOffConfigValid
   const finalScheduleRows = getScheduledRows(overviewRows)
+  const overviewRowByLinkId = useMemo(
+    () => new Map(overviewRows.map((row) => [row.backendLinkId ?? row.linkId, row])),
+    [overviewRows],
+  )
   const confirmScheduleAvailable =
     Boolean(sessionId)
     && schedulerLaunched
@@ -2202,6 +2230,44 @@ export default function App() {
     ? Math.max(1, Math.round(timelineFitWidthPx * timelineZoomMultiplier))
     : 0
   const timelineIsFit = timelineZoomMultiplier <= TIMELINE_MIN_ZOOM_MULTIPLIER
+  const timelineContentInsetPx = timelineIsFit ? TIMELINE_FIT_EDGE_INSET_PX : 0
+  const timelineDrawableWidthPx = Math.max(1, timelineWidthPx - (timelineContentInsetPx * 2))
+  const visibleTimelineTicks = useMemo(() => {
+    if (!timelineModel || timelineWidthPx <= 0 || timelineModel.totalMinutes <= 0) {
+      return []
+    }
+
+    const minLabelSpacingPx = 64
+    const visibleTicks = []
+
+    timelineModel.ticks.forEach((tick, index) => {
+      const positionPx = timelineContentInsetPx
+        + ((tick.offsetMinutes / timelineModel.totalMinutes) * timelineDrawableWidthPx)
+      const isFirst = index === 0
+      const isLast = index === timelineModel.ticks.length - 1
+
+      if (isFirst) {
+        visibleTicks.push({ ...tick, positionPx })
+        return
+      }
+
+      if (isLast) {
+        const previousTick = visibleTicks[visibleTicks.length - 1]
+        if (previousTick && positionPx - previousTick.positionPx < minLabelSpacingPx) {
+          visibleTicks.pop()
+        }
+        visibleTicks.push({ ...tick, positionPx })
+        return
+      }
+
+      const previousTick = visibleTicks[visibleTicks.length - 1]
+      if (!previousTick || positionPx - previousTick.positionPx >= minLabelSpacingPx) {
+        visibleTicks.push({ ...tick, positionPx })
+      }
+    })
+
+    return visibleTicks.map(({ positionPx, ...tick }) => tick)
+  }, [timelineContentInsetPx, timelineDrawableWidthPx, timelineModel, timelineWidthPx])
   const activeTimelineTradeOffCard = useMemo(() => {
     if (!timelineTradeOffViewId) {
       return null
@@ -2451,7 +2517,7 @@ export default function App() {
   useLayoutEffect(() => {
     const panel = timelinePanelRef.current
     const scrollContainer = panel?.closest('.workspace-main')
-    if (!panel || !scrollContainer || !schedulerLaunched || !expandedSections.timeline) {
+    if (!panel || !scrollContainer || !schedulerLaunched || !expandedSections.timeline || timelineIsFit) {
       setTimelineHorizontalControl((current) => (
         current.visible ? { ...current, visible: false } : current
       ))
@@ -2496,7 +2562,7 @@ export default function App() {
       window.removeEventListener('resize', updateHorizontalControl)
       observer?.disconnect()
     }
-  }, [expandedSections.timeline, schedulerLaunched, timelineHasRows, view])
+  }, [expandedSections.timeline, schedulerLaunched, timelineHasRows, timelineIsFit, view])
 
   const getTimelineRowHeight = (renderRow) => {
     if (renderRow.type === 'section') {
@@ -2580,7 +2646,7 @@ export default function App() {
       // Label, handle and dashed line are one viewport overlay. This is the
       // only X-coordinate used for rendering and pointer input, so zoom and
       // horizontal scrolling cannot separate those pieces.
-      playhead.style.left = `${(ratio * timelineWidthPx) - scrollContainer.scrollLeft}px`
+      playhead.style.left = `${timelineContentInsetPx + (ratio * timelineDrawableWidthPx) - scrollContainer.scrollLeft}px`
     }
   }
 
@@ -2617,32 +2683,17 @@ export default function App() {
   // Maps a timestamp ratio to the scroll position used by playback/live
   // follow. The canvas has no horizontal padding, so this is also the same
   // coordinate space used by the playhead overlay.
-  const getTimelineScrollLeftForRatio = (ratio) => {
-    const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
-    return ratio * Math.max(0, timelineWidthPx - viewportWidthPx)
-  }
-
   const getTimelineScrollLeftForTimestamp = (timestamp) => {
     if (timelineBaseTimestamp === null || timelineDurationMs <= 0 || timelineWidthPx <= 0) {
       return 0
     }
 
+    const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
     const ratio = Math.max(
       0,
       Math.min(1, (timestamp - timelineBaseTimestamp) / timelineDurationMs),
     )
-    return getTimelineScrollLeftForRatio(ratio)
-  }
-
-  const scrollTimelineToTimestamp = (timestamp, behavior = 'auto') => {
-    timelineProgrammaticScrollRef.current = true
-    timelineScrollRef.current?.scrollTo({
-      left: getTimelineScrollLeftForTimestamp(timestamp),
-      behavior,
-    })
-    window.requestAnimationFrame(() => {
-      timelineProgrammaticScrollRef.current = false
-    })
+    return ratio * Math.max(0, timelineWidthPx - viewportWidthPx)
   }
 
   const syncTimelinePlaybackViewport = (timestamp) => {
@@ -2660,13 +2711,8 @@ export default function App() {
     }
   }
 
-  // Punkt 5: moving to a trade-off card opens every asset group involved in
-  // it -- including the ground stations of the options that were NOT chosen,
-  // because that comparison is the whole point of the card -- and scrolls the
-  // timeline to the relevant time. It never auto-collapses (that would hide
-  // bars the user is mid-comparison on) and never touches the zoom, which is
-  // user-owned. Expanding overrides a manual collapse on purpose: the card is
-  // asking you to look at exactly these assets.
+  // Opening a trade-off exposes all involved assets, but does not reposition
+  // the timeline horizontally. The current viewport is user-owned.
   const focusTimelineOnTradeOffCard = (card) => {
     if (!card) {
       return
@@ -2698,20 +2744,6 @@ export default function App() {
 
       return changed ? next : current
     })
-
-    const startTimestamps = card.options
-      .map((option) => toTimestamp(option.startTime))
-      .filter((value) => value !== null)
-
-    if (startTimestamps.length === 0) {
-      return
-    }
-
-    const targetTimestamp = Math.min(...startTimestamps)
-    // The rows above/below only change height after the expansion renders, and
-    // the scroll container has to exist first when this runs straight after
-    // the trade-off calculation.
-    window.requestAnimationFrame(() => scrollTimelineToTimestamp(targetTimestamp, 'smooth'))
   }
 
   const showTradeOffCard = (index) => {
@@ -2719,7 +2751,7 @@ export default function App() {
     focusTimelineOnTradeOffCard(tradeOffCards[index])
   }
 
-  const openTimelineTradeOffView = (tradeOffId, optionId = null, linkId = null) => {
+  const openTimelineTradeOffView = (tradeOffId, optionId = null, linkId = null, scrollToPanel = false) => {
     if (!tradeOffId) {
       return
     }
@@ -2732,7 +2764,9 @@ export default function App() {
     const card = tradeOffCards[cardIndex]
     setTimelineTradeOffViewId(tradeOffId)
     setActiveTradeOffCardIndex(cardIndex)
-    timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (scrollToPanel) {
+      timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
     focusTimelineOnTradeOffCard(card)
 
     if (optionId) {
@@ -2840,7 +2874,8 @@ export default function App() {
       scrollContainer.scrollLeft
       + (clientX - rect.left)
     )
-    return Math.max(0, Math.min(1, canvasPositionPx / timelineWidthPx))
+    const drawablePositionPx = canvasPositionPx - timelineContentInsetPx
+    return Math.max(0, Math.min(1, drawablePositionPx / timelineDrawableWidthPx))
   }
 
   const computeTimelineTimestampFromCanvasClientX = (clientX) => {
@@ -2881,10 +2916,7 @@ export default function App() {
     setTimelineCustomZoomMultiplier((current) => {
       const base = current ?? timelineZoomMultiplier
       const next = base + (direction * TIMELINE_WHEEL_ZOOM_STEP)
-      return Math.max(
-        TIMELINE_MIN_ZOOM_MULTIPLIER,
-        Math.min(TIMELINE_MAX_ZOOM_MULTIPLIER, next),
-      )
+      return Math.max(TIMELINE_MIN_ZOOM_MULTIPLIER, next)
     })
   }
 
@@ -3035,57 +3067,6 @@ export default function App() {
     timelineBaseTimestamp,
     timelineDurationMs,
     timelineLive,
-    timelinePlayheadTimestamp,
-    timelineWidthPx,
-    timelineHasRows,
-  ])
-
-  useEffect(() => {
-    const layoutKey = [
-      expandedSections.timeline,
-      timelineWidthPx,
-      timelineHasRows,
-    ].join('|')
-
-    if (layoutKey === timelineLayoutKeyRef.current) {
-      return undefined
-    }
-    timelineLayoutKeyRef.current = layoutKey
-
-    if (
-      !expandedSections.timeline
-      || timelineBaseTimestamp === null
-      || timelineDurationMs <= 0
-      || !timelineHasRows
-    ) {
-      return undefined
-    }
-
-    const animationFrameId = window.requestAnimationFrame(() => {
-      const ratio = Math.max(
-        0,
-        Math.min(
-          1,
-          (timelinePlayheadTimestamp - timelineBaseTimestamp) / timelineDurationMs,
-        ),
-      )
-      timelineProgrammaticScrollRef.current = true
-      const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
-      const scrollableWidthPx = Math.max(0, timelineWidthPx - viewportWidthPx)
-      timelineScrollRef.current?.scrollTo({
-        left: ratio * scrollableWidthPx,
-        behavior: 'auto',
-      })
-      window.requestAnimationFrame(() => {
-        timelineProgrammaticScrollRef.current = false
-      })
-    })
-
-    return () => window.cancelAnimationFrame(animationFrameId)
-  }, [
-    expandedSections.timeline,
-    timelineBaseTimestamp,
-    timelineDurationMs,
     timelinePlayheadTimestamp,
     timelineWidthPx,
     timelineHasRows,
@@ -3266,6 +3247,7 @@ export default function App() {
         visible: true,
         pinned,
         item,
+        anchorItemId: item.id,
         x: event?.clientX ?? current.x,
         y: event?.clientY ?? current.y,
       }
@@ -3295,6 +3277,7 @@ export default function App() {
               visible: false,
               pinned: false,
               item: null,
+              anchorItemId: null,
               x: current.x,
               y: current.y,
             }
@@ -3315,15 +3298,60 @@ export default function App() {
         return current
       }
 
-      return {
-        visible: false,
-        pinned: false,
-        item: null,
-        x: current.x,
-        y: current.y,
-      }
+          return {
+            visible: false,
+            pinned: false,
+            item: null,
+            anchorItemId: null,
+            x: current.x,
+            y: current.y,
+          }
     })
   }
+
+  useLayoutEffect(() => {
+    if (!timelineTooltip.visible || !timelineTooltip.pinned || !timelineTooltip.anchorItemId) {
+      return undefined
+    }
+
+    const updatePinnedTimelineTooltipPosition = () => {
+      const anchorNode = timelinePanelRef.current?.querySelector(
+        `[data-timeline-item-id="${timelineTooltip.anchorItemId}"]`,
+      )
+
+      if (!anchorNode) {
+        return
+      }
+
+      const rect = anchorNode.getBoundingClientRect()
+      const preferredLeft = rect.right + 12
+      const fallbackLeft = rect.left - 320
+      const nextLeft = preferredLeft <= window.innerWidth - 24
+        ? preferredLeft
+        : Math.max(16, fallbackLeft)
+      const nextTop = Math.max(16, Math.min(rect.top + 6, window.innerHeight - 240))
+
+      setTimelineTooltip((current) => (
+        current.visible && current.pinned && current.anchorItemId === timelineTooltip.anchorItemId
+          ? { ...current, x: nextLeft, y: nextTop }
+          : current
+      ))
+    }
+
+    updatePinnedTimelineTooltipPosition()
+
+    const timelineScroll = timelineScrollRef.current
+    const workspaceScroll = timelinePanelRef.current?.closest('.workspace-main')
+    timelineScroll?.addEventListener('scroll', updatePinnedTimelineTooltipPosition, { passive: true })
+    workspaceScroll?.addEventListener('scroll', updatePinnedTimelineTooltipPosition, { passive: true })
+    window.addEventListener('resize', updatePinnedTimelineTooltipPosition)
+
+    return () => {
+      timelineScroll?.removeEventListener('scroll', updatePinnedTimelineTooltipPosition)
+      workspaceScroll?.removeEventListener('scroll', updatePinnedTimelineTooltipPosition)
+      window.removeEventListener('resize', updatePinnedTimelineTooltipPosition)
+    }
+  }, [timelineTooltip.anchorItemId, timelineTooltip.pinned, timelineTooltip.visible])
 
   const toggleTimelineTooltipPin = (item, event) => {
     if (!item) {
@@ -3340,6 +3368,7 @@ export default function App() {
           visible: false,
           pinned: false,
           item: null,
+          anchorItemId: null,
           x: current.x,
           y: current.y,
         }
@@ -3349,6 +3378,7 @@ export default function App() {
         visible: true,
         pinned: true,
         item,
+        anchorItemId: item.id,
         x: event?.clientX ?? current.x,
         y: event?.clientY ?? current.y,
       }
@@ -3385,17 +3415,21 @@ export default function App() {
       {pinned && item.kind === 'link' && (
         <div className="timeline-link-popup-actions">
           {item.tradeOffId && (
-            <button
-              type="button"
-              className="timeline-link-popup-tradeoff-button"
-              onClick={() => openTimelineTradeOffView(
+          <button
+            type="button"
+            className="timeline-link-popup-tradeoff-button"
+            onClick={() => {
+              hideTimelineTooltip(true)
+              openTimelineTradeOffView(
                 item.tradeOffId,
                 item.optionId ?? item.linkId,
                 item.linkId,
-              )}
-            >
-              Show Trade-Off
-            </button>
+                false,
+              )
+            }}
+          >
+            Show Trade-Off
+          </button>
           )}
           <div className="timeline-link-popup-status-row">
             <span>Schedule controls</span>
@@ -3875,11 +3909,8 @@ export default function App() {
     }))
   }
 
-  // Navigation only, shared by the timeline bars and the Overview trade-off
-  // pill: marking a link marks both of its timeline instances, activates the
-  // card holding its option and marks the option there.
-  // selectedTradeOffOption is deliberately NOT touched, so nothing is decided
-  // or un-confirmed by navigating. Marking the same link again is the way back.
+  // Navigation only: marking a link highlights its timeline instances without
+  // auto-scrolling or opening/changing the trade-off drawer.
   const markLinkForNavigation = (linkId, optionId) => {
     if (!linkId) {
       return
@@ -3898,18 +3929,13 @@ export default function App() {
       return
     }
 
-    const cardIndex = tradeOffCards.findIndex(
-      (card) => card.options.some((option) => option.optionId === optionId),
-    )
-
-    if (cardIndex !== -1) {
-      showTradeOffCard(cardIndex)
-    }
-
     setMarkedTradeOffOptionId(optionId)
   }
 
   const handleTimelineItemClick = (item, event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
     if (item.kind === 'link') {
       markLinkForNavigation(item.linkId, item.optionId)
     }
@@ -3927,16 +3953,18 @@ export default function App() {
     hideTimelineTooltip(true)
   }
 
-  const getOptionForOverpassId = (overpassId) => tradeOffCards
+  const getOptionForLinkId = (linkId) => tradeOffCards
     .flatMap((card) => card.options)
-    .find((option) => option.overpassId === overpassId) ?? null
+    .find((option) => option.linkId === linkId) ?? null
 
   const handleOverviewTradeOffClick = (row) => {
-    const option = getOptionForOverpassId(row.overpassId)
+    const linkId = row.backendLinkId ?? row.linkId ?? null
+    const option = getOptionForLinkId(linkId)
     openTimelineTradeOffView(
       row.tradeOffId,
-      option?.optionId ?? row.backendLinkId ?? row.linkId ?? null,
-      row.backendLinkId ?? row.linkId ?? null,
+      option?.optionId ?? linkId,
+      linkId,
+      true,
     )
   }
 
@@ -3953,6 +3981,9 @@ export default function App() {
     const outsideFocusedTradeOff = isLink
       && focusedTimelineTradeOffId !== null
       && item.tradeOffId !== focusedTimelineTradeOffId
+    const outsideMarkedLink = isLink
+      && markedTimelineLinkId !== null
+      && item.linkId !== markedTimelineLinkId
     const pinned = timelineTooltip.pinned && timelineTooltip.item?.id === item.id
 
     return (
@@ -3964,7 +3995,7 @@ export default function App() {
           `timeline-bar--${item.variant}`,
           isTimelineItemAtPlayhead(item) ? 'timeline-bar--playhead-active' : '',
           item.dimmed ? 'timeline-bar--dimmed' : '',
-          outsideFocusedTradeOff ? 'timeline-bar--context-dimmed' : '',
+          outsideFocusedTradeOff || (focusedTimelineTradeOffId === null && outsideMarkedLink) ? 'timeline-bar--context-dimmed' : '',
           marked ? 'timeline-bar--marked' : '',
           pinned ? 'timeline-bar--tooltip-pinned' : '',
           isGroupRow ? 'timeline-bar--group-row' : 'timeline-bar--link-row',
@@ -3976,8 +4007,13 @@ export default function App() {
           top: `calc(${barTopOffsetRem}rem + ${(item.laneIndex ?? 0) * laneStepRem}rem)`,
           height: `${barHeightRem}rem`,
         }}
+        data-timeline-item-id={item.id}
         data-playback-start={item.startTimestamp}
         data-playback-end={item.endTimestamp}
+        onMouseDown={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+        }}
         onClick={(event) => handleTimelineItemClick(item, event)}
         onMouseEnter={(event) => showTimelineTooltip(item, event)}
         onMouseMove={moveTimelineTooltip}
@@ -4851,7 +4887,7 @@ export default function App() {
                   ) : (
                     <>
                       {visibleOverviewRows.map((row) => {
-                        const rowOption = getOptionForOverpassId(row.overpassId)
+                        const rowOption = getOptionForLinkId(row.backendLinkId ?? row.linkId ?? null)
                         const rowStatus = getOverviewRowStatus(row)
                         const rowUnavailable = isOverviewRowUnavailable(row)
                         const rowAvailabilityLabel = getOverviewAvailabilityLabel(row)
@@ -5084,18 +5120,18 @@ export default function App() {
                             data-option-id={option.optionId}
                             className={[
                               'tradeoff-option',
-                              selectedTradeOffOption[option.tradeOffGroupId] === option.optionId ? 'tradeoff-option--selected' : '',
+                              Boolean(overviewRowByLinkId.get(option.linkId)?.isScheduled) ? 'tradeoff-option--selected' : '',
                               markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
                             ].filter(Boolean).join(' ')}
                             style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
                           >
                             <div className="tradeoff-option-header">
-                              <span className="tradeoff-option-id">{option.overpassId}</span>
+                              <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
                               <div className="tradeoff-meta tradeoff-meta--option">
                                 {markedTradeOffOptionId === option.optionId && (
                                   <span className="tradeoff-marked-flag">Marked</span>
                                 )}
-                                {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
+                                {overviewRowByLinkId.get(option.linkId)?.isScheduled && overviewRowByLinkId.get(option.linkId)?.overrideState === 'auto' && <span className="tradeoff-recommended">Recommended</span>}
                                 <span className="tradeoff-score">Score {Number(option.score ?? 0).toFixed(2)}</span>
                               </div>
                             </div>
@@ -5432,75 +5468,79 @@ export default function App() {
                 <div className="timeline-toolbar">
                   <div className="timeline-toolbar-groups">
                     <div className="timeline-toolbar-row">
-                      <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
-                        {TIMELINE_LAYERS.map((layer) => (
-                          <button
-                            key={layer.id}
-                            type="button"
-                            className={`timeline-toggle ${timelineLayers[layer.id] ? 'timeline-toggle--active' : ''}`}
-                            onClick={() => toggleTimelineLayer(layer.id)}
-                            aria-pressed={Boolean(timelineLayers[layer.id])}
-                          >
-                            {layer.label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="timeline-toggle-group timeline-toggle-group--asset" role="group" aria-label="Timeline assets">
-                        <button
-                          type="button"
-                          className={`timeline-toggle ${timelineAssetVisibility.satellites ? 'timeline-toggle--active' : ''}`}
-                          onClick={() => toggleTimelineAssetVisibility('satellites')}
-                          aria-pressed={timelineAssetVisibility.satellites}
-                        >
-                          Satellites
-                        </button>
-                        <button
-                          type="button"
-                          className={`timeline-toggle ${timelineAssetVisibility.groundStations ? 'timeline-toggle--active' : ''}`}
-                          onClick={() => toggleTimelineAssetVisibility('groundStations')}
-                          aria-pressed={timelineAssetVisibility.groundStations}
-                        >
-                          Ground Stations
-                        </button>
-                      </div>
-                      <div className="timeline-toggle-group" role="group" aria-label="Timeline playback">
-                        <button
-                          type="button"
-                          className={`timeline-toggle timeline-play-toggle ${timelinePlaying ? 'timeline-toggle--active' : ''}`}
-                          onClick={handleTimelinePlaybackToggle}
-                          disabled={planningWindowStartTimestamp === null || planningWindowEndTimestamp === null}
-                          aria-pressed={timelinePlaying}
-                        >
-                          <span className="timeline-play-icon" aria-hidden="true">
-                            {timelinePlaying ? '⏸' : '▶'}
-                          </span>
-                          {timelinePlaying ? 'Pause' : 'Play'}
-                        </button>
-                        <div className="timeline-speed-control" role="group" aria-label="Playback speed">
-                          {TIMELINE_PLAYBACK_SPEEDS.map((speed) => (
+                      <div className="timeline-toolbar-side timeline-toolbar-side--left">
+                        <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
+                          {TIMELINE_LAYERS.map((layer) => (
                             <button
-                              key={speed}
+                              key={layer.id}
                               type="button"
-                              className={`timeline-speed-option ${timelinePlaybackSpeed === speed ? 'timeline-speed-option--active' : ''}`}
-                              onClick={() => setTimelinePlaybackSpeed(speed)}
-                              aria-pressed={timelinePlaybackSpeed === speed}
+                              className={`timeline-toggle ${timelineLayers[layer.id] ? 'timeline-toggle--active' : ''}`}
+                              onClick={() => toggleTimelineLayer(layer.id)}
+                              aria-pressed={Boolean(timelineLayers[layer.id])}
                             >
-                              {speed}×
+                              {layer.label}
                             </button>
                           ))}
                         </div>
-                        <div className="timeline-zoom-control">
+                        <div className="timeline-toggle-group timeline-toggle-group--asset" role="group" aria-label="Timeline assets">
                           <button
                             type="button"
-                            className="timeline-zoom-option timeline-zoom-reset"
-                            onClick={handleResetTimelineView}
-                            disabled={
-                              timelineZoomLevel === TIMELINE_DEFAULT_ZOOM_LEVEL
-                              && timelineCustomZoomMultiplier === null
-                            }
+                            className={`timeline-toggle ${timelineAssetVisibility.satellites ? 'timeline-toggle--active' : ''}`}
+                            onClick={() => toggleTimelineAssetVisibility('satellites')}
+                            aria-pressed={timelineAssetVisibility.satellites}
                           >
-                            Reset View
+                            Satellites
                           </button>
+                          <button
+                            type="button"
+                            className={`timeline-toggle ${timelineAssetVisibility.groundStations ? 'timeline-toggle--active' : ''}`}
+                            onClick={() => toggleTimelineAssetVisibility('groundStations')}
+                            aria-pressed={timelineAssetVisibility.groundStations}
+                          >
+                            Ground Stations
+                          </button>
+                        </div>
+                      </div>
+                      <div className="timeline-toolbar-side timeline-toolbar-side--right">
+                        <div className="timeline-toggle-group timeline-toggle-group--playback" role="group" aria-label="Timeline playback">
+                          <button
+                            type="button"
+                            className={`timeline-toggle timeline-play-toggle ${timelinePlaying ? 'timeline-toggle--active' : ''}`}
+                            onClick={handleTimelinePlaybackToggle}
+                            disabled={planningWindowStartTimestamp === null || planningWindowEndTimestamp === null}
+                            aria-pressed={timelinePlaying}
+                          >
+                            <span className="timeline-play-icon" aria-hidden="true">
+                              {timelinePlaying ? '⏸' : '▶'}
+                            </span>
+                            {timelinePlaying ? 'Pause' : 'Play'}
+                          </button>
+                          <div className="timeline-speed-control" role="group" aria-label="Playback speed">
+                            {TIMELINE_PLAYBACK_SPEEDS.map((speed) => (
+                              <button
+                                key={speed}
+                                type="button"
+                                className={`timeline-speed-option ${timelinePlaybackSpeed === speed ? 'timeline-speed-option--active' : ''}`}
+                                onClick={() => setTimelinePlaybackSpeed(speed)}
+                                aria-pressed={timelinePlaybackSpeed === speed}
+                              >
+                                {speed}×
+                              </button>
+                            ))}
+                          </div>
+                          <div className="timeline-zoom-control">
+                            <button
+                              type="button"
+                              className="timeline-zoom-option timeline-zoom-reset"
+                              onClick={handleResetTimelineView}
+                              disabled={
+                                timelineZoomLevel === TIMELINE_DEFAULT_ZOOM_LEVEL
+                                && timelineCustomZoomMultiplier === null
+                              }
+                            >
+                              Reset View
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -5667,7 +5707,6 @@ export default function App() {
                         >
                           <span className="timeline-playhead-handle" aria-hidden="true"></span>
                           <span className="timeline-playhead-label">
-                            {timelineLive && <span className="timeline-playhead-live">Live</span>}
                             <span data-playback-label>
                               {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
                             </span>
@@ -5685,7 +5724,7 @@ export default function App() {
                         onKeyDown={handleTimelineKeyDown}
                       >
                         <div
-                          className="timeline-time-canvas"
+                          className={`timeline-time-canvas ${timelineIsFit ? 'timeline-time-canvas--fit' : ''}`}
                           style={{
                             width: `${timelineWidthPx}px`,
                             '--timeline-hour-width': `${(60 / timelineModel.totalMinutes) * 100}%`,
@@ -5694,6 +5733,18 @@ export default function App() {
                         >
                       <div className="timeline-content-plane">
                       <div className="timeline-day-row">
+                        <div
+                          className="timeline-scenario-edge timeline-scenario-edge--start"
+                          style={{ left: `${timelineContentInsetPx}px` }}
+                        >
+                          <span>Scenario Start</span>
+                        </div>
+                        <div
+                          className="timeline-scenario-edge timeline-scenario-edge--end"
+                          style={{ right: `${timelineContentInsetPx}px` }}
+                        >
+                          <span>Scenario End</span>
+                        </div>
                         {timelineModel.dayBands.map((band, index) => (
                           <div
                             key={`${band.label}-${index}`}
@@ -5709,7 +5760,7 @@ export default function App() {
                       </div>
 
                       <div className="timeline-axis-row">
-                        {timelineModel.ticks.map((tick) => (
+                        {visibleTimelineTicks.map((tick) => (
                           <div
                             key={tick.offsetMinutes}
                             className={`timeline-axis-marker ${tick.offsetMinutes % 120 === 0 ? 'timeline-axis-marker--major' : ''}`}
@@ -5842,7 +5893,9 @@ export default function App() {
                         </div>
                         <div className="tradeoff-option-list">
                           {activeTimelineTradeOffCard.options.map((option) => {
-                            const optionScheduled = selectedTradeOffOption[option.tradeOffGroupId] === option.optionId
+                            const optionRow = overviewRowByLinkId.get(option.linkId)
+                            const optionScheduled = Boolean(optionRow?.isScheduled)
+                            const optionRecommended = optionScheduled && optionRow?.overrideState === 'auto'
 
                             return (
                               <div
@@ -5856,12 +5909,12 @@ export default function App() {
                                 ].filter(Boolean).join(' ')}
                               >
                                 <div className="tradeoff-option-header">
-                                  <span className="tradeoff-option-id">{option.overpassId}</span>
+                                  <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
                                   <div className="tradeoff-meta tradeoff-meta--option">
                                     {markedTradeOffOptionId === option.optionId && (
                                       <span className="tradeoff-marked-flag">Marked</span>
                                     )}
-                                    {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
+                                    {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
                                     <span className="tradeoff-score">Score {Number(option.score ?? 0).toFixed(2)}</span>
                                   </div>
                                 </div>
@@ -6300,8 +6353,12 @@ export default function App() {
             ? `${timelineTooltip.item.kind === 'link' ? `Schedule controls for ${timelineTooltip.item.linkId}` : timelineTooltip.item.label}`
             : undefined}
           style={{
-            left: `${Math.max(16, Math.min(timelineTooltip.x + 18, window.innerWidth - 392))}px`,
-            top: `${Math.max(16, Math.min(timelineTooltip.y + 22, window.innerHeight - 380))}px`,
+            left: `${timelineTooltip.pinned
+              ? Math.max(16, Math.min(timelineTooltip.x, window.innerWidth - 392))
+              : Math.max(16, Math.min(timelineTooltip.x + 18, window.innerWidth - 392))}px`,
+            top: `${timelineTooltip.pinned
+              ? Math.max(16, Math.min(timelineTooltip.y, window.innerHeight - 380))
+              : Math.max(16, Math.min(timelineTooltip.y + 22, window.innerHeight - 380))}px`,
           }}
           onMouseEnter={clearTimelineTooltipHideTimeout}
           onMouseLeave={() => {
