@@ -3271,10 +3271,7 @@ export default function App() {
       {pinned && item.kind === 'link' && (
         <div className="timeline-link-popup-actions">
           <div className="timeline-link-popup-status-row">
-            <span>Schedule state</span>
-            <span className={`timeline-link-popup-status ${item.isScheduled ? 'timeline-link-popup-status--scheduled' : 'timeline-link-popup-status--unscheduled'}`}>
-              {item.isScheduled ? 'Scheduled' : 'Unscheduled'}
-            </span>
+            <span>Schedule controls</span>
           </div>
           {sessionId && tradeOffsCalculated && item.isSchedulable ? (
             <div
@@ -3283,9 +3280,9 @@ export default function App() {
               aria-label={`Schedule controls for ${item.linkId}`}
             >
               {[
-                { state: 'auto', label: 'Auto' },
-                { state: 'pinned', label: 'Schedule' },
-                { state: 'excluded', label: 'Unschedule' },
+                { state: 'auto', label: 'A' },
+                { state: 'pinned', label: 'P' },
+                { state: 'excluded', label: 'X' },
               ].map((control) => (
                 <button
                   key={control.state}
@@ -3303,6 +3300,25 @@ export default function App() {
                   {control.label}
                 </button>
               ))}
+              <button
+                type="button"
+                className={`timeline-link-popup-control timeline-link-popup-schedule-toggle ${item.isScheduled ? 'timeline-link-popup-schedule-toggle--scheduled' : 'timeline-link-popup-schedule-toggle--unscheduled'}`}
+                onClick={() => handleLinkOverride({
+                  ...item,
+                  optionId: item.optionId ?? item.linkId,
+                  tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
+                }, item.isScheduled ? 'excluded' : 'pinned')}
+                disabled={Boolean(overridingLinkId)}
+                aria-pressed={item.isScheduled}
+                aria-label={item.isScheduled
+                  ? `Scheduled. Click to unschedule ${item.linkId}`
+                  : `Unscheduled. Click to schedule ${item.linkId}`}
+                title={item.isScheduled
+                  ? 'Scheduled: click to force this link to stay unscheduled.'
+                  : 'Unscheduled: click to force this link to stay scheduled.'}
+              >
+                {item.isScheduled ? 'Scheduled' : 'Unscheduled'}
+              </button>
             </div>
           ) : (
             <span className="timeline-link-popup-unavailable">

@@ -5525,33 +5525,15 @@ body {
 .timeline-link-popup-status-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.7rem;
   color: var(--text-secondary);
   font-size: 0.7rem;
   font-weight: 650;
 }
 
-.timeline-link-popup-status {
-  padding: 0.14rem 0.42rem;
-  border-radius: 999px;
-  font-size: 0.66rem;
-  font-weight: 750;
-}
-
-.timeline-link-popup-status--scheduled {
-  background: #d9f1df;
-  color: #176c31;
-}
-
-.timeline-link-popup-status--unscheduled {
-  background: #e4e8ec;
-  color: #4d5b68;
-}
-
 .timeline-link-popup-controls {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, 2.15rem) minmax(6.8rem, 1fr);
   gap: 0.32rem;
 }
 
@@ -5591,6 +5573,22 @@ body {
   border-color: #697681;
   background: #7d8994;
   color: #fff;
+}
+
+.timeline-link-popup-schedule-toggle {
+  padding-inline: 0.55rem;
+}
+
+.timeline-link-popup-schedule-toggle--scheduled {
+  border-color: #5aaf70;
+  background: #d9f1df;
+  color: #176c31;
+}
+
+.timeline-link-popup-schedule-toggle--unscheduled {
+  border-color: #aeb8c2;
+  background: #e4e8ec;
+  color: #4d5b68;
 }
 
 .timeline-link-popup-control:disabled {
