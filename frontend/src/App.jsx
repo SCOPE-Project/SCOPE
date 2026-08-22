@@ -717,6 +717,22 @@ export default function App() {
     return row.backendLinkId ?? row.linkId ?? '—'
   }
 
+  const formatDataDownlinkGb = (valueMb) => {
+    if (!Number.isFinite(valueMb)) {
+      return '—'
+    }
+
+    return formatGb(valueMb / 1000)
+  }
+
+  const formatBufferLevelGb = (valueMb) => {
+    if (!Number.isFinite(valueMb)) {
+      return '—'
+    }
+
+    return formatGb(valueMb / 1000)
+  }
+
   const getDayOfYear = (date, timeMode = DEFAULT_PLANNING_TIME_MODE) => {
     const useUtc = timeMode === 'utc'
     const year = useUtc ? date.getUTCFullYear() : date.getFullYear()
@@ -1294,7 +1310,6 @@ export default function App() {
     setActiveMapAssetId(null)
     setActivePlanningWindow(null)
     const planningWindowStartTimestamp = new Date(planningWindowPreset.startIso).getTime()
-    setTimelineNow(Date.now())
     setTimelinePlayheadTime(planningWindowStartTimestamp)
     timelinePlayheadTimeRef.current = planningWindowStartTimestamp
     setTimelineLive(false)
@@ -2197,6 +2212,20 @@ export default function App() {
     () => new Map(overviewRows.map((row) => [row.backendLinkId ?? row.linkId, row])),
     [overviewRows],
   )
+  const bufferLevelBeforeByLinkId = useMemo(() => {
+    const next = new Map()
+    const profiles = sessionPlan?.satellite_buffer_profiles ?? {}
+
+    Object.values(profiles).forEach((profile) => {
+      ;(profile?.profile_points ?? []).forEach((point) => {
+        if (point?.event_type === 'downlink_start' && point?.associated_id) {
+          next.set(point.associated_id, Number(point.level_mb ?? 0))
+        }
+      })
+    })
+
+    return next
+  }, [sessionPlan])
   const confirmScheduleAvailable =
     Boolean(sessionId)
     && schedulerLaunched
@@ -2787,6 +2816,25 @@ export default function App() {
     hideTimelineTooltip(true)
   }
 
+  const jumpToTimelineLink = (linkId, optionId = null) => {
+    if (!linkId) {
+      return
+    }
+
+    setMarkedTimelineLinkId(linkId)
+    setMarkedTradeOffOptionId(optionId ?? null)
+    timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+    window.requestAnimationFrame(() => {
+      const node = timelinePanelRef.current?.querySelector(`[data-link-id="${linkId}"]`)
+      node?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'center',
+      })
+    })
+  }
+
   // All cards now sit side by side in a horizontal band, so activating one
   // from outside (Overview pill, timeline click) has to bring it into view --
   // the card is the scroll target, the marked option inside it the fallback.
@@ -3333,7 +3381,11 @@ export default function App() {
 
       setTimelineTooltip((current) => (
         current.visible && current.pinned && current.anchorItemId === timelineTooltip.anchorItemId
-          ? { ...current, x: nextLeft, y: nextTop }
+          ? (
+              Math.abs(current.x - nextLeft) < 0.5 && Math.abs(current.y - nextTop) < 0.5
+                ? current
+                : { ...current, x: nextLeft, y: nextTop }
+            )
           : current
       ))
     }
@@ -3960,6 +4012,12 @@ export default function App() {
   const handleOverviewTradeOffClick = (row) => {
     const linkId = row.backendLinkId ?? row.linkId ?? null
     const option = getOptionForLinkId(linkId)
+
+    if (timelineTradeOffViewId === row.tradeOffId && markedTimelineLinkId === linkId) {
+      closeTimelineTradeOffView()
+      return
+    }
+
     openTimelineTradeOffView(
       row.tradeOffId,
       option?.optionId ?? linkId,
@@ -4008,6 +4066,7 @@ export default function App() {
           height: `${barHeightRem}rem`,
         }}
         data-timeline-item-id={item.id}
+        data-link-id={item.linkId ?? undefined}
         data-playback-start={item.startTimestamp}
         data-playback-end={item.endTimestamp}
         onMouseDown={(event) => {
@@ -4845,6 +4904,7 @@ export default function App() {
                     <span>End</span>
                     <span>Duration</span>
                     <span>Max Elev.</span>
+                    {tradeOffsCalculated && <span>Buffer level before</span>}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--tradeoff">
                         <span>Trade-Off ID</span>
@@ -4855,7 +4915,7 @@ export default function App() {
                         <span>Score</span>
                       </span>
                     )}
-                    {tradeOffsCalculated && <span>Offloaded</span>}
+                    {tradeOffsCalculated && <span>Data Downlink</span>}
                     {tradeOffsCalculated && (
                       <span>Controls</span>
                     )}
@@ -4877,6 +4937,7 @@ export default function App() {
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
+                        {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
@@ -4944,6 +5005,9 @@ export default function App() {
                             <span>{row.duration}</span>
                             <span>{row.maxElevation ?? '—'}</span>
                             {tradeOffsCalculated && (
+                              <span>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(row.backendLinkId ?? row.linkId ?? null))}</span>
+                            )}
+                            {tradeOffsCalculated && (
                               rowUnavailable
                                 ? <span className="overview-tradeoff-cell">—</span>
                                 : row.tradeOffId !== '—'
@@ -4969,7 +5033,7 @@ export default function App() {
                             )}
                             {tradeOffsCalculated && (
                               <span className="overview-offloaded-cell">
-                                {row.usefulDataOffloadedMb > 0 ? formatGb(row.usefulDataOffloadedMb / 1000) : '—'}
+                                {formatDataDownlinkGb(row.usefulDataOffloadedMb)}
                               </span>
                             )}
                             {tradeOffsCalculated && (
@@ -5128,9 +5192,6 @@ export default function App() {
                             <div className="tradeoff-option-header">
                               <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
                               <div className="tradeoff-meta tradeoff-meta--option">
-                                {markedTradeOffOptionId === option.optionId && (
-                                  <span className="tradeoff-marked-flag">Marked</span>
-                                )}
                                 {overviewRowByLinkId.get(option.linkId)?.isScheduled && overviewRowByLinkId.get(option.linkId)?.overrideState === 'auto' && <span className="tradeoff-recommended">Recommended</span>}
                                 <span className="tradeoff-score">Score {Number(option.score ?? 0).toFixed(2)}</span>
                               </div>
@@ -5138,31 +5199,56 @@ export default function App() {
 
                             <dl className="tradeoff-option-facts">
                               <div className="tradeoff-option-fact">
+                                <dt>Satellite</dt>
+                                <dd>{option.satId ?? '—'}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
                                 <dt>Ground Station</dt>
                                 <dd>{option.gsId ?? '—'}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>Start</dt>
+                                <dd>{formatOverviewStartDateTime(option.startTime)}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>End</dt>
+                                <dd>{formatOverviewEndDateTime(option.startTime, option.endTime)}</dd>
                               </div>
                               <div className="tradeoff-option-fact">
                                 <dt>Duration</dt>
                                 <dd>{option.duration ?? '—'}</dd>
                               </div>
                               <div className="tradeoff-option-fact">
-                                <dt>Data</dt>
-                                <dd>{option.usefulDataOffloadedMb > 0 ? formatGb(option.usefulDataOffloadedMb / 1000) : '—'}</dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
                                 <dt>Max Elev.</dt>
                                 <dd>{option.maxElevation ?? '—'}</dd>
                               </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>Buffer level before</dt>
+                                <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>Data Downlink</dt>
+                                <dd>{formatDataDownlinkGb(option.usefulDataOffloadedMb)}</dd>
+                              </div>
                             </dl>
 
-                            <button
-                              type="button"
-                              className="tradeoff-select-button"
-                              onClick={() => handleLinkOverride(option, option.overrideState === 'pinned' ? 'auto' : 'pinned')}
-                              disabled={Boolean(overridingLinkId)}
-                            >
-                              {option.overrideState === 'pinned' ? 'Return to Auto' : 'Pin'}
-                            </button>
+                            <div className="tradeoff-option-actions">
+                              <button
+                                type="button"
+                                className="tradeoff-jump-button"
+                                onClick={() => jumpToTimelineLink(option.linkId, option.optionId)}
+                              >
+                                Jump to Timeline
+                              </button>
+                              <button
+                                type="button"
+                                className="tradeoff-select-button"
+                                onClick={() => handleLinkOverride(option, option.overrideState === 'pinned' ? 'auto' : 'pinned')}
+                                disabled={Boolean(overridingLinkId)}
+                              >
+                                {Boolean(overviewRowByLinkId.get(option.linkId)?.isScheduled) ? 'Scheduled' : 'Schedule'}
+                              </button>
+                            </div>
                           </div>
                       ))}
                     </div>
@@ -5911,9 +5997,6 @@ export default function App() {
                                 <div className="tradeoff-option-header">
                                   <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
                                   <div className="tradeoff-meta tradeoff-meta--option">
-                                    {markedTradeOffOptionId === option.optionId && (
-                                      <span className="tradeoff-marked-flag">Marked</span>
-                                    )}
                                     {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
                                     <span className="tradeoff-score">Score {Number(option.score ?? 0).toFixed(2)}</span>
                                   </div>
@@ -5921,31 +6004,56 @@ export default function App() {
 
                                 <dl className="tradeoff-option-facts">
                                   <div className="tradeoff-option-fact">
+                                    <dt>Satellite</dt>
+                                    <dd>{option.satId ?? '—'}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
                                     <dt>Ground Station</dt>
                                     <dd>{option.gsId ?? '—'}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Start</dt>
+                                    <dd>{formatOverviewStartDateTime(option.startTime)}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>End</dt>
+                                    <dd>{formatOverviewEndDateTime(option.startTime, option.endTime)}</dd>
                                   </div>
                                   <div className="tradeoff-option-fact">
                                     <dt>Duration</dt>
                                     <dd>{option.duration ?? '—'}</dd>
                                   </div>
                                   <div className="tradeoff-option-fact">
-                                    <dt>Data</dt>
-                                    <dd>{option.usefulDataOffloadedMb > 0 ? formatGb(option.usefulDataOffloadedMb / 1000) : '—'}</dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
                                     <dt>Max Elev.</dt>
                                     <dd>{option.maxElevation ?? '—'}</dd>
                                   </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Buffer level before</dt>
+                                    <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Data Downlink</dt>
+                                    <dd>{formatDataDownlinkGb(option.usefulDataOffloadedMb)}</dd>
+                                  </div>
                                 </dl>
 
-                                <button
-                                  type="button"
-                                  className="tradeoff-select-button"
-                                  onClick={() => handleLinkOverride(option, option.overrideState === 'pinned' ? 'auto' : 'pinned')}
-                                  disabled={Boolean(overridingLinkId)}
-                                >
-                                  {optionScheduled ? 'Scheduled' : 'Schedule'}
-                                </button>
+                                <div className="tradeoff-option-actions">
+                                  <button
+                                    type="button"
+                                    className="tradeoff-jump-button"
+                                    onClick={() => jumpToTimelineLink(option.linkId, option.optionId)}
+                                  >
+                                    Jump to Timeline
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="tradeoff-select-button"
+                                    onClick={() => handleLinkOverride(option, option.overrideState === 'pinned' ? 'auto' : 'pinned')}
+                                    disabled={Boolean(overridingLinkId)}
+                                  >
+                                    {optionScheduled ? 'Scheduled' : 'Schedule'}
+                                  </button>
+                                </div>
                               </div>
                             )
                           })}
