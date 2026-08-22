@@ -203,6 +203,7 @@ export default function App() {
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState({})
+  const [timelineTradeOffViewId, setTimelineTradeOffViewId] = useState(null)
   const [warningTooltip, setWarningTooltip] = useState({
     visible: false,
     message: '',
@@ -1282,6 +1283,7 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption({})
+    setTimelineTradeOffViewId(null)
     setActiveMapAssetId(null)
     setActivePlanningWindow(null)
     setTimelineNow(Date.now())
@@ -1552,6 +1554,7 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption({})
+    setTimelineTradeOffViewId(null)
     setExpandedTimelineGroups({})
     setExpandedTimelineSections({ satellites: true, groundStations: true })
     setMarkedTimelineLinkId(null)
@@ -1696,19 +1699,28 @@ export default function App() {
         maxElevation: formatElevation(option.maxElevationDeg),
       })),
     }))
+    const nextSelectedOptions = buildSelectedOptionsFromPlan(plan)
+    const preservedTimelineTradeOffCard = timelineTradeOffViewId
+      ? nextCards.find((card) => card.id === timelineTradeOffViewId) ?? null
+      : null
 
     setSessionPlan(plan)
     setSessionId(plan.session_id)
     setFilterRunId(plan.filter_run_id)
     setOverviewRows(nextRows)
     setTradeOffCards(nextCards)
-    setSelectedTradeOffOption(buildSelectedOptionsFromPlan(plan))
-    setActiveTradeOffCardIndex(0)
+    setSelectedTradeOffOption(nextSelectedOptions)
+    setTimelineTradeOffViewId(preservedTimelineTradeOffCard?.id ?? null)
+    setActiveTradeOffCardIndex(
+      preservedTimelineTradeOffCard
+        ? nextCards.findIndex((card) => card.id === preservedTimelineTradeOffCard.id)
+        : 0,
+    )
     setTradeOffsCalculated(true)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
-    if (focusTimeline) {
+    if (focusTimeline && !preservedTimelineTradeOffCard) {
       focusTimelineOnTradeOffCard(nextCards[0])
     }
   }
@@ -2190,7 +2202,18 @@ export default function App() {
     ? Math.max(1, Math.round(timelineFitWidthPx * timelineZoomMultiplier))
     : 0
   const timelineIsFit = timelineZoomMultiplier <= TIMELINE_MIN_ZOOM_MULTIPLIER
+  const activeTimelineTradeOffCard = useMemo(() => {
+    if (!timelineTradeOffViewId) {
+      return null
+    }
+
+    return tradeOffCards.find((card) => card.id === timelineTradeOffViewId) ?? null
+  }, [timelineTradeOffViewId, tradeOffCards])
   const focusedTimelineTradeOffId = useMemo(() => {
+    if (timelineTradeOffViewId) {
+      return timelineTradeOffViewId
+    }
+
     if (!markedTimelineLinkId) {
       return null
     }
@@ -2198,7 +2221,7 @@ export default function App() {
     return tradeOffCards.find((card) => (
       card.options.some((option) => option.linkId === markedTimelineLinkId)
     ))?.id ?? null
-  }, [markedTimelineLinkId, tradeOffCards])
+  }, [timelineTradeOffViewId, markedTimelineLinkId, tradeOffCards])
   const timelineSections = useMemo(
     () => (timelineModel?.sections ?? []).filter((section) => section.groups.length > 0),
     [timelineModel],
@@ -2694,6 +2717,40 @@ export default function App() {
   const showTradeOffCard = (index) => {
     setActiveTradeOffCardIndex(index)
     focusTimelineOnTradeOffCard(tradeOffCards[index])
+  }
+
+  const openTimelineTradeOffView = (tradeOffId, optionId = null, linkId = null) => {
+    if (!tradeOffId) {
+      return
+    }
+
+    const cardIndex = tradeOffCards.findIndex((card) => card.id === tradeOffId)
+    if (cardIndex === -1) {
+      return
+    }
+
+    const card = tradeOffCards[cardIndex]
+    setTimelineTradeOffViewId(tradeOffId)
+    setActiveTradeOffCardIndex(cardIndex)
+    timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    focusTimelineOnTradeOffCard(card)
+
+    if (optionId) {
+      setMarkedTradeOffOptionId(optionId)
+    } else {
+      setMarkedTradeOffOptionId(null)
+    }
+
+    if (linkId) {
+      setMarkedTimelineLinkId(linkId)
+    }
+  }
+
+  const closeTimelineTradeOffView = () => {
+    setTimelineTradeOffViewId(null)
+    setMarkedTradeOffOptionId(null)
+    setMarkedTimelineLinkId(null)
+    hideTimelineTooltip(true)
   }
 
   // All cards now sit side by side in a horizontal band, so activating one
@@ -3327,6 +3384,19 @@ export default function App() {
       )}
       {pinned && item.kind === 'link' && (
         <div className="timeline-link-popup-actions">
+          {item.tradeOffId && (
+            <button
+              type="button"
+              className="timeline-link-popup-tradeoff-button"
+              onClick={() => openTimelineTradeOffView(
+                item.tradeOffId,
+                item.optionId ?? item.linkId,
+                item.linkId,
+              )}
+            >
+              Show Trade-Off
+            </button>
+          )}
           <div className="timeline-link-popup-status-row">
             <span>Schedule controls</span>
           </div>
@@ -3848,7 +3918,7 @@ export default function App() {
   }
 
   const handleTimelineBackgroundClick = (event) => {
-    if (event.target.closest('button, [role="slider"]')) {
+    if (event.target.closest('button, [role="slider"], .timeline-tradeoff-drawer')) {
       return
     }
 
@@ -3863,9 +3933,10 @@ export default function App() {
 
   const handleOverviewTradeOffClick = (row) => {
     const option = getOptionForOverpassId(row.overpassId)
-    markLinkForNavigation(
-      row.backendLinkId ?? row.linkId,
+    openTimelineTradeOffView(
+      row.tradeOffId,
       option?.optionId ?? row.backendLinkId ?? row.linkId ?? null,
+      row.backendLinkId ?? row.linkId ?? null,
     )
   }
 
@@ -4754,7 +4825,7 @@ export default function App() {
                     )}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--schedule">
-                        <span>Select</span>
+                        <span>Schedule</span>
                       </span>
                     )}
                   </div>
@@ -4905,7 +4976,7 @@ export default function App() {
                                     )}
                                     disabled={Boolean(overridingLinkId)}
                                   >
-                                    Select
+                                    {row.isScheduled ? 'Scheduled' : 'Schedule'}
                                   </button>
                                 ) : (
                                   <span className="overview-select-empty">—</span>
@@ -5006,10 +5077,6 @@ export default function App() {
                         <p className="tradeoff-card-resource">{card.resourceLabel}</p>
                       </div>
                     </div>
-                    <p className="tradeoff-reason">
-                      <span className="tradeoff-reason-label">Reason:</span> {card.reason}
-                    </p>
-
                     <div className="tradeoff-option-list">
                       {card.options.map((option) => (
                           <div
@@ -5422,8 +5489,6 @@ export default function App() {
                             </button>
                           ))}
                         </div>
-                      </div>
-                      <div className="timeline-toggle-group" role="group" aria-label="Timeline zoom">
                         <div className="timeline-zoom-control">
                           <button
                             type="button"
@@ -5445,7 +5510,10 @@ export default function App() {
                 {timelineRenderRows.length === 0 ? (
                   <p className="timeline-empty-copy">Enable at least one timeline layer and one asset section to display the schedule view.</p>
                 ) : (
-                  <div className="timeline-layout" onClick={handleTimelineBackgroundClick}>
+                  <div
+                    className="timeline-layout"
+                    onClick={handleTimelineBackgroundClick}
+                  >
                     <div className="timeline-label-column">
                       <div className="timeline-label-cell timeline-label-cell--day"></div>
                       <div className="timeline-label-cell timeline-label-cell--axis"></div>
@@ -5568,6 +5636,7 @@ export default function App() {
                       })}
                     </div>
 
+                    <div className={`timeline-main-stage ${activeTimelineTradeOffCard ? 'timeline-main-stage--with-tradeoff' : ''}`}>
                     <div ref={timelineScrollFrameRef} className="timeline-scroll-frame">
                       <span
                         ref={timelineWheelHintRef}
@@ -5712,27 +5781,15 @@ export default function App() {
                                   </svg>
 
                                   {series.steps.map((step) => (
-                                    <button
+                                    <span
                                       key={`${series.id}-${step.id}`}
-                                      type="button"
                                       className="data-volume-step"
                                       style={{
                                         left: `${((step.startTimestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
                                         width: `${((step.endTimestamp - step.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
                                       }}
-                                      aria-label={`${step.label}: ${step.downlinkMbps} megabytes per second, ${formatGb(step.transferredGb)} downlinked.`}
-                                    >
-                                      <span className="timeline-bar-tooltip" role="tooltip">
-                                        <span className="timeline-bar-tooltip-inner">
-                                          <strong>{step.label}</strong>
-                                          <span>{series.name} → {step.gsId}</span>
-                                          <span>Rate: {step.downlinkMbps} MB/s</span>
-                                          <span>Downlinked: {formatGb(step.transferredGb)}</span>
-                                          <span>Buffer: {formatGb(step.levelBefore)} → {formatGb(step.levelAfter)}</span>
-                                          {step.maxElevation && <span>Max elevation: {step.maxElevation}</span>}
-                                        </span>
-                                      </span>
-                                    </button>
+                                      aria-hidden="true"
+                                    ></span>
                                   ))}
                                 </>
                               ) : (
@@ -5763,6 +5820,85 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+                    </div>
+                    {activeTimelineTradeOffCard && (
+                      <aside className="timeline-tradeoff-drawer">
+                        <div className="timeline-tradeoff-drawer-header">
+                          <div className="timeline-tradeoff-drawer-titleblock">
+                            <span className="timeline-tradeoff-drawer-eyebrow">Trade-Off</span>
+                            <h3>{renderTradeOffPill(activeTimelineTradeOffCard.title)}</h3>
+                            <p className="timeline-tradeoff-drawer-resource">
+                              {activeTimelineTradeOffCard.resourceLabel}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            className="timeline-tradeoff-drawer-close"
+                            onClick={closeTimelineTradeOffView}
+                            aria-label="Close trade-off details"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div className="tradeoff-option-list">
+                          {activeTimelineTradeOffCard.options.map((option) => {
+                            const optionScheduled = selectedTradeOffOption[option.tradeOffGroupId] === option.optionId
+
+                            return (
+                              <div
+                                key={option.optionId}
+                                data-option-id={option.optionId}
+                                className={[
+                                  'tradeoff-option',
+                                  optionScheduled ? 'tradeoff-option--selected' : '',
+                                  markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
+                                  'tradeoff-option--timeline-drawer',
+                                ].filter(Boolean).join(' ')}
+                              >
+                                <div className="tradeoff-option-header">
+                                  <span className="tradeoff-option-id">{option.overpassId}</span>
+                                  <div className="tradeoff-meta tradeoff-meta--option">
+                                    {markedTradeOffOptionId === option.optionId && (
+                                      <span className="tradeoff-marked-flag">Marked</span>
+                                    )}
+                                    {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
+                                    <span className="tradeoff-score">Score {Number(option.score ?? 0).toFixed(2)}</span>
+                                  </div>
+                                </div>
+
+                                <dl className="tradeoff-option-facts">
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Ground Station</dt>
+                                    <dd>{option.gsId ?? '—'}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Duration</dt>
+                                    <dd>{option.duration ?? '—'}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Data</dt>
+                                    <dd>{option.usefulDataOffloadedMb > 0 ? formatGb(option.usefulDataOffloadedMb / 1000) : '—'}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Max Elev.</dt>
+                                    <dd>{option.maxElevation ?? '—'}</dd>
+                                  </div>
+                                </dl>
+
+                                <button
+                                  type="button"
+                                  className="tradeoff-select-button"
+                                  onClick={() => handleLinkOverride(option, option.overrideState === 'pinned' ? 'auto' : 'pinned')}
+                                  disabled={Boolean(overridingLinkId)}
+                                >
+                                  {optionScheduled ? 'Scheduled' : 'Schedule'}
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </aside>
+                    )}
                   </div>
                   </div>
                 )}

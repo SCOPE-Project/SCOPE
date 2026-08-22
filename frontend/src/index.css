@@ -2447,18 +2447,6 @@ body {
   white-space: nowrap;
 }
 
-.tradeoff-reason {
-  margin-bottom: 0.85rem;
-  overflow-wrap: anywhere;
-  font-size: 0.82rem;
-  line-height: 1.45;
-}
-
-.tradeoff-reason-label {
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
 .tradeoff-option-list {
   display: flex;
   flex: 1 1 auto;
@@ -2481,6 +2469,14 @@ body {
 .tradeoff-option--selected {
   border-color: var(--accent-primary);
   box-shadow: inset 3px 0 0 var(--tradeoff-accent, transparent), inset 0 0 0 1px var(--accent-primary);
+}
+
+.tradeoff-option--timeline-drawer {
+  box-shadow: none;
+}
+
+.tradeoff-option--timeline-drawer.tradeoff-option--selected {
+  box-shadow: inset 0 0 0 1px var(--accent-primary);
 }
 
 .tradeoff-option-header {
@@ -3364,9 +3360,12 @@ body {
 }
 
 .timeline-panel > .panel-collapsible-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
 }
 
 .panel-heading--timeline {
@@ -3779,7 +3778,9 @@ body {
 .timeline-layout {
   display: grid;
   grid-template-columns: 13.2rem minmax(0, 1fr);
-  align-items: stretch;
+  align-items: start;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -3796,12 +3797,108 @@ body {
 
 .timeline-scroll-frame {
   position: relative;
+  height: fit-content;
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  min-height: 0;
   padding-top: 1.9rem;
   overflow: hidden;
   contain: inline-size;
+}
+
+.timeline-main-stage {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  overflow: hidden;
+}
+
+.timeline-main-stage--with-tradeoff {
+  grid-template-columns: minmax(0, 1fr) clamp(18rem, 24vw, 22rem);
+}
+
+.timeline-tradeoff-drawer {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  align-self: start;
+  position: sticky;
+  top: 0.35rem;
+  max-height: min(calc(100vh - 14.5rem), 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.2rem 0 0 0.8rem;
+  border-left: 1px solid var(--line-soft);
+  background: var(--bg-panel);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.timeline-tradeoff-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.timeline-tradeoff-drawer-titleblock {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.timeline-tradeoff-drawer-eyebrow {
+  display: inline-block;
+  margin-bottom: 0.18rem;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.timeline-tradeoff-drawer-titleblock h3 {
+  margin: 0 0 0.12rem;
+  font-size: 0.98rem;
+}
+
+.timeline-tradeoff-drawer-resource {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.timeline-tradeoff-drawer-close {
+  width: 1.7rem;
+  height: 1.7rem;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.timeline-tradeoff-drawer-close:hover {
+  background: var(--bg-hover);
+}
+
+.timeline-tradeoff-drawer-close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  outline-offset: 2px;
 }
 
 .timeline-time-canvas {
@@ -5048,8 +5145,6 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
-/* Invisible hover target over each downlink so the step can carry a tooltip
-   without drawing a second bar on top of the curve. */
 .data-volume-step {
   position: absolute;
   top: 0.5rem;
@@ -5060,25 +5155,7 @@ body {
   border-left: 1px solid rgba(37, 99, 201, 0.28);
   border-right: 1px solid rgba(37, 99, 201, 0.28);
   background: rgba(37, 99, 201, 0.07);
-  cursor: pointer;
   z-index: 3;
-}
-
-.data-volume-step:hover,
-.data-volume-step:focus-visible {
-  background: rgba(37, 99, 201, 0.16);
-  outline: none;
-  z-index: 6;
-}
-
-.data-volume-step .timeline-bar-tooltip {
-  top: 0.2rem;
-}
-
-.data-volume-step:hover .timeline-bar-tooltip,
-.data-volume-step:focus-visible .timeline-bar-tooltip {
-  opacity: 1;
-  visibility: visible;
 }
 
 @media (max-width: 980px) {
@@ -5132,6 +5209,14 @@ body {
 
   .panel--fullwidth {
     grid-column: auto;
+  }
+
+  .timeline-main-stage--with-tradeoff {
+    grid-template-columns: minmax(0, 1fr) clamp(15rem, 25vw, 18rem);
+  }
+
+  .timeline-tradeoff-drawer {
+    padding: 0.2rem 0 0 0.8rem;
   }
 
   .planning-views-row {
@@ -5305,6 +5390,10 @@ body {
 
   .timeline-layout {
     grid-template-columns: 7.4rem minmax(0, 1fr);
+  }
+
+  .timeline-main-stage--with-tradeoff {
+    grid-template-columns: minmax(0, 1fr) clamp(13.5rem, 28vw, 15.5rem);
   }
 
   .timeline-day-band {
@@ -5540,18 +5629,6 @@ body {
   pointer-events: none;
 }
 
-.data-volume-payload-window::after {
-  content: "Payload";
-  position: absolute;
-  top: 0.12rem;
-  left: 0.2rem;
-  color: #8c4f18;
-  font-size: 0.56rem;
-  font-weight: 750;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
 .timeline-hover-tooltip--pinned .timeline-hover-tooltip-header {
   padding-right: 1.15rem;
 }
@@ -5602,6 +5679,27 @@ body {
   margin-top: 0.28rem;
   padding-top: 0.62rem;
   border-top: 1px solid var(--line-soft);
+}
+
+.timeline-link-popup-tradeoff-button {
+  width: 100%;
+  padding: 0.46rem 0.62rem;
+  border: 1px solid #c6d6e6;
+  border-radius: 0.18rem;
+  background: #eaf1f8;
+  color: #234b79;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+
+.timeline-link-popup-tradeoff-button:hover,
+.timeline-link-popup-tradeoff-button:focus-visible {
+  background: #dfe9f4;
+  border-color: #aac1d8;
+  outline: none;
 }
 
 .timeline-link-popup-status-row {
