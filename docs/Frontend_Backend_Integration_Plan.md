@@ -88,6 +88,132 @@ Remove the frontend code that:
 
 The Calculate Trade-Offs action should call `POST /tasks/process-trade-offs` using the current `filter_run_id`, buffer configuration, and scoring configuration.
 
+### Input Contract
+
+Endpoint:
+
+```text
+POST /tasks/process-trade-offs
+Content-Type: application/json
+```
+
+The only required field is `filter_run_id`. A minimal valid request is:
+
+```json
+{
+  "filter_run_id": "filter-task-uuid"
+}
+```
+
+For the current frontend controls, the recommended request is:
+
+```json
+{
+  "filter_run_id": "filter-task-uuid",
+  "satellite_buffer_configs": {
+    "Sat-1": {
+      "capacity_mb": 100000.0,
+      "initial_level_mb": 40000.0,
+      "payload_generation_rate_mbps": 100.0,
+      "downlink_rate_mbps": 25.0
+    }
+  },
+  "default_buffer_config": {
+    "capacity_mb": 100000.0,
+    "initial_level_mb": 40000.0,
+    "payload_generation_rate_mbps": 100.0,
+    "downlink_rate_mbps": 25.0
+  },
+  "scoring_config": {
+    "name": "buffer_overflow_avoidance",
+    "parameters": {
+      "alpha": 2.0,
+      "exponent": 2.0
+    }
+  }
+}
+```
+
+`satellite_name` may be included inside a buffer configuration DTO, but it should be omitted here because the key in `satellite_buffer_configs` already identifies the satellite.
+
+The complete accepted request contract is:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `filter_run_id` | `string` | Yes | ID returned in the completed `/tasks/filter-links` result. |
+| `satellite_buffer_configs` | `object<string, SatelliteBufferConfig>` | No | Complete per-satellite buffer configuration. |
+| `default_buffer_config` | `SatelliteBufferConfig` | No | Fallback for satellites without a per-satellite configuration. |
+| `initial_buffer_levels_mb` | `object<string, number>` | No | Shorthand override for initial buffer levels. |
+| `buffer_capacities_mb` | `object<string, number>` | No | Shorthand override for buffer capacities. |
+| `payload_generation_rates_mbps` | `object<string, number>` | No | Shorthand override for payload generation rates. |
+| `downlink_rates_mbps` | `object<string, number>` | No | Shorthand override for downlink rates. |
+| `scoring_config` | `ScoringConfig` | No | Scheduling strategy and its parameters. |
+
+`SatelliteBufferConfig` fields are:
+
+| Field | Type | Validation | Backend default |
+| --- | --- | --- | --- |
+| `satellite_name` | `string` | Optional | Name supplied by the parent object key. |
+| `capacity_mb` | `number` | Must be greater than `0`. | `2000.0` |
+| `initial_level_mb` | `number` | Must be at least `0`. | `0.0` |
+| `payload_generation_rate_mbps` | `number` | Must be at least `0`. | `15.0` |
+| `downlink_rate_mbps` | `number` | Must be greater than `0`. | `25.0` |
+
+Supported `scoring_config.name` values are:
+
+| Name | Parameters |
+| --- | --- |
+| `buffer_overflow_avoidance` | `alpha` and `exponent`; both default to `2.0`. |
+| `max_downlink_throughput` | No frontend parameters required. |
+| `max_pass_duration` | No frontend parameters required. |
+
+Configuration precedence is:
+
+1. A shorthand map such as `initial_buffer_levels_mb` overrides the corresponding field in `satellite_buffer_configs`.
+2. `satellite_buffer_configs` supplies values for explicitly configured satellites.
+3. `default_buffer_config` supplies values for all other satellites.
+4. Backend defaults apply when none of the above supplies a value.
+
+The frontend should normally use `satellite_buffer_configs` plus `default_buffer_config` and avoid mixing in the shorthand maps. This keeps the request unambiguous.
+
+The values currently entered as GB in the UI must be converted to MB before submission:
+
+```text
+capacity_mb = capacity_gb * 1000
+initial_level_mb = initial_level_gb * 1000
+```
+
+Rate values should follow the effective backend MB/s semantics documented in the Units Caveat below. The downlink rates submitted here should match the rates previously submitted to `/tasks/filter-links`.
+
+The immediate response is not a session plan. It is a task receipt:
+
+```json
+{
+  "task_id": "session-task-uuid",
+  "status": "Queued"
+}
+```
+
+Poll that task ID until completion. The result wrapper has this shape:
+
+```json
+{
+  "task_id": "session-task-uuid",
+  "status": "Completed",
+  "payload": {
+    "session_id": "session-task-uuid",
+    "filter_run_id": "filter-task-uuid",
+    "active_scoring_strategy": "buffer_overflow_avoidance",
+    "scoring_config": {},
+    "satellite_configs": {},
+    "current_plan": {},
+    "trade_off_groups": {},
+    "conflict_reasons": {},
+    "satellite_buffer_profiles": {}
+  }
+}
+```
+
 The completed task returns a `SessionPlanDTO` containing:
 
 - `session_id`
@@ -157,8 +283,7 @@ The frontend should visually distinguish:
 - Baseline-blocked links
 - Elevation-excluded links
 
-The current numerical Score column cannot remain as-is because the backend does not expose calculated scores. Remove it or replace it with backend-provided information such as useful data offloaded, schedule state, override state, or rejection reason.
-
+The current numerical Score column can remain as-is because the backend does expose calculated scores (was just updated/fixed).
 Conflict-card explanations can be derived for display from `trade_off_groups` and the backend's `conflict_reasons`; the frontend must not recalculate conflict membership.
 
 ## 5. Replace Frontend Buffer and Link-Budget Calculations
