@@ -5248,13 +5248,20 @@ export default function App() {
                       </div>
                     </div>
                     <div className="tradeoff-option-list">
-                      {card.options.map((option) => (
+                      {card.options.map((option) => {
+                        const optionRow = overviewRowByLinkId.get(option.linkId)
+                        const effectiveOverrideState = optionRow?.overrideState ?? option.overrideState
+                        const optionScheduled = Boolean(optionRow?.isScheduled ?? option.isScheduled)
+                        const optionRecommended = optionScheduled && effectiveOverrideState === 'auto'
+                        const displayScore = Number(optionRow?.score ?? option.score ?? 0)
+
+                        return (
                           <div
                             key={option.optionId}
                             data-option-id={option.optionId}
                             className={[
                               'tradeoff-option',
-                              Boolean(overviewRowByLinkId.get(option.linkId)?.isScheduled) ? 'tradeoff-option--selected' : '',
+                              optionScheduled ? 'tradeoff-option--selected' : '',
                               markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
                             ].filter(Boolean).join(' ')}
                             style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
@@ -5262,8 +5269,8 @@ export default function App() {
                             <div className="tradeoff-option-header">
                               <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
                               <div className="tradeoff-meta tradeoff-meta--option">
-                                {overviewRowByLinkId.get(option.linkId)?.isScheduled && overviewRowByLinkId.get(option.linkId)?.overrideState === 'auto' && <span className="tradeoff-recommended">Recommended</span>}
-                                <span className="tradeoff-score">Score {Number(option.score ?? 0).toFixed(2)}</span>
+                                {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
+                                <span className="tradeoff-score">Score {displayScore.toFixed(2)}</span>
                               </div>
                             </div>
 
@@ -5313,14 +5320,15 @@ export default function App() {
                               <button
                                 type="button"
                                 className="tradeoff-select-button"
-                                onClick={() => handleLinkOverride(option, option.overrideState === 'pinned' ? 'auto' : 'pinned')}
+                                onClick={() => handleLinkOverride(option, effectiveOverrideState === 'pinned' ? 'auto' : 'pinned')}
                                 disabled={Boolean(overridingLinkId)}
                               >
-                                {Boolean(overviewRowByLinkId.get(option.linkId)?.isScheduled) ? 'Scheduled' : 'Schedule'}
+                                {optionScheduled ? 'Scheduled' : 'Schedule'}
                               </button>
                             </div>
                           </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </article>
                 ))}
@@ -6058,8 +6066,10 @@ export default function App() {
                         <div className="tradeoff-option-list">
                           {activeTimelineTradeOffCard.options.map((option) => {
                             const optionRow = overviewRowByLinkId.get(option.linkId)
-                            const optionScheduled = Boolean(optionRow?.isScheduled)
-                            const optionRecommended = optionScheduled && optionRow?.overrideState === 'auto'
+                            const effectiveOverrideState = optionRow?.overrideState ?? option.overrideState
+                            const optionScheduled = Boolean(optionRow?.isScheduled ?? option.isScheduled)
+                            const optionRecommended = optionScheduled && effectiveOverrideState === 'auto'
+                            const displayScore = Number(optionRow?.score ?? option.score ?? 0)
 
                             return (
                               <div
@@ -6076,7 +6086,7 @@ export default function App() {
                                   <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
                                   <div className="tradeoff-meta tradeoff-meta--option">
                                     {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
-                                    <span className="tradeoff-score">Score {Number(option.score ?? 0).toFixed(2)}</span>
+                                    <span className="tradeoff-score">Score {displayScore.toFixed(2)}</span>
                                   </div>
                                 </div>
 
@@ -6126,7 +6136,7 @@ export default function App() {
                                   <button
                                     type="button"
                                     className="tradeoff-select-button"
-                                    onClick={() => handleLinkOverride(option, option.overrideState === 'pinned' ? 'auto' : 'pinned')}
+                                    onClick={() => handleLinkOverride(option, effectiveOverrideState === 'pinned' ? 'auto' : 'pinned')}
                                     disabled={Boolean(overridingLinkId)}
                                   >
                                     {optionScheduled ? 'Scheduled' : 'Schedule'}
