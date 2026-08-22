@@ -31,7 +31,7 @@ const TIMELINE_DEFAULT_ZOOM_LEVEL = 'fit'
 // asset-centric they are pure filters over which kind of bar is drawn.
 const TIMELINE_LAYERS = [
   { id: 'current', label: 'Current Schedule' },
-  { id: 'potential', label: 'Potential Links' },
+  { id: 'potential', label: 'Unselected Links' },
   { id: 'proposed', label: 'Proposed Schedule' },
 ]
 const TIMELINE_WHEEL_ZOOM_STEP = 0.6
@@ -3389,6 +3389,8 @@ export default function App() {
   const renderAssetWarning = (message) => (
     <span
       className="asset-warning"
+      title={message}
+      tabIndex={0}
       aria-label={message}
       onMouseEnter={(event) => showWarningTooltip(message, event)}
       onMouseMove={moveWarningTooltip}
@@ -3412,6 +3414,15 @@ export default function App() {
         />
       </svg>
     </span>
+  )
+
+  const getAssetWarningMessage = (asset) => (
+    asset?.error
+    ?? asset?.reason
+    ?? asset?.message
+    ?? asset?.rejectionReason
+    ?? asset?.ineligibility_reason
+    ?? null
   )
 
   const getTradeOffAccentColor = (colorIndex) =>
@@ -4372,6 +4383,10 @@ export default function App() {
   const renderSatelliteOptionsContent = (configDisabled = false) => (
     <div className="checkbox-list">
       {satelliteAssets.map((asset) => (
+        (() => {
+          const warningMessage = getAssetWarningMessage(asset)
+
+          return (
         <label
           key={asset.name}
           className={`checkbox-row ${asset.eligible && !configDisabled ? '' : 'checkbox-row--disabled'}`}
@@ -4383,8 +4398,10 @@ export default function App() {
             disabled={!asset.eligible || configDisabled}
           />
           <span className="asset-name">{asset.name}</span>
-          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
+          {!asset.eligible && warningMessage && renderAssetWarning(warningMessage)}
         </label>
+          )
+        })()
       ))}
       {satelliteAssets.length === 0 && (
         !configDisabled ? <p>No satellite assets available.</p> : null
@@ -4395,6 +4412,10 @@ export default function App() {
   const renderGroundStationOptionsContent = (configDisabled = false) => (
     <div className="checkbox-list">
       {groundStationAssets.map((asset) => (
+        (() => {
+          const warningMessage = getAssetWarningMessage(asset)
+
+          return (
         <label
           key={asset.name}
           className={`checkbox-row ${asset.eligible && !configDisabled ? '' : 'checkbox-row--disabled'}`}
@@ -4406,8 +4427,10 @@ export default function App() {
             disabled={!asset.eligible || configDisabled}
           />
           <span className="asset-name">{asset.name}</span>
-          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
+          {!asset.eligible && warningMessage && renderAssetWarning(warningMessage)}
         </label>
+          )
+        })()
       ))}
       {groundStationAssets.length === 0 && (
         !configDisabled ? <p>No ground-station assets available.</p> : null
@@ -4418,13 +4441,19 @@ export default function App() {
   const renderUnavailableAssetsContent = (configDisabled = false) => (
     <div className="checkbox-list">
       {unavailableAssets.map((asset) => (
+        (() => {
+          const warningMessage = getAssetWarningMessage(asset)
+
+          return (
         <div
           key={asset.name}
           className="checkbox-row checkbox-row--disabled checkbox-row--static"
         >
           <span className="asset-name">{asset.name}</span>
-          {asset.error && renderAssetWarning(asset.error)}
+          {warningMessage && renderAssetWarning(warningMessage)}
         </div>
+          )
+        })()
       ))}
       {unavailableAssets.length === 0 && (
         <p>{configDisabled ? 'Unavailable assets will appear here after the mission asset load.' : 'No unclassified assets.'}</p>
@@ -4539,18 +4568,24 @@ export default function App() {
                     )}
                   </section>
 
-                  <section className="landing-config-panel">
+                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
                     <div className="landing-config-panel-header">
                       <span className="landing-config-step">Buffer Configuration</span>
                     </div>
-                    {renderBufferConfigContent()}
+                    {renderBufferConfigContent(!missionAssetsLoaded)}
+                    {!missionAssetsLoaded && (
+                      <span className="landing-panel-tooltip">{filterTooltip}</span>
+                    )}
                   </section>
 
-                  <section className="landing-config-panel">
+                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
                     <div className="landing-config-panel-header">
                       <span className="landing-config-step">Trade-Off Configuration</span>
                     </div>
-                    {renderTradeOffConfigContent()}
+                    {renderTradeOffConfigContent(!missionAssetsLoaded)}
+                    {!missionAssetsLoaded && (
+                      <span className="landing-panel-tooltip">{filterTooltip}</span>
+                    )}
                   </section>
                 </div>
 
@@ -4567,7 +4602,7 @@ export default function App() {
                         className="btn-fetch btn-terminate landing-action-button"
                         onClick={handleTerminateScheduler}
                       >
-                          Stop waiting
+                          Terminate
                       </button>
                     ) : (
                       <button
@@ -5994,7 +6029,7 @@ export default function App() {
                     className="btn-fetch btn-terminate"
                     onClick={handleTerminateScheduler}
                   >
-                    Stop waiting
+                    Terminate
                   </button>
                 ) : (
                   <button
