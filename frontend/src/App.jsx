@@ -2020,6 +2020,33 @@ export default function App() {
   const visibleOverviewRows = showUnavailableOverviewRows
     ? overviewRows
     : overviewRows.filter((row) => !shouldHideOverviewRowInAvailableMode(row))
+  const overviewTradeOffBandByOverpassId = useMemo(() => {
+    let bandIndex = 0
+    let previousTradeOffId = null
+    const next = new Map()
+
+    visibleOverviewRows.forEach((row) => {
+      if (!row.tradeOffId || row.tradeOffId === '—') {
+        next.set(row.overpassId, '')
+        previousTradeOffId = null
+        return
+      }
+
+      if (row.tradeOffId !== previousTradeOffId) {
+        bandIndex += 1
+        previousTradeOffId = row.tradeOffId
+      }
+
+      next.set(
+        row.overpassId,
+        bandIndex % 2 === 1
+          ? 'overview-list-row--tradeoff-band-a'
+          : 'overview-list-row--tradeoff-band-b',
+      )
+    })
+
+    return next
+  }, [visibleOverviewRows])
   const tradeOffAvailable = Boolean(filterRunId)
     && schedulerLaunched
     && filteredLinks.some((link) => link.is_eligible)
@@ -4326,8 +4353,8 @@ export default function App() {
                 <div className="overview-table-scroll">
                   <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
                     <span>Link ID</span>
-                    <span>Overpass ID</span>
                     <span>Status</span>
+                    <span>Overpass ID</span>
                     <span>Sat ID</span>
                     <span>GS ID</span>
                     <span>Start</span>
@@ -4356,8 +4383,8 @@ export default function App() {
                     <>
                       <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
                         <span>{showUnavailableOverviewRows ? 'L-001' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'OP-001' : 'No available overpasses'}</span>
                         <span>—</span>
+                        <span>{showUnavailableOverviewRows ? 'OP-001' : 'No available overpasses'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
@@ -4393,11 +4420,7 @@ export default function App() {
                           gsId: row.gsId,
                           startTime: row.startTime,
                         }
-                        const rowTradeOffBandClass = row.tradeOffId && row.tradeOffId !== '—'
-                          ? (row.tradeOffColorIndex ?? 0) % 2 === 0
-                            ? 'overview-list-row--tradeoff-band-a'
-                            : 'overview-list-row--tradeoff-band-b'
-                          : ''
+                        const rowTradeOffBandClass = overviewTradeOffBandByOverpassId.get(row.overpassId) ?? ''
 
                         return (
                           <div
@@ -4405,12 +4428,13 @@ export default function App() {
                             className={`overview-list-row ${rowUnavailable ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${isSelectedRow ? 'overview-list-row--selected' : ''} ${rowTradeOffBandClass} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
                           >
                             <span className="overview-linkid-cell">{getOverviewDisplayLinkId(row)}</span>
-                            <span className="overview-overpass-cell">
-                              <span>{row.overpassId}</span>
-                            </span>
                             <span
                               className="overview-status-cell"
-                              title={rowRejectionReason || undefined}
+                              onMouseEnter={rowRejectionReason ? (event) => showWarningTooltip(rowRejectionReason, event) : undefined}
+                              onMouseMove={rowRejectionReason ? moveWarningTooltip : undefined}
+                              onMouseLeave={rowRejectionReason ? hideWarningTooltip : undefined}
+                              onFocus={rowRejectionReason ? (event) => showWarningTooltip(rowRejectionReason, event) : undefined}
+                              onBlur={rowRejectionReason ? hideWarningTooltip : undefined}
                             >
                               {isRecommendedRow ? (
                                 <span className="overview-row-note overview-row-note--recommended">
@@ -4423,6 +4447,9 @@ export default function App() {
                               ) : (
                                 <span className="overview-status-empty">Eligible</span>
                               )}
+                            </span>
+                            <span className="overview-overpass-cell">
+                              <span>{row.overpassId}</span>
                             </span>
                             <span>{row.satId}</span>
                             <span>{row.gsId}</span>

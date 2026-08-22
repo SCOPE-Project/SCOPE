@@ -1966,6 +1966,7 @@ body {
   gap: 0.24rem;
   justify-content: flex-start;
   min-width: 0;
+  overflow: visible;
 }
 
 .overview-status-empty {
