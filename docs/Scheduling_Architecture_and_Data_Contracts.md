@@ -353,7 +353,7 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
      │<── FilterResponseDTO { filter_run_id, links_count, links } ───│ (Saves to LinkRepository)
      │                                                               │
      │── 3. POST /tasks/process-trade-offs ─────────────────────────>│ (Builds session & solves)
-     │      Payload: { filter_run_id, initial_buffer_levels_mb, ...} │
+     │      Payload: { filter_run_id, satellite_buffer_configs, ...}│
      │<── TaskReceiptResponse { task_id: "session_01" } ─────────────│
      │                                                               │
      │── 4. POST /schedule/session/{id}/override ───────────────────>│ (Operator pins link)

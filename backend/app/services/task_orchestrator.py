@@ -130,12 +130,8 @@ def run_filter_links_task(
 def run_process_trade_offs_task(
     task_id: str, 
     filter_run_id: str,
-    initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
     satellite_buffer_configs: Optional[Dict[str, SatelliteBufferConfigDTO]] = None,
     default_buffer_config: Optional[SatelliteBufferConfigDTO] = None,
-    buffer_capacities_mb: Optional[Dict[str, float]] = None,
-    payload_generation_rates_mbps: Optional[Dict[str, float]] = None,
-    downlink_rates_mbps: Optional[Dict[str, float]] = None,
     scoring_config: Optional[ScoringStrategyConfigDTO] = None,
 ):
     """
@@ -171,10 +167,6 @@ def run_process_trade_offs_task(
             candidate_links=candidate_links,
             asset_schedules=asset_schedules,
             satellite_configs=sat_configs if sat_configs else None,
-            initial_buffer_levels_mb=initial_buffer_levels_mb,
-            buffer_capacities_mb=buffer_capacities_mb,
-            payload_generation_rates_mbps=payload_generation_rates_mbps,
-            downlink_rates_mbps=downlink_rates_mbps,
             default_capacity_mb=def_cap,
             default_initial_level_mb=def_init,
             default_payload_generation_rate_mbps=def_gen,
