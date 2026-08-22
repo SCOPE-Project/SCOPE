@@ -665,13 +665,33 @@ export default function App() {
       })
   }
 
-  const isUnavailableOverviewRow = (row) => (
-    row.isEligible === false
-    || row.scheduleBlocked
-    || row.availabilityStatus === 'filtered'
-    || row.availabilityStatus === 'blocked'
-    || row.availabilityStatus === 'unavailable'
-  )
+  const getOverviewRowStatus = (row) => {
+    if (row.scheduleBlocked || row.availabilityStatus === 'blocked') {
+      return 'blocked'
+    }
+
+    if (
+      row.isEligible === false
+      || row.availabilityStatus === 'filtered'
+      || row.availabilityStatus === 'unavailable'
+    ) {
+      return 'ineligible'
+    }
+
+    return 'eligible'
+  }
+
+  const isUnavailableOverviewRow = (row) => getOverviewRowStatus(row) !== 'eligible'
+
+  const shouldHideOverviewRowInAvailableMode = (row) => getOverviewRowStatus(row) === 'ineligible'
+
+  const getOverviewDisplayLinkId = (row) => {
+    if (getOverviewRowStatus(row) === 'ineligible') {
+      return '—'
+    }
+
+    return row.backendLinkId ?? row.linkId ?? '—'
+  }
 
   const getDayOfYear = (date, timeMode = DEFAULT_PLANNING_TIME_MODE) => {
     const useUtc = timeMode === 'utc'
@@ -1607,7 +1627,11 @@ export default function App() {
     schedulerAbortControllerRef.current?.abort()
   }
 
-  const applyAuthoritativeSessionPlan = (plan, baseRows = overviewRows) => {
+  const applyAuthoritativeSessionPlan = (
+    plan,
+    baseRows = overviewRows,
+    { focusTimeline = true } = {},
+  ) => {
     const plannedRows = applySessionPlanToRows(baseRows, plan)
     const rawCards = buildTradeOffCardsFromPlan(plan, plannedRows)
     const colorByLinkId = new Map(
@@ -1641,7 +1665,9 @@ export default function App() {
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
-    focusTimelineOnTradeOffCard(nextCards[0])
+    if (focusTimeline) {
+      focusTimelineOnTradeOffCard(nextCards[0])
+    }
   }
 
   const handleCalculateTradeOffs = async () => {
@@ -1982,16 +2008,16 @@ export default function App() {
     || extractionStatus === 'Queued'
     || extractionStatus === 'Running'
   const getOverviewAvailabilityLabel = (row) => {
-    if (row.availabilityStatus === 'filtered') return 'Filtered'
-    if (row.scheduleBlocked || row.availabilityStatus === 'blocked') return 'Blocked'
-    if (row.availabilityStatus === 'unavailable') return 'Unavailable'
-    return null
+    const status = getOverviewRowStatus(row)
+    if (status === 'blocked') return 'Blocked'
+    if (status === 'ineligible') return 'Ineligible'
+    return 'Eligible'
   }
   const isOverviewRowUnavailable = (row) => isUnavailableOverviewRow(row)
-  const schedulableOverviewRows = overviewRows.filter((row) => !isOverviewRowUnavailable(row))
+  const schedulableOverviewRows = overviewRows.filter((row) => getOverviewRowStatus(row) === 'eligible')
   const visibleOverviewRows = showUnavailableOverviewRows
     ? overviewRows
-    : overviewRows.filter((row) => !isOverviewRowUnavailable(row))
+    : overviewRows.filter((row) => !shouldHideOverviewRowInAvailableMode(row))
   const tradeOffAvailable = Boolean(filterRunId)
     && schedulerLaunched
     && filteredLinks.some((link) => link.is_eligible)
@@ -3492,11 +3518,8 @@ export default function App() {
     onDragEnd: handlePanelDragEnd,
   })
 
-  const renderTradeOffPill = (tradeOffId, colorIndex) => (
-    <span
-      className="tradeoff-id-pill"
-      style={{ '--tradeoff-accent': getTradeOffAccentColor(colorIndex) }}
-    >
+  const renderTradeOffPill = (tradeOffId) => (
+    <span className="tradeoff-id-pill">
       {tradeOffId}
     </span>
   )
@@ -3528,7 +3551,7 @@ export default function App() {
         link_id: option.linkId,
         override_state: overrideState,
       })
-      applyAuthoritativeSessionPlan(updatedPlan)
+      applyAuthoritativeSessionPlan(updatedPlan, overviewRows, { focusTimeline: false })
     } catch (err) {
       console.error(err)
       setError(err.message || 'Failed to update the scheduling-session override.')
@@ -3539,42 +3562,6 @@ export default function App() {
 
     setMarkedTimelineLinkId(option.overpassId)
     setMarkedTradeOffOptionId(option.optionId)
-
-    setExpandedSections((current) => (
-      current.timeline ? current : { ...current, timeline: true }
-    ))
-
-    setExpandedTimelineSections((current) => (
-      (current.satellites && current.groundStations)
-        ? current
-        : { satellites: true, groundStations: true }
-    ))
-
-    setExpandedTimelineGroups((current) => {
-      const next = { ...current }
-
-      if (option.satId) {
-        next[`satellite:${option.satId}`] = true
-      }
-
-      if (option.gsId) {
-        next[`ground_station:${option.gsId}`] = true
-      }
-
-      return next
-    })
-
-    const startTimestamp = toTimestamp(option.startTime)
-
-    // One frame later: the panel and the asset groups have to be expanded
-    // before there is anything to scroll to.
-    window.requestAnimationFrame(() => {
-      timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-
-      if (startTimestamp !== null) {
-        scrollTimelineToTimestamp(startTimestamp, 'smooth')
-      }
-    })
   }
 
   const toggleTimelineSection = (sectionId) => {
@@ -4283,7 +4270,7 @@ export default function App() {
                   {schedulerLaunched && (
                     <div className="overview-count-inline" title={`Orbit run: ${orbitEngineRunId ?? '—'} (${propagationResult?.overpass_blocks?.length ?? 0} propagated) · Filter run: ${filterRunId ?? '—'} (${filteredLinks.length} links) · Session: ${sessionId ?? '—'}`}>
                       <span className="overview-status-label">Overpasses</span>
-                      <span className="overview-count-value">{visibleOverviewRows.length}</span>
+                      <span className="overview-count-value">{overviewRows.length}</span>
                     </div>
                   )}
                   {schedulerLaunched && (
@@ -4336,9 +4323,9 @@ export default function App() {
               ) : (
                 <div className="overview-table-scroll">
                   <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
+                    <span>Link ID</span>
                     <span>Overpass ID</span>
                     <span>Status</span>
-                    <span>Link ID</span>
                     <span>Sat ID</span>
                     <span>GS ID</span>
                     <span>Start</span>
@@ -4366,9 +4353,9 @@ export default function App() {
                   {visibleOverviewRows.length === 0 ? (
                     <>
                       <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
+                        <span>{showUnavailableOverviewRows ? 'L-001' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'OP-001' : 'No available overpasses'}</span>
                         <span>—</span>
-                        <span>{showUnavailableOverviewRows ? 'L-001' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
@@ -4386,8 +4373,8 @@ export default function App() {
                     <>
                       {visibleOverviewRows.map((row) => {
                         const rowOption = getOptionForOverpassId(row.overpassId)
+                        const rowStatus = getOverviewRowStatus(row)
                         const rowUnavailable = isOverviewRowUnavailable(row)
-                        const rowFiltered = row.availabilityStatus === 'filtered'
                         const rowAvailabilityLabel = getOverviewAvailabilityLabel(row)
                         const rowRejectionReason = row.rejectionReason ?? getScheduleBlockMessage(row)
                         const isRecommendedRow = tradeOffsCalculated && row.isScheduled && row.overrideState === 'auto'
@@ -4404,42 +4391,37 @@ export default function App() {
                           gsId: row.gsId,
                           startTime: row.startTime,
                         }
+                        const rowTradeOffBandClass = row.tradeOffId && row.tradeOffId !== '—'
+                          ? (row.tradeOffColorIndex ?? 0) % 2 === 0
+                            ? 'overview-list-row--tradeoff-band-a'
+                            : 'overview-list-row--tradeoff-band-b'
+                          : ''
 
                         return (
                           <div
                             key={row.overpassId}
-                            className={`overview-list-row ${rowUnavailable ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${isSelectedRow ? 'overview-list-row--selected' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
+                            className={`overview-list-row ${rowUnavailable ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${isSelectedRow ? 'overview-list-row--selected' : ''} ${rowTradeOffBandClass} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
                           >
+                            <span className="overview-linkid-cell">{getOverviewDisplayLinkId(row)}</span>
                             <span className="overview-overpass-cell">
                               <span>{row.overpassId}</span>
-                              {rowRejectionReason ? renderAssetWarning(rowRejectionReason) : null}
                             </span>
-                            <span className="overview-status-cell">
+                            <span
+                              className="overview-status-cell"
+                              title={rowRejectionReason || undefined}
+                            >
                               {isRecommendedRow ? (
                                 <span className="overview-row-note overview-row-note--recommended">
-                                  Scheduled
+                                  Recommended
                                 </span>
-                              ) : null}
-                              {rowUnavailable && !rowFiltered && rowAvailabilityLabel ? (
+                              ) : rowStatus === 'blocked' || rowStatus === 'ineligible' ? (
                                 <span className="overview-row-note">
                                   {rowAvailabilityLabel}
                                 </span>
-                              ) : null}
-                              {!isRecommendedRow && !rowUnavailable ? (
-                                <span className="overview-status-empty">
-                                  {row.overrideState === 'pinned'
-                                    ? 'Pinned'
-                                    : row.overrideState === 'excluded'
-                                      ? 'Excluded'
-                                      : row.isScheduled
-                                        ? 'Scheduled'
-                                        : tradeOffsCalculated
-                                          ? 'Unscheduled'
-                                          : 'Available'}
-                                </span>
-                              ) : null}
+                              ) : (
+                                <span className="overview-status-empty">Eligible</span>
+                              )}
                             </span>
-                            <span className="overview-linkid-cell">{row.linkId ?? '—'}</span>
                             <span>{row.satId}</span>
                             <span>{row.gsId}</span>
                             <span>{formatOverviewStartDateTime(row.startTime)}</span>
@@ -4459,7 +4441,7 @@ export default function App() {
                                       aria-pressed={markedTimelineLinkId === row.overpassId}
                                       title={`Show ${row.tradeOffId} and mark ${row.overpassId}`}
                                     >
-                                      {renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)}
+                                      {renderTradeOffPill(row.tradeOffId)}
                                     </button>
                                   </span>
                                 )
@@ -4483,7 +4465,7 @@ export default function App() {
                             {tradeOffsCalculated && (
                               <span className="overview-select-cell">
                                 {isSelectableRow ? (
-                                  <span className="overview-override-controls" role="group" aria-label={`Override ${row.linkId}`}>
+                                  <span className="overview-override-controls" role="group" aria-label={`Override ${getOverviewDisplayLinkId(row)}`}>
                                     {['auto', 'pinned', 'excluded'].map((state) => (
                                       <button
                                         key={state}
