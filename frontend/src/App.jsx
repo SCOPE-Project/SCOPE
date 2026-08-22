@@ -160,6 +160,7 @@ export default function App() {
   const timelineWheelHintRef = useRef(null)
   const timelineWheelHintTimeoutRef = useRef(null)
   const timelineWheelHandlerRef = useRef(null)
+  const timelineTradeOffDrawerDragCleanupRef = useRef(null)
   const schedulerAbortControllerRef = useRef(null)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
@@ -204,6 +205,7 @@ export default function App() {
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState({})
   const [timelineTradeOffViewId, setTimelineTradeOffViewId] = useState(null)
+  const [timelineTradeOffDrawerOffset, setTimelineTradeOffDrawerOffset] = useState({ x: 0, y: 0 })
   const [warningTooltip, setWarningTooltip] = useState({
     visible: false,
     message: '',
@@ -2821,6 +2823,7 @@ export default function App() {
 
     const card = tradeOffCards[cardIndex]
     setTimelineTradeOffViewId(tradeOffId)
+    setTimelineTradeOffDrawerOffset({ x: 0, y: 0 })
     setActiveTradeOffCardIndex(cardIndex)
     if (scrollToPanel) {
       timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -2839,10 +2842,46 @@ export default function App() {
   }
 
   const closeTimelineTradeOffView = () => {
+    timelineTradeOffDrawerDragCleanupRef.current?.()
+    timelineTradeOffDrawerDragCleanupRef.current = null
     setTimelineTradeOffViewId(null)
+    setTimelineTradeOffDrawerOffset({ x: 0, y: 0 })
     setMarkedTradeOffOptionId(null)
     setMarkedTimelineLinkId(null)
     hideTimelineTooltip(true)
+  }
+
+  const handleTimelineTradeOffDrawerPointerDown = (event) => {
+    if (
+      event.button !== 0
+      || event.target.closest('button')
+    ) {
+      return
+    }
+
+    const startX = event.clientX
+    const startY = event.clientY
+    const startOffset = { ...timelineTradeOffDrawerOffset }
+
+    const handlePointerMove = (moveEvent) => {
+      setTimelineTradeOffDrawerOffset({
+        x: startOffset.x + (moveEvent.clientX - startX),
+        y: startOffset.y + (moveEvent.clientY - startY),
+      })
+    }
+
+    const stopDragging = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopDragging)
+      window.removeEventListener('pointercancel', stopDragging)
+      timelineTradeOffDrawerDragCleanupRef.current = null
+    }
+
+    timelineTradeOffDrawerDragCleanupRef.current = stopDragging
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopDragging)
+    window.addEventListener('pointercancel', stopDragging)
   }
 
   const jumpToTimelineLink = (linkId, optionId = null) => {
@@ -5990,8 +6029,16 @@ export default function App() {
                     </div>
                     </div>
                     {activeTimelineTradeOffCard && (
-                      <aside className="timeline-tradeoff-drawer">
-                        <div className="timeline-tradeoff-drawer-header">
+                      <aside
+                        className="timeline-tradeoff-drawer"
+                        style={{
+                          transform: `translate(${timelineTradeOffDrawerOffset.x}px, ${timelineTradeOffDrawerOffset.y}px)`,
+                        }}
+                      >
+                        <div
+                          className="timeline-tradeoff-drawer-header"
+                          onPointerDown={handleTimelineTradeOffDrawerPointerDown}
+                        >
                           <div className="timeline-tradeoff-drawer-titleblock">
                             <span className="timeline-tradeoff-drawer-eyebrow">Trade-Off</span>
                             <h3>{renderTradeOffPill(activeTimelineTradeOffCard.title)}</h3>

@@ -3872,37 +3872,42 @@ body {
 }
 
 .timeline-main-stage {
+  position: relative;
   min-width: 0;
   min-height: 0;
   width: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: block;
   align-items: start;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .timeline-main-stage--with-tradeoff {
-  grid-template-columns: minmax(0, 1fr) clamp(18rem, 24vw, 22rem);
-  align-items: start;
+  overflow: visible;
 }
 
 .timeline-tradeoff-drawer {
-  width: 100%;
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  z-index: 24;
+  width: clamp(18rem, 24vw, 22rem);
+  max-width: min(calc(100% - 0.7rem), 22rem);
   min-width: 0;
   min-height: 0;
-  align-self: start;
-  position: sticky;
-  top: 0.35rem;
-  max-height: min(calc(100vh - 14.5rem), 100%);
+  max-height: min(calc(100% - 0.7rem), calc(100vh - 14.5rem));
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  padding: 0.2rem 0 0 0.8rem;
-  border-left: 1px solid var(--line-soft);
-  background: var(--bg-panel);
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 34px rgba(31, 42, 51, 0.18);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  backdrop-filter: blur(4px);
+  will-change: transform;
 }
 
 .timeline-tradeoff-drawer-header {
@@ -3910,6 +3915,8 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
+  cursor: move;
+  user-select: none;
 }
 
 .timeline-tradeoff-drawer-titleblock {
@@ -4301,10 +4308,11 @@ body {
   position: absolute;
   top: 0.12rem;
   bottom: 0.12rem;
+  width: 0;
   z-index: 3;
-  display: inline-flex;
-  align-items: center;
+  display: block;
   pointer-events: none;
+  overflow: visible;
 }
 
 .timeline-scenario-edge::before {
@@ -4314,17 +4322,12 @@ body {
   bottom: 0;
   width: 1px;
   background: rgba(0, 57, 117, 0.42);
-}
-
-.timeline-scenario-edge--start::before {
   left: 0;
 }
 
-.timeline-scenario-edge--end::before {
-  right: 0;
-}
-
 .timeline-scenario-edge span {
+  position: absolute;
+  top: 50%;
   display: inline-flex;
   align-items: center;
   min-height: 1.05rem;
@@ -4338,14 +4341,15 @@ body {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
+  transform: translateY(-50%);
 }
 
 .timeline-scenario-edge--start span {
-  margin-left: 0.32rem;
+  left: 0.32rem;
 }
 
 .timeline-scenario-edge--end span {
-  margin-right: 0.32rem;
+  right: 0.32rem;
 }
 
 .timeline-track-row {
@@ -5329,11 +5333,11 @@ body {
   }
 
   .timeline-main-stage--with-tradeoff {
-    grid-template-columns: minmax(0, 1fr) clamp(15rem, 25vw, 18rem);
+    overflow: visible;
   }
 
   .timeline-tradeoff-drawer {
-    padding: 0.2rem 0 0 0.8rem;
+    width: clamp(15rem, 25vw, 18rem);
   }
 
   .planning-views-row {
@@ -5510,7 +5514,14 @@ body {
   }
 
   .timeline-main-stage--with-tradeoff {
-    grid-template-columns: minmax(0, 1fr) clamp(13.5rem, 28vw, 15.5rem);
+    overflow: visible;
+  }
+
+  .timeline-tradeoff-drawer {
+    width: clamp(13.5rem, 28vw, 15.5rem);
+    max-width: min(calc(100% - 0.5rem), 15.5rem);
+    right: 0.25rem;
+    top: 0.25rem;
   }
 
   .timeline-day-band {
