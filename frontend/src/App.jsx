@@ -8,13 +8,8 @@ import {
 const BACKEND_BASE_URL = 'http://localhost:8000'
 const MissionMap = lazy(() => import('./components/MissionMap.jsx'))
 const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
-// Only one preset survives: "Reset View" puts the whole planning window back on
-// screen. Everything between it and TIMELINE_MAX_ZOOM_MULTIPLIER is reached
-// with Ctrl/Cmd + wheel.
-const TIMELINE_ZOOM_LEVELS = [
-  { id: 'fit', label: 'Fit', multiplier: 1 },
-  { id: 'detail', label: 'Detail', multiplier: 5.2 },
-]
+// Reset View puts the whole planning window back on screen. Everything between
+// 1x and the max multiplier is reached with Ctrl/Cmd + wheel.
 const TIMELINE_DEFAULT_ZOOM_LEVEL = 'fit'
 // The three layers used to BE the timeline's rows. Since rows became
 // asset-centric they are pure filters over which kind of bar is drawn.
@@ -57,6 +52,24 @@ const TRADE_OFF_PANEL_ENABLED = false
 const DEFAULT_DATA_START_FILL_GB = 40
 const DEFAULT_DATA_GENERATION_MBPS = 100
 const DEFAULT_DATA_CAPACITY_GB = 100
+
+const hexToRgba = (hex, alpha) => {
+  const normalized = String(hex ?? '').replace('#', '')
+
+  if (normalized.length !== 6) {
+    return `rgba(0, 57, 117, ${alpha})`
+  }
+
+  const red = Number.parseInt(normalized.slice(0, 2), 16)
+  const green = Number.parseInt(normalized.slice(2, 4), 16)
+  const blue = Number.parseInt(normalized.slice(4, 6), 16)
+
+  if (![red, green, blue].every(Number.isFinite)) {
+    return `rgba(0, 57, 117, ${alpha})`
+  }
+
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`
+}
 // Downlink rate model: rate falls off with the square of the slant range, so a
 // high-elevation (short range) pass downlinks faster. Normalised so that a
 // zenith pass from a 550 km orbit hits DEMO_PEAK_DOWNLINK_MBPS.
@@ -379,6 +392,10 @@ export default function App() {
     potential: true,
     proposed: true,
   })
+  const [timelineAssetVisibility, setTimelineAssetVisibility] = useState({
+    satellites: true,
+    groundStations: true,
+  })
   // Asset groups start collapsed: the header row already aggregates what is
   // scheduled for the asset, and selecting a trade-off expands exactly the
   // groups that matter (see the auto-expand effect below).
@@ -395,6 +412,13 @@ export default function App() {
   // selectedTradeOffOption -- the timeline shows and navigates, it does not decide.
   const [markedTimelineLinkId, setMarkedTimelineLinkId] = useState(null)
   const [markedTradeOffOptionId, setMarkedTradeOffOptionId] = useState(null)
+  const [timelineTooltip, setTimelineTooltip] = useState({
+    visible: false,
+    pinned: false,
+    item: null,
+    x: 0,
+    y: 0,
+  })
   const [expandedSections, setExpandedSections] = useState({
     timeWindow: true,
     satellites: true,
@@ -414,6 +438,7 @@ export default function App() {
       prepareTrackPoints(points),
     ]),
   ), [satelliteTracks])
+  const timelineTooltipHideTimeoutRef = useRef(null)
 
   useEffect(() => {
     let active = true
@@ -524,6 +549,13 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [view])
+
+  useEffect(() => () => {
+    if (timelineTooltipHideTimeoutRef.current !== null) {
+      window.clearTimeout(timelineTooltipHideTimeoutRef.current)
+      timelineTooltipHideTimeoutRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     if (!schedulerLaunched || !timelineLive) {
@@ -1477,9 +1509,37 @@ export default function App() {
       })
       .filter(Boolean)
 
-    const allTimestampItems = [...currentSourceItems, ...linkSourceItems]
     const planningStartTimestamp = toTimestamp(planningWindow?.startTime)
     const planningEndTimestamp = toTimestamp(planningWindow?.endTime)
+
+    const clampTimelineItemToWindow = (item) => {
+      const clampedStartTimestamp = planningStartTimestamp !== null
+        ? Math.max(item.startTimestamp, planningStartTimestamp)
+        : item.startTimestamp
+      const clampedEndTimestamp = planningEndTimestamp !== null
+        ? Math.min(item.endTimestamp, planningEndTimestamp)
+        : item.endTimestamp
+
+      if (clampedEndTimestamp <= clampedStartTimestamp) {
+        return null
+      }
+
+      return {
+        ...item,
+        startTimestamp: clampedStartTimestamp,
+        endTimestamp: clampedEndTimestamp,
+        startTime: new Date(clampedStartTimestamp).toISOString(),
+        endTime: new Date(clampedEndTimestamp).toISOString(),
+      }
+    }
+
+    const clampedLinkItems = linkSourceItems
+      .map(clampTimelineItemToWindow)
+      .filter(Boolean)
+    const clampedCurrentItems = currentSourceItems
+      .map(clampTimelineItemToWindow)
+      .filter(Boolean)
+    const allTimestampItems = [...clampedCurrentItems, ...clampedLinkItems]
 
     if (
       allTimestampItems.length === 0
@@ -1521,19 +1581,19 @@ export default function App() {
     })
 
     const layerVisible = (layer) => timelineLayers[layer] !== false
-    const visibleLinkItems = linkSourceItems.filter((item) => layerVisible(item.layer))
-    const visibleActivityItems = currentSourceItems.filter(() => layerVisible('current'))
+    const visibleLinkItems = clampedLinkItems.filter((item) => layerVisible(item.layer))
+    const visibleActivityItems = clampedCurrentItems.filter(() => layerVisible('current'))
 
     const satelliteNames = [...new Set([
       ...rows.map((row) => row.satId),
-      ...currentSourceItems
+      ...clampedCurrentItems
         .filter((item) => selectedSatellites.includes(item.assetName))
         .map((item) => item.assetName),
     ].filter(Boolean))].sort((left, right) => String(left).localeCompare(String(right)))
 
     const groundStationNames = [...new Set([
       ...rows.map((row) => row.gsId),
-      ...currentSourceItems
+      ...clampedCurrentItems
         .filter((item) => selectedGroundStations.includes(item.assetName))
         .map((item) => item.assetName),
     ].filter(Boolean))].sort((left, right) => String(left).localeCompare(String(right)))
@@ -1611,9 +1671,13 @@ export default function App() {
       ticks,
       dayBands: buildDayBands(baseDate, totalMinutes, timeMode),
       sections: [
-        { id: 'satellites', label: 'Satellites', groups: satelliteGroups },
-        { id: 'groundStations', label: 'Ground Stations', groups: groundStationGroups },
-      ],
+        timelineAssetVisibility.satellites
+          ? { id: 'satellites', label: 'Satellites', groups: satelliteGroups }
+          : null,
+        timelineAssetVisibility.groundStations
+          ? { id: 'groundStations', label: 'Ground Stations', groups: groundStationGroups }
+          : null,
+      ].filter(Boolean),
       hasVisibleItems: visibleLinkItems.length > 0 || visibleActivityItems.length > 0,
     }
   }
@@ -2456,13 +2520,13 @@ export default function App() {
     overviewRows,
     selectedGroundStations,
     selectedSatellites,
+    timelineAssetVisibility,
     selectedTradeOffOption,
     timelineLayers,
     tradeOffCards,
     tradeOffsCalculated,
   ])
-  const timelineZoomMultiplier = timelineCustomZoomMultiplier
-    ?? (TIMELINE_ZOOM_LEVELS.find((level) => level.id === timelineZoomLevel)?.multiplier ?? 1)
+  const timelineZoomMultiplier = timelineCustomZoomMultiplier ?? 1
   const timelineWidthPx = timelineModel
     ? Math.round(timelineModel.widthPx * timelineZoomMultiplier)
     : 0
@@ -2516,7 +2580,11 @@ export default function App() {
       ? renderRow.group.laneCount
       : renderRow.row.laneCount
 
-    return `${Math.max(2.8, (laneCount ?? 1) * 2.68 + 0.44)}rem`
+    if (renderRow.type === 'group') {
+      return `${Math.max(4.3, (laneCount ?? 1) * 3.1 + 0.82)}rem`
+    }
+
+    return `${Math.max(3.0, (laneCount ?? 1) * 2.36 + 0.42)}rem`
   }
 
   // --- Data Volume -----------------------------------------------------
@@ -2778,8 +2846,7 @@ export default function App() {
   // very start of the window.
   const getTimelineScrollLeftForRatio = (ratio) => {
     const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
-    const halfViewportWidthPx = viewportWidthPx / 2
-    return halfViewportWidthPx + (ratio * Math.max(0, timelineWidthPx - viewportWidthPx))
+    return ratio * Math.max(0, timelineWidthPx - viewportWidthPx)
   }
 
   const getTimelineScrollLeftForTimestamp = (timestamp) => {
@@ -2803,6 +2870,15 @@ export default function App() {
     window.requestAnimationFrame(() => {
       timelineProgrammaticScrollRef.current = false
     })
+  }
+
+  const syncTimelinePlaybackViewport = (timestamp) => {
+    const scrollContainer = timelineScrollRef.current
+    if (!scrollContainer) {
+      return
+    }
+
+    scrollContainer.scrollLeft = getTimelineScrollLeftForTimestamp(timestamp)
   }
 
   const pauseTimelineLiveMode = (event) => {
@@ -3019,7 +3095,6 @@ export default function App() {
     const canvasPositionPx = (
       scrollContainer.scrollLeft
       + (clientX - rect.left)
-      - (rect.width / 2)
     )
     return Math.max(0, Math.min(1, canvasPositionPx / timelineWidthPx))
   }
@@ -3222,8 +3297,7 @@ export default function App() {
   // "now" (unlike Live/"Now" mode, which breaks/stalls when the planning
   // window doesn't contain the real current time). See the playback useEffect
   // below for the actual per-frame stepping.
-  // Back to the whole planning window at 1x. Free zooming via Ctrl+wheel has no
-  // other way home now that the Fit/Detail presets are gone.
+  // Back to the whole planning window at 1x.
   const handleResetTimelineView = () => {
     setTimelineZoomLevel(TIMELINE_DEFAULT_ZOOM_LEVEL)
     setTimelineCustomZoomMultiplier(null)
@@ -3241,6 +3315,8 @@ export default function App() {
     }
 
     setTimelineLive(false)
+    timelinePlaybackFrameTimestampRef.current = null
+    timelinePlaybackLastTextSyncRef.current = 0
     const currentPlayheadTimestamp = timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp
     if (currentPlayheadTimestamp >= planningWindowEndTimestamp) {
       timelinePlayheadTimeRef.current = planningWindowStartTimestamp
@@ -3284,10 +3360,9 @@ export default function App() {
           (timelinePlayheadTimestamp - timelineBaseTimestamp) / timelineDurationMs,
         ),
       )
-      const halfViewportWidthPx = scrollContainer.clientWidth / 2
       const scrollableWidthPx = Math.max(0, timelineWidthPx - scrollContainer.clientWidth)
       scrollContainer.scrollTo({
-        left: halfViewportWidthPx + (ratio * scrollableWidthPx),
+        left: ratio * scrollableWidthPx,
         behavior: 'auto',
       })
     })
@@ -3336,7 +3411,7 @@ export default function App() {
       const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
       const scrollableWidthPx = Math.max(0, timelineWidthPx - viewportWidthPx)
       timelineScrollRef.current?.scrollTo({
-        left: (viewportWidthPx / 2) + (ratio * scrollableWidthPx),
+        left: ratio * scrollableWidthPx,
         behavior: 'auto',
       })
       window.requestAnimationFrame(() => {
@@ -3415,6 +3490,7 @@ export default function App() {
         timelinePlaybackLastTextSyncRef.current = frameTimestamp
       }
       syncTimelinePlaybackDom(clampedNextTimestamp, syncText)
+      syncTimelinePlaybackViewport(clampedNextTimestamp)
 
       if (planningWindowEndTimestamp !== null && rawNextTimestamp >= planningWindowEndTimestamp) {
         setTimelinePlayheadTime(clampedNextTimestamp)
@@ -3445,6 +3521,14 @@ export default function App() {
   ])
 
   const formatGb = (value) => `${value >= 100 ? Math.round(value) : value.toFixed(1)} GB`
+
+  const clearTimelineTooltipHideTimeout = () => {
+    if (timelineTooltipHideTimeoutRef.current !== null) {
+      window.clearTimeout(timelineTooltipHideTimeoutRef.current)
+      timelineTooltipHideTimeoutRef.current = null
+    }
+  }
+
   const showWarningTooltip = (message, event) => {
     if (!message) return
 
@@ -3471,6 +3555,143 @@ export default function App() {
         : current
     ))
   }
+
+  const showTimelineTooltip = (item, event, pinned = false) => {
+    if (!item) {
+      return
+    }
+
+    clearTimelineTooltipHideTimeout()
+
+    setTimelineTooltip((current) => {
+      if (current.pinned && !pinned && current.item?.id !== item.id) {
+        return current
+      }
+
+      return {
+        visible: true,
+        pinned,
+        item,
+        x: event?.clientX ?? current.x,
+        y: event?.clientY ?? current.y,
+      }
+    })
+  }
+
+  const moveTimelineTooltip = (event) => {
+    setTimelineTooltip((current) => (
+      current.visible && !current.pinned
+        ? {
+            ...current,
+            x: event?.clientX ?? current.x,
+            y: event?.clientY ?? current.y,
+          }
+        : current
+    ))
+  }
+
+  const scheduleTimelineTooltipHide = () => {
+    clearTimelineTooltipHideTimeout()
+
+    timelineTooltipHideTimeoutRef.current = window.setTimeout(() => {
+      setTimelineTooltip((current) => (
+        current.pinned
+          ? current
+          : {
+              visible: false,
+              pinned: false,
+              item: null,
+              x: current.x,
+              y: current.y,
+            }
+      ))
+      timelineTooltipHideTimeoutRef.current = null
+    }, 120)
+  }
+
+  const hideTimelineTooltip = (force = false) => {
+    clearTimelineTooltipHideTimeout()
+
+    setTimelineTooltip((current) => {
+      if (!current.visible) {
+        return current
+      }
+
+      if (current.pinned && !force) {
+        return current
+      }
+
+      return {
+        visible: false,
+        pinned: false,
+        item: null,
+        x: current.x,
+        y: current.y,
+      }
+    })
+  }
+
+  const toggleTimelineTooltipPin = (item, event) => {
+    if (!item) {
+      return
+    }
+
+    clearTimelineTooltipHideTimeout()
+
+    setTimelineTooltip((current) => {
+      const sameItemPinned = current.pinned && current.item?.id === item.id
+
+      if (sameItemPinned) {
+        return {
+          visible: false,
+          pinned: false,
+          item: null,
+          x: current.x,
+          y: current.y,
+        }
+      }
+
+      return {
+        visible: true,
+        pinned: true,
+        item,
+        x: event?.clientX ?? current.x,
+        y: event?.clientY ?? current.y,
+      }
+    })
+  }
+
+  const renderTimelineTooltipContent = (item, pinned = false) => (
+    <>
+      <div className="timeline-hover-tooltip-header">
+        <strong>{item.label}</strong>
+        {item.tradeOffId ? (
+          <span className="timeline-hover-tooltip-pill">{item.tradeOffId}</span>
+        ) : item.kind === 'activity' ? (
+          <span className="timeline-hover-tooltip-pill timeline-hover-tooltip-pill--activity">
+            Priority
+          </span>
+        ) : null}
+      </div>
+      <span>{item.detail}</span>
+      <span>Start: {formatTimelineDateTime(item.startTime)}</span>
+      <span>End: {formatTimelineDateTime(item.endTime)}</span>
+      <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
+      {item.tradeOffScore && item.tradeOffScore !== '—' && (
+        <span>Score: {item.tradeOffScore}</span>
+      )}
+      {item.recommended && <span>Recommended trade-off option</span>}
+      {item.blockMessage && <span>{item.blockMessage}</span>}
+      {item.kind === 'link' && item.tradeOffId && (
+        <span>Trade-Off relation: {item.tradeOffId}</span>
+      )}
+      <span className="timeline-hover-tooltip-note">
+        {pinned
+          ? 'Pinned. Click the bar again or close this card to release it.'
+          : 'Click the bar if you want to pin these details.'}
+      </span>
+    </>
+  )
 
   const renderAssetWarning = (message) => (
     <span
@@ -3856,8 +4077,8 @@ export default function App() {
 
   // Selecting is the one action here that actually commits, so it takes you to
   // where the consequence shows: timeline panel open, the involved asset groups
-  // expanded, scrolled to the link. The navigational marking is cleared -- its
-  // red comparison curve showed an alternative you have just decided about.
+  // expanded, scrolled to the link. The chosen overpass stays marked so the
+  // effect of the selection is immediately visible in the timeline.
   const handleSelectTradeOffOption = (option) => {
     setSelectedTradeOffOption((current) => ({
       ...current,
@@ -3865,8 +4086,8 @@ export default function App() {
     }))
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
-    setMarkedTimelineLinkId(null)
-    setMarkedTradeOffOptionId(null)
+    setMarkedTimelineLinkId(option.overpassId)
+    setMarkedTradeOffOptionId(option.optionId)
 
     setExpandedSections((current) => (
       current.timeline ? current : { ...current, timeline: true }
@@ -3953,6 +4174,13 @@ export default function App() {
     }))
   }
 
+  const toggleTimelineAssetVisibility = (sectionId) => {
+    setTimelineAssetVisibility((current) => ({
+      ...current,
+      [sectionId]: !current[sectionId],
+    }))
+  }
+
   // Navigation only, shared by the timeline bars and the Overview trade-off
   // pill: marking a link marks both of its timeline instances, activates the
   // card holding its option and marks the option there.
@@ -3987,12 +4215,12 @@ export default function App() {
     setMarkedTradeOffOptionId(optionId)
   }
 
-  const handleTimelineItemClick = (item) => {
-    if (item.kind !== 'link') {
-      return
+  const handleTimelineItemClick = (item, event) => {
+    if (item.kind === 'link') {
+      markLinkForNavigation(item.linkId, item.optionId)
     }
 
-    markLinkForNavigation(item.linkId, item.optionId)
+    toggleTimelineTooltipPin(item, event)
   }
 
   const getOptionForOverpassId = (overpassId) => tradeOffCards
@@ -4003,15 +4231,20 @@ export default function App() {
     markLinkForNavigation(row.overpassId, getOptionForOverpassId(row.overpassId)?.optionId ?? null)
   }
 
-  const renderTimelineBar = (item) => {
+  const renderTimelineBar = (item, rowType = 'link') => {
     const itemWidthPx = (item.durationMinutes / timelineModel.totalMinutes) * timelineWidthPx
-    const compactBar = itemWidthPx < 120
-    const tinyBar = itemWidthPx < 72
+    const compactBar = itemWidthPx < 112
+    const tinyBar = itemWidthPx < 46
     const isLink = item.kind === 'link'
+    const isGroupRow = rowType === 'group'
+    const laneStepRem = isGroupRow ? 3.08 : 2.34
+    const barHeightRem = isGroupRow ? 2.58 : 1.92
+    const barTopOffsetRem = isGroupRow ? 0.62 : 0.44
     // Both instances of the same link (satellite side and ground station side)
     // carry the same linkId, so marking one visibly marks the other -- that is
     // the "visuelle Verknuepfung" the asset rows exist for.
     const marked = isLink && markedTimelineLinkId !== null && markedTimelineLinkId === item.linkId
+    const pinned = timelineTooltip.pinned && timelineTooltip.item?.id === item.id
 
     return (
       <button
@@ -4020,25 +4253,29 @@ export default function App() {
         className={[
           'timeline-bar',
           `timeline-bar--${item.variant}`,
-          item.tradeOffColorIndex !== null && item.tradeOffColorIndex !== undefined ? 'timeline-bar--tradeoff' : '',
           compactBar ? 'timeline-bar--compact' : '',
           tinyBar ? 'timeline-bar--tiny' : '',
           isTimelineItemAtPlayhead(item) ? 'timeline-bar--playhead-active' : '',
           item.dimmed ? 'timeline-bar--dimmed' : '',
           marked ? 'timeline-bar--marked' : '',
+          pinned ? 'timeline-bar--pinned' : '',
+          isGroupRow ? 'timeline-bar--group-row' : 'timeline-bar--link-row',
           isLink ? '' : 'timeline-bar--static',
         ].filter(Boolean).join(' ')}
         style={{
           left: `${(item.startMinutes / timelineModel.totalMinutes) * 100}%`,
           width: `${(item.durationMinutes / timelineModel.totalMinutes) * 100}%`,
-          top: `calc(0.4rem + ${(item.laneIndex ?? 0) * 2.68}rem)`,
-          '--tradeoff-accent': (item.tradeOffColorIndex !== null && item.tradeOffColorIndex !== undefined)
-            ? getTradeOffAccentColor(item.tradeOffColorIndex)
-            : 'transparent',
+          top: `calc(${barTopOffsetRem}rem + ${(item.laneIndex ?? 0) * laneStepRem}rem)`,
+          height: `${barHeightRem}rem`,
         }}
         data-playback-start={item.startTimestamp}
         data-playback-end={item.endTimestamp}
-        onClick={() => handleTimelineItemClick(item)}
+        onClick={(event) => handleTimelineItemClick(item, event)}
+        onMouseEnter={(event) => showTimelineTooltip(item, event)}
+        onMouseMove={moveTimelineTooltip}
+        onMouseLeave={scheduleTimelineTooltipHide}
+        onFocus={(event) => showTimelineTooltip(item, event)}
+        onBlur={scheduleTimelineTooltipHide}
         aria-pressed={isLink ? marked : undefined}
         aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
       >
@@ -4048,30 +4285,6 @@ export default function App() {
           )}
           <span className="timeline-bar-title">
             {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
-          </span>
-          {!tinyBar && <span className="timeline-bar-copy">{item.detail}</span>}
-        </span>
-        <span className="timeline-bar-tooltip" role="tooltip">
-          <span
-            className="timeline-bar-tooltip-inner"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <strong>{item.label}</strong>
-            {item.recommended && <span>Recommended option</span>}
-            <span>{item.detail}</span>
-            <span>Start: {formatTimelineDateTime(item.startTime)}</span>
-            <span>End: {formatTimelineDateTime(item.endTime)}</span>
-            <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
-            {item.tradeOffScore && item.tradeOffScore !== '—' && (
-              <span>Score: {item.tradeOffScore}</span>
-            )}
-            {item.blockMessage && <span>{item.blockMessage}</span>}
-            {isLink && item.optionId && (
-              <span className="timeline-bar-tooltip-hint">
-                {marked ? 'Click again to clear the trade-off jump' : 'Click to jump to this trade-off option'}
-              </span>
-            )}
           </span>
         </span>
       </button>
@@ -5303,59 +5516,82 @@ export default function App() {
                   <>
                 <div className="timeline-toolbar">
                   <div className="timeline-toolbar-groups">
-                    <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
-                      {TIMELINE_LAYERS.map((layer) => (
+                    <div className="timeline-toolbar-row">
+                      <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
+                        {TIMELINE_LAYERS.map((layer) => (
+                          <button
+                            key={layer.id}
+                            type="button"
+                            className={`timeline-toggle ${timelineLayers[layer.id] ? 'timeline-toggle--active' : ''}`}
+                            onClick={() => toggleTimelineLayer(layer.id)}
+                            aria-pressed={Boolean(timelineLayers[layer.id])}
+                          >
+                            {layer.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="timeline-toggle-group timeline-toggle-group--asset" role="group" aria-label="Timeline assets">
                         <button
-                          key={layer.id}
                           type="button"
-                          className={`timeline-toggle ${timelineLayers[layer.id] ? 'timeline-toggle--active' : ''}`}
-                          onClick={() => toggleTimelineLayer(layer.id)}
-                          aria-pressed={Boolean(timelineLayers[layer.id])}
+                          className={`timeline-toggle ${timelineAssetVisibility.satellites ? 'timeline-toggle--active' : ''}`}
+                          onClick={() => toggleTimelineAssetVisibility('satellites')}
+                          aria-pressed={timelineAssetVisibility.satellites}
                         >
-                          {layer.label}
+                          Satellites
                         </button>
-                      ))}
-                    </div>
-                    <div className="timeline-toggle-group" role="group" aria-label="Timeline view controls">
-                      <div className="timeline-zoom-control" role="group" aria-label="Timeline zoom">
                         <button
                           type="button"
-                          className="timeline-zoom-option timeline-zoom-reset"
-                          onClick={handleResetTimelineView}
-                          disabled={
-                            timelineZoomLevel === TIMELINE_DEFAULT_ZOOM_LEVEL
-                            && timelineCustomZoomMultiplier === null
-                          }
+                          className={`timeline-toggle ${timelineAssetVisibility.groundStations ? 'timeline-toggle--active' : ''}`}
+                          onClick={() => toggleTimelineAssetVisibility('groundStations')}
+                          aria-pressed={timelineAssetVisibility.groundStations}
                         >
-                          Reset View
+                          Ground Stations
                         </button>
                       </div>
                     </div>
-                    <div className="timeline-toggle-group" role="group" aria-label="Timeline playback">
-                      <button
-                        type="button"
-                        className={`timeline-toggle timeline-play-toggle ${timelinePlaying ? 'timeline-toggle--active' : ''}`}
-                        onClick={handleTimelinePlaybackToggle}
-                        disabled={planningWindowStartTimestamp === null || planningWindowEndTimestamp === null}
-                        aria-pressed={timelinePlaying}
-                      >
-                        <span className="timeline-play-icon" aria-hidden="true">
-                          {timelinePlaying ? '⏸' : '▶'}
-                        </span>
-                        {timelinePlaying ? 'Pause' : 'Play'}
-                      </button>
-                      <div className="timeline-speed-control" role="group" aria-label="Playback speed">
-                        {TIMELINE_PLAYBACK_SPEEDS.map((speed) => (
+                    <div className="timeline-toolbar-row">
+                      <div className="timeline-toggle-group" role="group" aria-label="Timeline playback">
+                        <button
+                          type="button"
+                          className={`timeline-toggle timeline-play-toggle ${timelinePlaying ? 'timeline-toggle--active' : ''}`}
+                          onClick={handleTimelinePlaybackToggle}
+                          disabled={planningWindowStartTimestamp === null || planningWindowEndTimestamp === null}
+                          aria-pressed={timelinePlaying}
+                        >
+                          <span className="timeline-play-icon" aria-hidden="true">
+                            {timelinePlaying ? '⏸' : '▶'}
+                          </span>
+                          {timelinePlaying ? 'Pause' : 'Play'}
+                        </button>
+                        <div className="timeline-speed-control" role="group" aria-label="Playback speed">
+                          {TIMELINE_PLAYBACK_SPEEDS.map((speed) => (
+                            <button
+                              key={speed}
+                              type="button"
+                              className={`timeline-speed-option ${timelinePlaybackSpeed === speed ? 'timeline-speed-option--active' : ''}`}
+                              onClick={() => setTimelinePlaybackSpeed(speed)}
+                              aria-pressed={timelinePlaybackSpeed === speed}
+                            >
+                              {speed}×
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="timeline-toolbar-spacer"></div>
+                      <div className="timeline-toggle-group" role="group" aria-label="Timeline zoom">
+                        <div className="timeline-zoom-control">
                           <button
-                            key={speed}
                             type="button"
-                            className={`timeline-speed-option ${timelinePlaybackSpeed === speed ? 'timeline-speed-option--active' : ''}`}
-                            onClick={() => setTimelinePlaybackSpeed(speed)}
-                            aria-pressed={timelinePlaybackSpeed === speed}
+                            className="timeline-zoom-option timeline-zoom-reset"
+                            onClick={handleResetTimelineView}
+                            disabled={
+                              timelineZoomLevel === TIMELINE_DEFAULT_ZOOM_LEVEL
+                              && timelineCustomZoomMultiplier === null
+                            }
                           >
-                            {speed}×
+                            Reset View
                           </button>
-                        ))}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -5367,7 +5603,7 @@ export default function App() {
                 </div>
 
                 {timelineRenderRows.length === 0 ? (
-                  <p className="timeline-empty-copy">Enable at least one timeline layer to display the schedule view.</p>
+                  <p className="timeline-empty-copy">Enable at least one timeline layer and one asset section to display the schedule view.</p>
                 ) : (
                   <div className="timeline-layout">
                     <div className="timeline-label-column">
@@ -5410,11 +5646,17 @@ export default function App() {
 
                         if (renderRow.type === 'group') {
                           const groupExpanded = Boolean(expandedTimelineGroups[renderRow.group.id])
+                          const groupMarked = renderRow.group.rows.some((row) => (
+                            row.items.some((item) => item.linkId === markedTimelineLinkId)
+                          ))
+                          const groupSelected = renderRow.group.rows.some((row) => (
+                            row.items.some((item) => item.variant === 'selected')
+                          ))
 
                           return (
                             <div
                               key={`${renderRow.key}-label`}
-                              className={`timeline-label-cell timeline-label-cell--group ${groupExpanded ? 'timeline-label-cell--group-open' : ''}`}
+                              className={`timeline-label-cell timeline-label-cell--group ${groupExpanded ? 'timeline-label-cell--group-open' : ''} ${groupMarked ? 'timeline-label-cell--marked' : ''} ${groupSelected ? 'timeline-label-cell--selected' : ''}`}
                               style={rowStyle}
                             >
                               <button
@@ -5438,14 +5680,16 @@ export default function App() {
                           )
                         }
 
+                        const linkRowMarked = renderRow.row.items.some((item) => item.linkId === markedTimelineLinkId)
+                        const linkRowSelected = renderRow.row.items.some((item) => item.variant === 'selected')
+
                         return (
                           <div
                             key={`${renderRow.key}-label`}
-                            className="timeline-label-cell timeline-label-cell--link"
+                            className={`timeline-label-cell timeline-label-cell--link ${linkRowMarked ? 'timeline-label-cell--marked' : ''} ${linkRowSelected ? 'timeline-label-cell--selected' : ''}`}
                             style={rowStyle}
                           >
                             <span className="timeline-link-name">{renderRow.row.counterpartName}</span>
-                            <span className="timeline-link-copy">{renderRow.row.label}</span>
                           </div>
                         )
                       })}
@@ -5558,14 +5802,16 @@ export default function App() {
                         const rowItems = renderRow.type === 'group'
                           ? renderRow.group.items
                           : renderRow.row.items
+                        const rowMarked = rowItems.some((item) => item.linkId === markedTimelineLinkId)
+                        const rowSelected = rowItems.some((item) => item.variant === 'selected')
 
                         return (
                           <div
                             key={`${renderRow.key}-row`}
-                            className={`timeline-track-row timeline-track-row--${renderRow.type}`}
+                            className={`timeline-track-row timeline-track-row--${renderRow.type} ${rowMarked ? 'timeline-track-row--marked' : ''} ${rowSelected ? 'timeline-track-row--selected' : ''}`}
                             style={rowStyle}
                           >
-                            {rowItems.map((item) => renderTimelineBar(item))}
+                            {rowItems.map((item) => renderTimelineBar(item, renderRow.type))}
                           </div>
                         )
                       })}
@@ -6214,6 +6460,35 @@ export default function App() {
           }}
         >
           {warningTooltip.message}
+        </div>
+      )}
+
+      {timelineTooltip.visible && timelineTooltip.item && (
+        <div
+          className={`timeline-hover-tooltip ${timelineTooltip.pinned ? 'timeline-hover-tooltip--pinned' : ''}`}
+          style={{
+            left: `${Math.max(16, Math.min(timelineTooltip.x + 18, window.innerWidth - 360))}px`,
+            top: `${Math.max(16, Math.min(timelineTooltip.y + 22, window.innerHeight - 220))}px`,
+          }}
+          onMouseEnter={clearTimelineTooltipHideTimeout}
+          onMouseLeave={() => {
+            if (!timelineTooltip.pinned) {
+              scheduleTimelineTooltipHide()
+            }
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {timelineTooltip.pinned && (
+            <button
+              type="button"
+              className="timeline-hover-tooltip-dismiss"
+              onClick={() => hideTimelineTooltip(true)}
+              aria-label="Close pinned timeline details"
+            >
+              ×
+            </button>
+          )}
+          {renderTimelineTooltipContent(timelineTooltip.item, timelineTooltip.pinned)}
         </div>
       )}
 
