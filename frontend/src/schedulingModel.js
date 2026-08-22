@@ -3,6 +3,16 @@ const toTimestamp = (value) => {
   return Number.isFinite(timestamp) ? timestamp : 0
 }
 
+const parseOverpassSequence = (overpassId) => {
+  const match = String(overpassId ?? '').match(/(\d+)$/)
+  return match ? Number.parseInt(match[1], 10) : Number.POSITIVE_INFINITY
+}
+
+const parseLinkSequence = (linkId) => {
+  const match = String(linkId ?? '').match(/(\d+)$/)
+  return match ? Number.parseInt(match[1], 10) : Number.POSITIVE_INFINITY
+}
+
 const eligibilityToAvailability = (link) => {
   if (link?.is_eligible) {
     return 'available'
@@ -20,7 +30,14 @@ const eligibilityToAvailability = (link) => {
 }
 
 export const buildRowsFromFilteredLinks = (links = []) => [...links]
-  .sort((left, right) => toTimestamp(left.start_time) - toTimestamp(right.start_time))
+  .sort((left, right) => {
+    const sequenceDelta = parseOverpassSequence(left.overpass_id) - parseOverpassSequence(right.overpass_id)
+    if (sequenceDelta !== 0) {
+      return sequenceDelta
+    }
+
+    return String(left.overpass_id ?? '').localeCompare(String(right.overpass_id ?? ''))
+  })
   .map((link) => ({
     overpassId: link.overpass_id,
     backendOverpassId: link.overpass_id,
@@ -59,6 +76,7 @@ export const applySessionPlanToRows = (rows, sessionPlan) => {
     const link = status.link ?? {}
     const eligibilityStatus = link.eligibility_status ?? row.eligibilityStatus
     const isEligible = link.is_eligible ?? row.isEligible
+    const nextRejectionReason = status.rejection_reason ?? link.ineligibility_reason ?? null
 
     return {
       ...row,
@@ -84,7 +102,7 @@ export const applySessionPlanToRows = (rows, sessionPlan) => {
       backendTradeOffId: status.tradeoff_id ?? null,
       tradeOffId: status.tradeoff_id ?? '—',
       usefulDataOffloadedMb: status.useful_data_offloaded_mb ?? 0,
-      rejectionReason: status.rejection_reason ?? link.ineligibility_reason ?? row.rejectionReason,
+      rejectionReason: isEligible && Boolean(status.is_scheduled) ? null : nextRejectionReason,
       conflictingActivityUuid: link.conflicting_activity_uuid ?? row.conflictingActivityUuid,
     }
   })
@@ -124,7 +142,16 @@ export const buildTradeOffCardsFromPlan = (sessionPlan, rows) => {
       ].join(' · '),
       reason: getConflictReason(group, conflictReasons),
       colorIndex,
-      options: group.link_ids.map((linkId) => {
+      options: [...group.link_ids]
+        .sort((left, right) => {
+          const sequenceDelta = parseLinkSequence(left) - parseLinkSequence(right)
+          if (sequenceDelta !== 0) {
+            return sequenceDelta
+          }
+
+          return String(left ?? '').localeCompare(String(right ?? ''))
+        })
+        .map((linkId) => {
         const row = rowByLinkId.get(linkId)
         const status = currentPlan[linkId]
 
