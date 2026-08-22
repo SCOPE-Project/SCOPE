@@ -725,6 +725,25 @@ export default function App() {
     return formatGb(valueMb / 1000)
   }
 
+  const getDisplayDataDownlinkMb = (item) => {
+    const usefulDataOffloadedMb = Number(item?.usefulDataOffloadedMb)
+    const estimatedDataCapacityMb = Number(item?.estimatedDataCapacityMb)
+
+    if (Number.isFinite(usefulDataOffloadedMb) && usefulDataOffloadedMb > 0) {
+      return usefulDataOffloadedMb
+    }
+
+    if (Number.isFinite(estimatedDataCapacityMb) && estimatedDataCapacityMb > 0) {
+      return estimatedDataCapacityMb
+    }
+
+    if (Number.isFinite(usefulDataOffloadedMb)) {
+      return usefulDataOffloadedMb
+    }
+
+    return Number.isFinite(estimatedDataCapacityMb) ? estimatedDataCapacityMb : Number.NaN
+  }
+
   const formatBufferLevelGb = (valueMb) => {
     if (!Number.isFinite(valueMb)) {
       return '—'
@@ -3455,8 +3474,8 @@ export default function App() {
       <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
       {item.recommended && <span>Auto-scheduled by the backend</span>}
       {item.overrideState && item.overrideState !== 'auto' && <span>Override: {item.overrideState}</span>}
-      {Number.isFinite(item.usefulDataOffloadedMb) && item.usefulDataOffloadedMb > 0 && (
-        <span>Useful data offloaded: {(item.usefulDataOffloadedMb / 1000).toFixed(2)} GB</span>
+      {Number.isFinite(getDisplayDataDownlinkMb(item)) && getDisplayDataDownlinkMb(item) > 0 && (
+        <span>Data downlink: {(getDisplayDataDownlinkMb(item) / 1000).toFixed(2)} GB</span>
       )}
       {Number.isFinite(item.score) && <span>Backend score: {item.score.toFixed(2)}</span>}
       {item.rejectionReason && !item.blockMessage && <span>{item.rejectionReason}</span>}
@@ -4907,7 +4926,7 @@ export default function App() {
                     {tradeOffsCalculated && <span>Buffer level before</span>}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--tradeoff">
-                        <span>Trade-Off ID</span>
+                        <span>Trade-Off<br />ID</span>
                       </span>
                     )}
                     {tradeOffsCalculated && (
@@ -4917,7 +4936,9 @@ export default function App() {
                     )}
                     {tradeOffsCalculated && <span>Data Downlink</span>}
                     {tradeOffsCalculated && (
-                      <span>Controls</span>
+                      <span className="overview-header-cell overview-header-cell--controls">
+                        <span>Controls</span>
+                      </span>
                     )}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--schedule">
@@ -5033,7 +5054,7 @@ export default function App() {
                             )}
                             {tradeOffsCalculated && (
                               <span className="overview-offloaded-cell">
-                                {formatDataDownlinkGb(row.usefulDataOffloadedMb)}
+                                {formatDataDownlinkGb(getDisplayDataDownlinkMb(row))}
                               </span>
                             )}
                             {tradeOffsCalculated && (
@@ -5228,7 +5249,7 @@ export default function App() {
                               </div>
                               <div className="tradeoff-option-fact">
                                 <dt>Data Downlink</dt>
-                                <dd>{formatDataDownlinkGb(option.usefulDataOffloadedMb)}</dd>
+                                <dd>{formatDataDownlinkGb(getDisplayDataDownlinkMb(option))}</dd>
                               </div>
                             </dl>
 
@@ -6033,7 +6054,7 @@ export default function App() {
                                   </div>
                                   <div className="tradeoff-option-fact">
                                     <dt>Data Downlink</dt>
-                                    <dd>{formatDataDownlinkGb(option.usefulDataOffloadedMb)}</dd>
+                                    <dd>{formatDataDownlinkGb(getDisplayDataDownlinkMb(option))}</dd>
                                   </div>
                                 </dl>
 

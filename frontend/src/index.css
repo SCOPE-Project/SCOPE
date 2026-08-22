@@ -1820,7 +1820,7 @@ body {
 }
 
 .overview-list {
-  --overview-header-height: 2.5rem;
+  --overview-header-height: 2.15rem;
   --overview-row-height: 2.2rem;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-card);
@@ -1956,14 +1956,20 @@ body {
 }
 
 .overview-list-grid--with-tradeoffs {
-  grid-template-columns: 0.28fr 0.38fr 0.32fr 0.46fr 0.46fr 0.38fr 0.32fr 0.28fr 0.3fr 0.38fr 0.22fr 0.28fr 0.4fr 0.42fr;
+  grid-template-columns: 0.23fr 0.36fr 0.32fr 0.44fr 0.44fr 0.36fr 0.24fr 0.27fr 0.29fr 0.36fr 0.3fr 0.24fr 0.32fr 0.4fr 0.32fr;
   column-gap: 0.02rem;
-  min-width: 1200px;
+  min-width: 1240px;
 }
 
 .overview-list-header,
 .overview-list-row {
-  padding: 0.58rem 0.2rem;
+  padding: 0.42rem 0.18rem;
+  box-sizing: border-box;
+}
+
+.overview-list-header > *,
+.overview-list-row > * {
+  min-width: 0;
   box-sizing: border-box;
 }
 
@@ -1973,20 +1979,34 @@ body {
   z-index: 3;
   background: var(--accent-primary);
   color: #f7fbff;
-  font-size: 0.71rem;
+  font-size: 0.64rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  height: var(--overview-header-height);
-  min-height: var(--overview-header-height);
+  min-height: calc(var(--overview-header-height) + 0.35rem);
+  height: auto;
+}
+
+.overview-list-header > * {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  line-height: 1.12;
+  padding-top: 0.06rem;
 }
 
 .overview-list-row {
   border-top: 1px solid var(--line-soft);
   color: var(--text-secondary);
   background: var(--bg-panel-strong);
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   height: var(--overview-row-height);
   min-height: var(--overview-row-height);
+}
+
+.overview-list-row > * {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .overview-list-row--blocked {
@@ -2006,7 +2026,11 @@ body {
   background: #f1f5f8;
 }
 
-.overview-list-header span,
+.overview-list-header span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .overview-list-row span {
   white-space: nowrap;
 }
@@ -2043,38 +2067,37 @@ body {
 }
 
 .overview-header-cell {
-  display: inline-flex;
-  flex-direction: column;
+  display: flex;
+  flex-direction: row;
   align-items: flex-start;
-  gap: 0.22rem;
-  padding-block: 0.08rem;
-  white-space: nowrap;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0;
+  white-space: normal;
+  line-height: 1.12;
 }
 
 .overview-header-cell--tradeoff {
-  padding-right: 0.38rem;
-}
-
-.overview-header-cell--score {
-  align-items: flex-start;
-  text-align: left;
-  padding-left: 0.2rem;
   padding-right: 0.08rem;
 }
 
-.overview-header-cell--controls {
-  flex-direction: row;
-  align-items: center;
-  padding-left: 0.22rem;
+.overview-header-cell--score {
   justify-content: flex-start;
-  gap: 0;
-  padding-block: 0;
-  height: 100%;
-  line-height: 1;
+  text-align: left;
+  padding-left: 0.08rem;
+  padding-right: 0.04rem;
+}
+
+.overview-header-cell--controls {
+  justify-content: flex-start;
+  padding-left: 0.08rem;
 }
 
 .overview-header-cell--schedule {
-  padding-left: 0.32rem;
+  justify-content: flex-start;
+  text-align: left;
+  padding-left: 0.12rem;
+  padding-right: 0.08rem;
 }
 
 .overview-header-note {
@@ -2103,7 +2126,7 @@ body {
   border-radius: 0.18rem;
   background: #f5e6d8;
   color: #8c4f18;
-  font-size: 0.56rem;
+  font-size: 0.52rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -2120,10 +2143,9 @@ body {
 }
 
 .overview-schedule-state-cell {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  padding-left: 0.22rem;
+  justify-content: flex-end;
+  padding-left: 0.08rem;
+  padding-right: 0.08rem;
 }
 
 .overview-schedule-state {
@@ -2167,18 +2189,14 @@ body {
 }
 
 .overview-tradeoff-cell {
-  display: inline-flex;
-  align-items: center;
   justify-content: flex-start;
-  padding-right: 0.3rem;
+  padding-right: 0.08rem;
 }
 
 .overview-score-cell {
-  display: inline-flex;
-  align-items: center;
   justify-content: flex-start;
   text-align: left;
-  padding-left: 0.12rem;
+  padding-left: 0.08rem;
 }
 
 .panel-action {
@@ -4638,7 +4656,7 @@ body {
   background: #fff;
   color: var(--text-secondary);
   font: inherit;
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -4667,7 +4685,7 @@ body {
   border-radius: 0.22rem;
   background: var(--bg-panel);
   color: var(--text-primary);
-  font-size: 0.72rem;
+  font-size: 0.64rem;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
