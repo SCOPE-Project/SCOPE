@@ -4,9 +4,14 @@ const EXPECTED_BACKEND_PATHS = [
   '/satos/asset/list',
   '/tasks/initialize',
   '/tasks/extract-overpasses',
+  '/tasks/filter-links',
   '/tasks/process-trade-offs',
   '/tasks/status/{task_id}',
   '/tasks/status/{task_id}/result',
+  '/schedule/session/{session_id}',
+  '/schedule/session/{session_id}/override',
+  '/schedule/session/{session_id}/strategy',
+  '/schedule/session/{session_id}/commit',
 ]
 
 const resolveSchemaFromRef = (openApiDocument, schemaRef) => {
@@ -30,6 +35,15 @@ const extractSchemaProperties = (openApiDocument, schema) => {
   return Object.keys(schema.properties ?? {})
 }
 
+const checkSchemaProperties = (issues, openApiDocument, schema, expectedProperties, label) => {
+  const properties = extractSchemaProperties(openApiDocument, schema)
+  expectedProperties.forEach((propertyName) => {
+    if (properties.length > 0 && !properties.includes(propertyName)) {
+      issues.push(`${label} is missing "${propertyName}".`)
+    }
+  })
+}
+
 const run = async () => {
   const issues = []
   const notes = []
@@ -50,6 +64,7 @@ const run = async () => {
   } else {
     const openApiDocument = await openApiResponse.json()
     const availablePaths = Object.keys(openApiDocument.paths ?? {})
+    const componentSchemas = openApiDocument.components?.schemas ?? {}
 
     routeSummary = EXPECTED_BACKEND_PATHS.map((path) => ({
       path,
@@ -63,18 +78,110 @@ const run = async () => {
       })
 
     const extractOverpassesSchema = openApiDocument.paths?.['/tasks/extract-overpasses']?.post?.requestBody?.content?.['application/json']?.schema
-    const extractOverpassesProperties = extractSchemaProperties(openApiDocument, extractOverpassesSchema)
-    ;['satellites', 'groundstations', 'start_time', 'end_time'].forEach((propertyName) => {
-      if (extractOverpassesProperties.length > 0 && !extractOverpassesProperties.includes(propertyName)) {
-        issues.push(`Orbit engine payload is missing "${propertyName}".`)
-      }
-    })
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      extractOverpassesSchema,
+      ['satellites', 'groundstations', 'start_time', 'end_time'],
+      'Orbit engine payload',
+    )
+
+    const filterSchema = openApiDocument.paths?.['/tasks/filter-links']?.post?.requestBody?.content?.['application/json']?.schema
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      filterSchema,
+      ['orbit_engine_run_id', 'min_aos_los_elevation_deg', 'min_peak_elevation_deg', 'default_downlink_rate_mbps'],
+      'Filter-links payload',
+    )
 
     const tradeOffSchema = openApiDocument.paths?.['/tasks/process-trade-offs']?.post?.requestBody?.content?.['application/json']?.schema
-    const tradeOffProperties = extractSchemaProperties(openApiDocument, tradeOffSchema)
-    if (tradeOffProperties.length > 0 && !tradeOffProperties.includes('satellites')) {
-      issues.push('Trade-off payload is missing "satellites".')
-    }
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      tradeOffSchema,
+      ['filter_run_id', 'satellite_buffer_configs', 'default_buffer_config', 'scoring_config'],
+      'Trade-off payload',
+    )
+
+    const overrideSchema = openApiDocument.paths?.['/schedule/session/{session_id}/override']?.post?.requestBody?.content?.['application/json']?.schema
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      overrideSchema,
+      ['link_id', 'override_state'],
+      'Session override payload',
+    )
+
+    const strategySchema = openApiDocument.paths?.['/schedule/session/{session_id}/strategy']?.post?.requestBody?.content?.['application/json']?.schema
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      strategySchema,
+      ['name', 'parameters'],
+      'Session strategy payload',
+    )
+
+    const sessionPlanSchema = openApiDocument.paths?.['/schedule/session/{session_id}']?.get?.responses?.['200']?.content?.['application/json']?.schema
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      sessionPlanSchema,
+      ['session_id', 'filter_run_id', 'current_plan', 'trade_off_groups', 'conflict_reasons', 'satellite_buffer_profiles'],
+      'Session plan response',
+    )
+
+    const commitSchema = openApiDocument.paths?.['/schedule/session/{session_id}/commit']?.post?.responses?.['200']?.content?.['application/json']?.schema
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      commitSchema,
+      ['session_id', 'committed_links_count', 'created_activities_count', 'status'],
+      'Session commit response',
+    )
+
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      componentSchemas.TaskReceiptResponse,
+      ['task_id', 'status'],
+      'Task receipt response',
+    )
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      componentSchemas.FilterResultDTO,
+      ['filter_run_id', 'orbit_engine_run_id', 'links'],
+      'Filter result',
+    )
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      componentSchemas.LinkBlockDTO,
+      [
+        'link_id',
+        'overpass_id',
+        'satellite_name',
+        'groundstation_name',
+        'start_time',
+        'end_time',
+        'duration_seconds',
+        'max_elevation_deg',
+        'estimated_data_capacity_mb',
+        'is_eligible',
+        'eligibility_status',
+        'ineligibility_reason',
+        'conflicting_activity_uuid',
+      ],
+      'Filtered link',
+    )
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      componentSchemas.ScheduledLinkStatusDTO,
+      ['link', 'is_scheduled', 'override_state', 'tradeoff_id', 'score', 'useful_data_offloaded_mb', 'rejection_reason'],
+      'Scheduled link status',
+    )
   }
 
   const initializeResponse = await fetch(`${BACKEND_BASE_URL}/tasks/initialize`)

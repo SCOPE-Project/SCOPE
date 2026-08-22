@@ -1,11 +1,26 @@
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  computeMeanTrackAltitudeMeters,
   interpolateTrackPosition,
   prepareTrackPoints,
 } from './components/mapGeometry.js'
+import {
+  BACKEND_BASE_URL,
+  applySessionOverride,
+  commitSession,
+  initializeAssets,
+  pollTaskResult as pollBackendTaskResult,
+  startLinkFiltering,
+  startOrbitExtraction,
+  startTradeOffProcessing,
+} from './api/scopeApi.js'
+import {
+  applySessionPlanToRows,
+  buildRowsFromFilteredLinks,
+  buildSelectedOptionsFromPlan,
+  buildTradeOffCardsFromPlan,
+  getScheduledRows,
+} from './schedulingModel.js'
 
-const BACKEND_BASE_URL = 'http://localhost:8000'
 const MissionMap = lazy(() => import('./components/MissionMap.jsx'))
 const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
 // Reset View puts the whole planning window back on screen. Everything between
@@ -36,160 +51,17 @@ const PANEL_LABELS = {
   dataVolume: 'Data Volume',
 }
 
-// The Trade-Off panel is deprecated: its selection moved into the Overview
-// table, which now carries a Select column per trade-off row. The panel and
-// everything it needs (tradeOffPanelNode, the card band, getOptionLinkBudget,
-// showTradeOffCard, ...) is deliberately left intact and still builds -- flip
-// this flag back to true to get the card view and its top-right slot back.
-// activeTradeOffCardIndex stays meaningful either way: it is what the timeline
-// auto-expand and the red comparison curve in the Data Volume panel key off,
-// and the Overview trade-off pill sets it.
+// The separate Trade-Off panel is deprecated. Backend-owned scheduling status
+// and override controls live in the Overview; the dormant card view remains
+// available behind this flag for layouts that still need it.
 const TRADE_OFF_PANEL_ENABLED = false
 
-// Demo assumptions for the on-board data budget. Nothing in the backend
-// supplies these yet, so they are user-editable in the Data Volume toolbar and
-// shared by every satellite.
+// Values entered in GB are converted to MB at the API boundary. Backend rate
+// fields currently use MB/s semantics despite their historical `_mbps` names.
 const DEFAULT_DATA_START_FILL_GB = 40
 const DEFAULT_DATA_GENERATION_MBPS = 100
 const DEFAULT_DATA_CAPACITY_GB = 100
-
-const hexToRgba = (hex, alpha) => {
-  const normalized = String(hex ?? '').replace('#', '')
-
-  if (normalized.length !== 6) {
-    return `rgba(0, 57, 117, ${alpha})`
-  }
-
-  const red = Number.parseInt(normalized.slice(0, 2), 16)
-  const green = Number.parseInt(normalized.slice(2, 4), 16)
-  const blue = Number.parseInt(normalized.slice(4, 6), 16)
-
-  if (![red, green, blue].every(Number.isFinite)) {
-    return `rgba(0, 57, 117, ${alpha})`
-  }
-
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`
-}
-// Downlink rate model: rate falls off with the square of the slant range, so a
-// high-elevation (short range) pass downlinks faster. Normalised so that a
-// zenith pass from a 550 km orbit hits DEMO_PEAK_DOWNLINK_MBPS.
-const DEMO_PEAK_DOWNLINK_MBPS = 640
-const DEMO_REFERENCE_ALTITUDE_M = 550000
-const EARTH_RADIUS_M = 6371008.8
-// Decimal gigabytes: 1 GB = 8000 Mbit, so Mbit/s -> GB/ms is /8000/1000.
-const MBPS_TO_GB_PER_MS = 1 / 8000 / 1000
-
-// Slant range to a satellite seen at `elevationDegrees` above the horizon.
-const computeSlantRangeMeters = (elevationDegrees, altitudeMeters) => {
-  const elevationRadians = (Math.max(0, Math.min(90, elevationDegrees)) * Math.PI) / 180
-  const orbitRadius = EARTH_RADIUS_M + Math.max(1, altitudeMeters)
-  const horizontal = EARTH_RADIUS_M * Math.cos(elevationRadians)
-
-  return Math.sqrt((orbitRadius * orbitRadius) - (horizontal * horizontal))
-    - (EARTH_RADIUS_M * Math.sin(elevationRadians))
-}
-
-// Demo downlink rate: free-space loss goes with the square of the distance, so
-// a high-elevation pass (short slant range) downlinks faster. Normalised so a
-// zenith pass from the reference altitude reaches the peak rate. This is a
-// stand-in until the backend supplies real link budgets.
-const getDemoDownlinkMbps = (maxElevationDeg, altitudeMeters) => {
-  const elevation = Number.isFinite(maxElevationDeg) ? maxElevationDeg : 30
-  const altitude = Number.isFinite(altitudeMeters) && altitudeMeters > 0
-    ? altitudeMeters
-    : DEMO_REFERENCE_ALTITUDE_M
-  const slantRange = computeSlantRangeMeters(elevation, altitude)
-
-  if (!Number.isFinite(slantRange) || slantRange <= 0) {
-    return DEMO_PEAK_DOWNLINK_MBPS / 4
-  }
-
-  const rate = DEMO_PEAK_DOWNLINK_MBPS
-    * ((DEMO_REFERENCE_ALTITUDE_M / slantRange) ** 2)
-
-  return Math.max(4, Math.min(DEMO_PEAK_DOWNLINK_MBPS, rate))
-}
-
-// Walks the planning window once, filling at the generation rate and draining
-// during each pass, clamping at both 0 and the capacity. Returns the polyline
-// plus flags for the two interesting failure modes: the buffer ran full (data
-// would have been lost) or ran dry mid-pass (the link went unused).
-const buildDataLevelSeries = ({
-  startTimestamp,
-  endTimestamp,
-  startLevelGb,
-  capacityGb,
-  generationGbPerMs,
-  passes,
-}) => {
-  const points = []
-  let level = Math.max(0, Math.min(capacityGb, startLevelGb))
-  let cursor = startTimestamp
-  let overflowed = false
-  let starved = false
-
-  points.push({ timestamp: cursor, level })
-
-  const advanceTo = (targetTimestamp, ratePerMs) => {
-    if (targetTimestamp <= cursor) {
-      return
-    }
-
-    const projected = level + (ratePerMs * (targetTimestamp - cursor))
-
-    if (ratePerMs > 0 && projected > capacityGb) {
-      const crossTimestamp = cursor + ((capacityGb - level) / ratePerMs)
-      points.push({ timestamp: crossTimestamp, level: capacityGb })
-      points.push({ timestamp: targetTimestamp, level: capacityGb })
-      level = capacityGb
-      overflowed = true
-    } else if (ratePerMs < 0 && projected < 0) {
-      const crossTimestamp = cursor + ((0 - level) / ratePerMs)
-      points.push({ timestamp: crossTimestamp, level: 0 })
-      points.push({ timestamp: targetTimestamp, level: 0 })
-      level = 0
-      starved = true
-    } else {
-      level = projected
-      points.push({ timestamp: targetTimestamp, level })
-    }
-
-    cursor = targetTimestamp
-  }
-
-  const steps = []
-
-  passes.forEach((pass) => {
-    const passStart = Math.max(cursor, pass.startTimestamp)
-    const passEnd = Math.min(endTimestamp, pass.endTimestamp)
-
-    if (passEnd <= passStart) {
-      return
-    }
-
-    advanceTo(passStart, generationGbPerMs)
-    const levelBefore = level
-    advanceTo(passEnd, generationGbPerMs - pass.downlinkGbPerMs)
-
-    steps.push({
-      ...pass,
-      startTimestamp: passStart,
-      endTimestamp: passEnd,
-      levelBefore,
-      levelAfter: level,
-      // Generation keeps running during the pass, so the downlinked amount is
-      // not simply the drop in level.
-      transferredGb: Math.max(
-        0,
-        levelBefore + (generationGbPerMs * (passEnd - passStart)) - level,
-      ),
-    })
-  })
-
-  advanceTo(endTimestamp, generationGbPerMs)
-
-  return { points, steps, overflowed, starved }
-}
+const DEFAULT_DOWNLINK_RATE_MBPS = 25
 
 class MapErrorBoundary extends Component {
   state = { error: null }
@@ -311,11 +183,17 @@ export default function App() {
   const [overviewRows, setOverviewRows] = useState([])
   const [showUnavailableOverviewRows, setShowUnavailableOverviewRows] = useState(true)
   const [satelliteTracks, setSatelliteTracks] = useState({})
+  const [orbitEngineRunId, setOrbitEngineRunId] = useState(null)
+  const [propagationResult, setPropagationResult] = useState(null)
+  const [propagationRequestKey, setPropagationRequestKey] = useState(null)
+  const [filterRunId, setFilterRunId] = useState(null)
+  const [filteredLinks, setFilteredLinks] = useState([])
+  const [sessionId, setSessionId] = useState(null)
+  const [sessionPlan, setSessionPlan] = useState(null)
   const [extractionStatus, setExtractionStatus] = useState('Not started')
   const [extractionProgress, setExtractionProgress] = useState(0)
   const [extractionMessages, setExtractionMessages] = useState([])
   const [calculatingTradeOffs, setCalculatingTradeOffs] = useState(false)
-  const [useDemoData, setUseDemoData] = useState(false)
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
@@ -356,10 +234,11 @@ export default function App() {
   // than 240px, which was 50% taller than the original 160px default).
   const [bottomTopHeightPx, setBottomTopHeightPx] = useState(540)
   const [bottomMiddleHeightPx, setBottomMiddleHeightPx] = useState(620)
-  // Demo assumptions behind the data-volume curves, editable in that panel.
+  // Default buffer configuration sent to the backend session engine.
   const [dataStartFillGb, setDataStartFillGb] = useState(DEFAULT_DATA_START_FILL_GB)
   const [dataGenerationMbps, setDataGenerationMbps] = useState(DEFAULT_DATA_GENERATION_MBPS)
   const [dataCapacityGb, setDataCapacityGb] = useState(DEFAULT_DATA_CAPACITY_GB)
+  const [dataDownlinkRateMbps, setDataDownlinkRateMbps] = useState(DEFAULT_DOWNLINK_RATE_MBPS)
   // Shared height (px) of the top row (Overview/Trade-Off by default);
   // both panels stretch to this height and scroll their own content
   // internally. 346px is 60% of the panels' original fixed 36rem (576px)
@@ -370,9 +249,9 @@ export default function App() {
   const [confirmationStep, setConfirmationStep] = useState('')
   const [confirmationSuccess, setConfirmationSuccess] = useState(false)
   const [confirmedScheduleCount, setConfirmedScheduleCount] = useState(0)
+  const [createdActivitiesCount, setCreatedActivitiesCount] = useState(0)
+  const [overridingLinkId, setOverridingLinkId] = useState(null)
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
-  const [showGroundStationVisibilityCircles, setShowGroundStationVisibilityCircles] = useState(true)
-  const [showSatelliteVisibilityCircles, setShowSatelliteVisibilityCircles] = useState(true)
   const [showGroundTracks, setShowGroundTracks] = useState(true)
   const [groundTrackWindowHours, setGroundTrackWindowHours] = useState(6)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
@@ -588,9 +467,10 @@ export default function App() {
     const animationFrameId = window.requestAnimationFrame(() => {
       setConfirmationSuccess(false)
       setConfirmedScheduleCount(0)
+      setCreatedActivitiesCount(0)
     })
     return () => window.cancelAnimationFrame(animationFrameId)
-  }, [selectedTradeOffOption, tradeOffsCalculated, useDemoData, schedulerLaunched])
+  }, [selectedTradeOffOption, tradeOffsCalculated, schedulerLaunched])
 
   const toggleSatellite = (name) => {
     setSelectedSatellites((current) =>
@@ -620,252 +500,6 @@ export default function App() {
       ...current,
       [layer]: !current[layer],
     }))
-  }
-
-  const handleDemoModeToggle = () => {
-    setUseDemoData((current) => !current)
-    setError(null)
-    setOverviewRows((current) =>
-      assignAvailableLinkIds(
-        current
-        .filter((row) => !row.demoGenerated)
-        .map((row) => ({
-          ...row,
-          tradeOffId: '—',
-          tradeOffScore: '—',
-          tradeOffColorIndex: null,
-        }))
-      )
-    )
-    setCalculatingTradeOffs(false)
-    setTradeOffsCalculated(false)
-    setTradeOffCards([])
-    setActiveTradeOffCardIndex(0)
-    setSelectedTradeOffOption({})
-    setMarkedTimelineLinkId(null)
-    setMarkedTradeOffOptionId(null)
-    setConfirmingSchedule(false)
-    setConfirmationProgress(0)
-    setConfirmationStep('')
-    setConfirmationSuccess(false)
-    setConfirmedScheduleCount(0)
-  }
-
-  const buildDemoTradeOffState = (rows) => {
-    const schedulableRows = rows.filter((row) => !row.scheduleBlocked)
-    const rowTradeOffMap = new Map()
-    const sortedRows = [...schedulableRows].sort((left, right) => {
-      const satCompare = String(left.satId).localeCompare(String(right.satId))
-      if (satCompare !== 0) {
-        return satCompare
-      }
-      return (toTimestamp(left.startTime) ?? 0) - (toTimestamp(right.startTime) ?? 0)
-    })
-
-    const groupedRows = []
-
-    sortedRows.forEach((row) => {
-      const startTimestamp = toTimestamp(row.startTime)
-      const endTimestamp = toTimestamp(row.endTime)
-
-      if (startTimestamp === null || endTimestamp === null || endTimestamp <= startTimestamp) {
-        return
-      }
-
-      const overlapsWithGroup = (group) =>
-        group.satId === row.satId
-        && group.rows.some((groupRow) => {
-          const groupStart = toTimestamp(groupRow.startTime)
-          const groupEnd = toTimestamp(groupRow.endTime)
-
-          if (groupStart === null || groupEnd === null) {
-            return false
-          }
-
-          return startTimestamp < groupEnd && endTimestamp > groupStart
-        })
-
-      const existingGroup = groupedRows.find(overlapsWithGroup)
-
-      if (existingGroup) {
-        existingGroup.rows.push(row)
-        return
-      }
-
-      groupedRows.push({
-        satId: row.satId,
-        rows: [row],
-      })
-    })
-
-    const groups = groupedRows
-      .filter((group) => group.rows.length > 1)
-      .map((group, groupIndex) => {
-        const tradeOffId = `TO-${String(groupIndex + 1).padStart(2, '0')}`
-        const tradeOffGroupId = `tradeoff-${tradeOffId}`
-        const colorIndex = groupIndex % TRADE_OFF_ACCENT_COLORS.length
-
-        const options = group.rows
-          .map((row) => {
-            const durationScore = Math.min(35, (row.durationSeconds ?? 0) / 60 * 3)
-            const elevationScore = Math.min(45, Number(row.maxElevationDeg ?? 0) * 0.8)
-            const totalScoreValue = Math.round(20 + durationScore + elevationScore)
-
-            return {
-              tradeOffGroupId,
-              optionId: `${tradeOffId}-${row.overpassId}`,
-              overpassId: row.overpassId,
-              satId: row.satId,
-              gsId: row.gsId,
-              duration: row.duration,
-              durationSeconds: row.durationSeconds,
-              maxElevationDeg: row.maxElevationDeg,
-              startTime: row.startTime,
-              endTime: row.endTime,
-              maxElevation: row.maxElevation,
-              scoreValue: totalScoreValue,
-              score: `${totalScoreValue}/100`,
-              colorIndex,
-            }
-          })
-          .sort((left, right) => right.scoreValue - left.scoreValue)
-          .map((option, optionIndex) => ({
-            ...option,
-            recommended: optionIndex === 0,
-          }))
-
-        options.forEach((option) => {
-          rowTradeOffMap.set(option.overpassId, {
-            tradeOffId,
-            score: option.score,
-            colorIndex,
-          })
-        })
-
-        return {
-          id: tradeOffGroupId,
-          title: tradeOffId,
-          resourceLabel: group.satId,
-          reason: `${group.satId} has overlapping downlink opportunities in this planning window and can only serve one of them.`,
-          options,
-          colorIndex,
-        }
-      })
-
-    const enrichedRows = rows.map((row) => ({
-      ...row,
-      tradeOffId: row.scheduleBlocked ? '—' : rowTradeOffMap.get(row.overpassId)?.tradeOffId ?? '—',
-      tradeOffScore: row.scheduleBlocked ? '—' : rowTradeOffMap.get(row.overpassId)?.score ?? '—',
-      tradeOffColorIndex: row.scheduleBlocked ? null : rowTradeOffMap.get(row.overpassId)?.colorIndex ?? null,
-    }))
-
-    return { enrichedRows, groups }
-  }
-
-  const buildDemoTradeOffPreviewRows = (
-    rows,
-    planningWindow,
-    selectedSatelliteNames,
-    selectedGroundStationNames,
-  ) => {
-    const startTimestamp = toTimestamp(planningWindow?.startTime)
-    const endTimestamp = toTimestamp(planningWindow?.endTime)
-
-    if (
-      startTimestamp === null
-      || endTimestamp === null
-      || endTimestamp <= startTimestamp
-    ) {
-      return rows
-    }
-
-    const demoSatellites =
-      selectedSatelliteNames.length > 0
-        ? selectedSatelliteNames
-        : [...new Set(rows.map((row) => row.satId).filter(Boolean))]
-    const demoGroundStations =
-      selectedGroundStationNames.length > 1
-        ? selectedGroundStationNames
-        : [...new Set(rows.map((row) => row.gsId).filter(Boolean))]
-
-    if (demoSatellites.length === 0 || demoGroundStations.length < 2) {
-      return rows
-    }
-
-    const totalWindowMinutes = Math.max(90, Math.floor((endTimestamp - startTimestamp) / 60000))
-    const nextOverpassSequence =
-      rows.reduce((highest, row) => {
-        const match = String(row.overpassId ?? '').match(/^OP-(\d+)$/)
-        if (!match) {
-          return highest
-        }
-        return Math.max(highest, Number.parseInt(match[1], 10))
-      }, 0) + 1
-
-    const previewRows = []
-    const groupCount = Math.min(2, demoSatellites.length)
-    let sequence = nextOverpassSequence
-
-    for (let groupIndex = 0; groupIndex < groupCount; groupIndex += 1) {
-      const satId = demoSatellites[groupIndex]
-      const gsA = demoGroundStations[groupIndex % demoGroundStations.length]
-      const gsB = demoGroundStations[(groupIndex + 1) % demoGroundStations.length]
-
-      if (!satId || !gsA || !gsB || gsA === gsB) {
-        continue
-      }
-
-      const baseOffsetMinutes = Math.min(
-        totalWindowMinutes - 22,
-        Math.max(12, Math.floor(totalWindowMinutes * (0.26 + groupIndex * 0.22))),
-      )
-
-      const firstStart = new Date(startTimestamp + baseOffsetMinutes * 60000)
-      const firstEnd = new Date(firstStart.getTime() + 9 * 60000)
-      const secondStart = new Date(firstStart.getTime() + 2 * 60000)
-      const secondEnd = new Date(secondStart.getTime() + 10 * 60000)
-
-      previewRows.push(
-        {
-          overpassId: `OP-${String(sequence++).padStart(3, '0')}`,
-          satId,
-          gsId: gsA,
-          duration: '9 min',
-          durationSeconds: 9 * 60,
-          startTime: firstStart.toISOString(),
-          endTime: firstEnd.toISOString(),
-          maxElevation: '57.4°',
-          maxElevationDeg: 57.4,
-          scheduleBlocked: false,
-          scheduleBlockLabel: null,
-          scheduleBlockAsset: null,
-          tradeOffId: '—',
-          tradeOffScore: '—',
-          tradeOffColorIndex: null,
-          demoGenerated: true,
-        },
-        {
-          overpassId: `OP-${String(sequence++).padStart(3, '0')}`,
-          satId,
-          gsId: gsB,
-          duration: '10 min',
-          durationSeconds: 10 * 60,
-          startTime: secondStart.toISOString(),
-          endTime: secondEnd.toISOString(),
-          maxElevation: '52.1°',
-          maxElevationDeg: 52.1,
-          scheduleBlocked: false,
-          scheduleBlockLabel: null,
-          scheduleBlockAsset: null,
-          tradeOffId: '—',
-          tradeOffScore: '—',
-          tradeOffColorIndex: null,
-          demoGenerated: true,
-        },
-      )
-    }
-
-    return previewRows.length > 0 ? [...rows, ...previewRows] : rows
   }
 
   const getEventTimestamp = (event) => {
@@ -991,28 +625,6 @@ export default function App() {
     return dayOffset > 0 ? `${timeLabel} +${dayOffset}` : timeLabel
   }
 
-  const formatDateTimeCompact = (
-    value,
-    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
-  ) => {
-    if (!value) {
-      return '—'
-    }
-
-    const parsed = new Date(value)
-    if (!Number.isFinite(parsed.getTime())) {
-      return '—'
-    }
-
-    return parsed.toLocaleString([], {
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      ...getTimeZoneFormatOptions(timeMode),
-    })
-  }
-
   const formatElevation = (value) => {
     if (!Number.isFinite(value)) {
       return '—'
@@ -1020,32 +632,6 @@ export default function App() {
 
     return `${value.toFixed(1)}°`
   }
-
-  const formatOverpassDisplayId = (index) => `OP-${String(index + 1).padStart(3, '0')}`
-  const formatLinkDisplayId = (index) => `L-${String(index + 1).padStart(3, '0')}`
-
-  const buildOverviewRowsFromOverpasses = (overpassBlocks) =>
-    [...overpassBlocks]
-      .sort((left, right) => {
-        const leftTimestamp = toTimestamp(left.start_time) ?? 0
-        const rightTimestamp = toTimestamp(right.start_time) ?? 0
-        return leftTimestamp - rightTimestamp
-      })
-      .map((block, index) => ({
-        overpassId: formatOverpassDisplayId(index),
-        linkId: null,
-        backendOverpassId: block.overpass_id,
-        satId: block.satellite_name,
-        gsId: block.groundstation_name,
-        duration: formatDurationFromSeconds(block.duration_seconds),
-        durationSeconds: block.duration_seconds,
-        startTime: block.start_time,
-        endTime: block.end_time,
-        maxElevation: formatElevation(block.max_elevation_deg),
-        maxElevationDeg: block.max_elevation_deg,
-        availabilityStatus: block.availability_status ?? (block.rejection_reason ? 'unavailable' : 'available'),
-        rejectionReason: block.rejection_reason ?? null,
-      }))
 
   const buildCurrentScheduleItems = (schedules, relevantScheduleNames) => {
     const relevantNames = new Set(relevantScheduleNames)
@@ -1063,6 +649,7 @@ export default function App() {
 
           return {
             id: `current-${schedule.name}-${activity.uuid ?? activityIndex}`,
+            activityUuid: activity.uuid ? String(activity.uuid) : null,
             label: activity.name?.trim() || 'Scheduled activity',
             detail: schedule.name,
             startTime,
@@ -1079,88 +666,12 @@ export default function App() {
   }
 
   const isUnavailableOverviewRow = (row) => (
-    row.scheduleBlocked
+    row.isEligible === false
+    || row.scheduleBlocked
     || row.availabilityStatus === 'filtered'
     || row.availabilityStatus === 'blocked'
     || row.availabilityStatus === 'unavailable'
-    || Boolean(row.rejectionReason)
   )
-
-  const assignAvailableLinkIds = (rows) => {
-    let availableIndex = 0
-
-    return rows.map((row) => {
-      if (isUnavailableOverviewRow(row)) {
-        return {
-          ...row,
-          linkId: '—',
-        }
-      }
-
-      const nextLinkId = formatLinkDisplayId(availableIndex)
-      availableIndex += 1
-
-      return {
-        ...row,
-        linkId: nextLinkId,
-      }
-    })
-  }
-
-  const hasTimeOverlap = (startA, endA, startB, endB) => startA < endB && endA > startB
-
-  const getBlockingScheduledActivity = (row, scheduleItems) => {
-    const rowStartTimestamp = toTimestamp(row.startTime)
-    const rowEndTimestamp = toTimestamp(row.endTime)
-
-    if (
-      rowStartTimestamp === null
-      || rowEndTimestamp === null
-      || rowEndTimestamp <= rowStartTimestamp
-    ) {
-      return null
-    }
-
-    return scheduleItems.find((item) => {
-      const itemStartTimestamp = toTimestamp(item.startTime)
-      const itemEndTimestamp = toTimestamp(item.endTime)
-      const scheduleOwner = item.detail ?? ''
-      const sameAsset = scheduleOwner === row.satId || scheduleOwner === row.gsId
-
-      if (
-        !sameAsset
-        || itemStartTimestamp === null
-        || itemEndTimestamp === null
-        || itemEndTimestamp <= itemStartTimestamp
-      ) {
-        return false
-      }
-
-      return hasTimeOverlap(
-        rowStartTimestamp,
-        rowEndTimestamp,
-        itemStartTimestamp,
-        itemEndTimestamp,
-      )
-    }) ?? null
-  }
-
-  const annotateRowsWithSchedulePriority = (rows, scheduleItems) =>
-    rows.map((row) => {
-      const blockingActivity = getBlockingScheduledActivity(row, scheduleItems)
-      const rejectionReason = blockingActivity
-        ? `${row.overpassId} is blocked because ${blockingActivity?.label ?? 'a scheduled activity'} on ${blockingActivity?.detail ?? 'the current schedule'} has priority.`
-        : row.rejectionReason ?? null
-
-      return {
-        ...row,
-        scheduleBlocked: Boolean(blockingActivity),
-        scheduleBlockLabel: blockingActivity?.label ?? null,
-        scheduleBlockAsset: blockingActivity?.detail ?? null,
-        availabilityStatus: blockingActivity ? 'blocked' : (row.availabilityStatus ?? 'available'),
-        rejectionReason,
-      }
-    })
 
   const getDayOfYear = (date, timeMode = DEFAULT_PLANNING_TIME_MODE) => {
     const useUtc = timeMode === 'utc'
@@ -1290,28 +801,6 @@ export default function App() {
     return `${formatTimelineDateTime(startValue, timeMode)} - ${formatTimelineDateTime(endValue, timeMode)}`
   }
 
-  const getSelectedTradeOffForGroup = (group) =>
-    group.options.find((option) => option.optionId === selectedTradeOffOption[group.id])
-    ?? group.options.find((option) => option.recommended)
-    ?? group.options[0]
-
-  const getSelectedTradeOffOptions = (groups) => groups.map((group) => getSelectedTradeOffForGroup(group))
-
-  const getFinalScheduleRows = (rows, groups, tradeOffsReady) => {
-    const schedulableRows = rows.filter((row) => !row.scheduleBlocked)
-
-    if (!tradeOffsReady) {
-      return []
-    }
-
-    const selectedOptions = getSelectedTradeOffOptions(groups)
-    const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
-
-    return schedulableRows.filter(
-      (row) => row.tradeOffId === '—' || selectedOverpassIds.has(row.overpassId),
-    )
-  }
-
   const layoutTimelineItems = (items) => {
     const lanes = []
 
@@ -1386,10 +875,6 @@ export default function App() {
   // a `linkId` so marking one marks the other.
   const buildTimelineModel = (rows, groups, currentScheduleItems, planningWindow) => {
     const timeMode = planningWindow?.timeMode ?? DEFAULT_PLANNING_TIME_MODE
-    const selectedOptions = groups
-      .map((group) => getSelectedTradeOffForGroup(group))
-      .filter(Boolean)
-    const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
     const optionByOverpassId = new Map(
       groups
         .flatMap((group) => group.options)
@@ -1415,23 +900,22 @@ export default function App() {
 
         const linkedOption = optionByOverpassId.get(row.overpassId)
         const hasTradeOff = Boolean(row.tradeOffId && row.tradeOffId !== '—')
-        const partOfProposal = tradeOffsCalculated
-          && !row.scheduleBlocked
-          && (!hasTradeOff || selectedOverpassIds.has(row.overpassId))
-        // Q9/Q12: once trade-offs exist, every option that is not the one
-        // actually driving the schedule is damped -- per group, so the
-        // recommended option of an untouched group stays legible.
-        const dimmed = tradeOffsCalculated
-          && hasTradeOff
-          && !selectedOverpassIds.has(row.overpassId)
+        const partOfProposal = tradeOffsCalculated && row.isScheduled
+        const dimmed = tradeOffsCalculated && hasTradeOff && !row.isScheduled
 
         let variant = 'neutral'
         if (row.scheduleBlocked) {
           variant = 'blocked'
+        } else if (row.overrideState === 'excluded') {
+          variant = 'excluded'
+        } else if (row.overrideState === 'pinned') {
+          variant = 'pinned'
+        } else if (row.isScheduled) {
+          variant = 'selected'
         } else if (hasTradeOff) {
-          variant = selectedOverpassIds.has(row.overpassId) ? 'selected' : 'candidate'
+          variant = 'candidate'
         } else if (tradeOffsCalculated) {
-          variant = 'fixed'
+          variant = 'neutral'
         }
 
         return {
@@ -1452,13 +936,16 @@ export default function App() {
           dimmed,
           blocked: Boolean(row.scheduleBlocked),
           blockMessage: row.scheduleBlocked
-            ? `${row.overpassId} is blocked because ${row.scheduleBlockLabel ?? 'a scheduled activity'} on ${row.scheduleBlockAsset ?? 'the current schedule'} has priority.`
+            ? row.rejectionReason
             : null,
           tradeOffId: hasTradeOff ? row.tradeOffId : null,
-          tradeOffScore: row.tradeOffScore ?? null,
           tradeOffColorIndex: row.tradeOffColorIndex ?? null,
           optionId: linkedOption?.optionId ?? null,
-          recommended: linkedOption?.recommended ?? false,
+          recommended: row.isScheduled && row.overrideState === 'auto',
+          overrideState: row.overrideState,
+          usefulDataOffloadedMb: row.usefulDataOffloadedMb,
+          score: row.score,
+          rejectionReason: row.rejectionReason,
         }
       })
       .filter(Boolean)
@@ -1481,7 +968,7 @@ export default function App() {
         // the asset's header row as a blocking bar -- that is the red bar in
         // the agreed layout sketch.
         const blocking = blockedRows.some(
-          (row) => row.scheduleBlockAsset === item.detail && row.scheduleBlockLabel === item.label,
+          (row) => row.conflictingActivityUuid && row.conflictingActivityUuid === item.activityUuid,
         )
 
         return {
@@ -1721,6 +1208,13 @@ export default function App() {
     setOverviewRows([])
     setShowUnavailableOverviewRows(true)
     setSatelliteTracks({})
+    setOrbitEngineRunId(null)
+    setPropagationResult(null)
+    setPropagationRequestKey(null)
+    setFilterRunId(null)
+    setFilteredLinks([])
+    setSessionId(null)
+    setSessionPlan(null)
     setExtractionStatus('Not started')
     setExtractionProgress(0)
     setExtractionMessages([])
@@ -1761,11 +1255,14 @@ export default function App() {
     setDataStartFillGb(DEFAULT_DATA_START_FILL_GB)
     setDataGenerationMbps(DEFAULT_DATA_GENERATION_MBPS)
     setDataCapacityGb(DEFAULT_DATA_CAPACITY_GB)
+    setDataDownlinkRateMbps(DEFAULT_DOWNLINK_RATE_MBPS)
     setConfirmingSchedule(false)
     setConfirmationProgress(0)
     setConfirmationStep('')
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
+    setCreatedActivitiesCount(0)
+    setOverridingLinkId(null)
   }
 
   const planningDateAndTimeToIso = (dateValue, timeValue, timeMode = planningTimeMode) =>
@@ -1864,30 +1361,6 @@ export default function App() {
     }
   }
 
-  const makeAbortError = () => {
-    const abortError = new Error('Terminated by user.')
-    abortError.name = 'AbortError'
-    return abortError
-  }
-
-  // Signal-aware: lets handleTerminateScheduler interrupt an in-progress
-  // wait immediately instead of only taking effect on the next fetch (which
-  // could otherwise leave "Terminate" feeling unresponsive for up to the
-  // full poll interval).
-  const wait = (durationMs, signal) =>
-    new Promise((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(makeAbortError())
-        return
-      }
-
-      const timeoutId = window.setTimeout(resolve, durationMs)
-      signal?.addEventListener('abort', () => {
-        window.clearTimeout(timeoutId)
-        reject(makeAbortError())
-      }, { once: true })
-    })
-
   const formatTaskStatusLabel = (status) => {
     switch (status) {
       case 'queued':
@@ -1903,37 +1376,6 @@ export default function App() {
     }
   }
 
-  const pollTaskResult = async (taskId, onStatusUpdate, signal) => {
-    while (true) {
-      if (signal?.aborted) {
-        throw makeAbortError()
-      }
-
-      const statusResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}`, { signal })
-      if (!statusResponse.ok) {
-        throw new Error(`Status polling failed with ${statusResponse.status}`)
-      }
-
-      const taskStatus = await statusResponse.json()
-      onStatusUpdate?.(taskStatus)
-
-      if (taskStatus.status === 'completed') {
-        const resultResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}/result`, { signal })
-        if (!resultResponse.ok) {
-          throw new Error(`Result request failed with ${resultResponse.status}`)
-        }
-
-        return resultResponse.json()
-      }
-
-      if (taskStatus.status === 'failed') {
-        throw new Error(taskStatus.message || 'Overpass extraction failed.')
-      }
-
-      await wait(1200, signal)
-    }
-  }
-
   const fetchAssets = async () => {
     setLoading(true)
     setError(null)
@@ -1941,11 +1383,7 @@ export default function App() {
     setAssetSchedules([])
     resetWorkspaceState()
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/tasks/initialize`)
-      if (!response.ok) {
-        throw new Error(`Server returned status ${response.status}`)
-      }
-      const data = await response.json()
+      const data = await initializeAssets()
       if (data && Array.isArray(data.assets)) {
         setSatosAlive(true)
         setAssets(data.assets)
@@ -1962,42 +1400,34 @@ export default function App() {
     }
   }
 
-  const applyOverviewLinkFilters = (rows) => rows.map((row) => {
-    const filterReasons = []
+  const appendTaskStatus = (taskStatus, stageLabel, progressStart = 0, progressSpan = 100) => {
+    setExtractionStatus(`${stageLabel}: ${formatTaskStatusLabel(taskStatus.status)}`)
+    const taskProgress = Number.isFinite(taskStatus.progress) ? taskStatus.progress : 0
+    setExtractionProgress(Math.round(progressStart + (taskProgress / 100) * progressSpan))
 
-    if (
-      minimumLinkElevationFilterValue !== null
-      && Number.isFinite(row.maxElevationDeg)
-      && row.maxElevationDeg < minimumLinkElevationFilterValue
-    ) {
-      filterReasons.push('Filtered by link elevation threshold.')
+    if (taskStatus.message) {
+      setExtractionMessages((current) => {
+        const text = `${stageLabel}: ${taskStatus.message}`
+        if (current[current.length - 1]?.text === text) {
+          return current
+        }
+        return [
+          ...current,
+          {
+            id: `${stageLabel}-${taskStatus.status}-${taskStatus.progress ?? 0}-${current.length}`,
+            text,
+          },
+        ]
+      })
     }
+  }
 
-    if (
-      minimumPeakElevationFilterValue !== null
-      && Number.isFinite(row.maxElevationDeg)
-      && row.maxElevationDeg < minimumPeakElevationFilterValue
-    ) {
-      filterReasons.push('Filtered by peak elevation threshold.')
-    }
-
-    if (filterReasons.length === 0) {
-      return row
-    }
-
-    if (row.availabilityStatus && row.availabilityStatus !== 'available') {
-      return {
-        ...row,
-        rejectionReason: [row.rejectionReason, ...filterReasons].filter(Boolean).join(' '),
-      }
-    }
-
-    return {
-      ...row,
-      availabilityStatus: 'filtered',
-      rejectionReason: filterReasons.join(' '),
-    }
-  })
+  const formatFilteredRows = (links) => buildRowsFromFilteredLinks(links).map((row) => ({
+    ...row,
+    duration: formatDurationFromSeconds(row.durationSeconds),
+    maxElevation: formatElevation(row.maxElevationDeg),
+    tradeOffColorIndex: null,
+  }))
 
   const handleLaunchScheduler = async () => {
     if (!launchRequirementsMet) return false
@@ -2018,6 +1448,21 @@ export default function App() {
       return false
     }
 
+    const nextPropagationRequestKey = JSON.stringify({
+      satellites: [...selectedSatellites].sort(),
+      groundstations: [...selectedGroundStations].sort(),
+      start_time: planningWindow.startTime,
+      end_time: planningWindow.endTime,
+    })
+    const canReusePropagation = Boolean(
+      orbitEngineRunId
+      && propagationResult
+      && propagationRequestKey === nextPropagationRequestKey
+    )
+    let completedPropagationResult = canReusePropagation ? propagationResult : null
+    let nextOrbitEngineRunId = canReusePropagation ? orbitEngineRunId : null
+    let activeBackendStage = canReusePropagation ? 'Filtering' : 'Propagation'
+
     setLaunchingScheduler(true)
     setError(null)
     setExtractionStatus('Queued')
@@ -2029,7 +1474,16 @@ export default function App() {
       },
     ])
     setOverviewRows([])
-    setSatelliteTracks({})
+    if (!canReusePropagation) {
+      setSatelliteTracks({})
+      setOrbitEngineRunId(null)
+      setPropagationResult(null)
+      setPropagationRequestKey(null)
+    }
+    setFilterRunId(null)
+    setFilteredLinks([])
+    setSessionId(null)
+    setSessionPlan(null)
     setSchedulerLaunched(true)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
@@ -2041,6 +1495,7 @@ export default function App() {
     setMarkedTradeOffOptionId(null)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
+    setCreatedActivitiesCount(0)
     const schedulerLaunchTime = timelineNow
     setTimelineNow(schedulerLaunchTime)
     setTimelinePlayheadTime(schedulerLaunchTime)
@@ -2054,58 +1509,53 @@ export default function App() {
     schedulerAbortControllerRef.current = abortController
 
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/tasks/extract-overpasses`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+      if (!canReusePropagation) {
+        const extractionReceipt = await startOrbitExtraction({
           satellites: selectedSatellites,
           groundstations: selectedGroundStations,
           start_time: planningWindow.startTime,
           end_time: planningWindow.endTime,
-        }),
-        signal: abortController.signal,
-      })
+        }, abortController.signal)
+        const extractionResult = await pollBackendTaskResult(extractionReceipt.task_id, {
+          signal: abortController.signal,
+          onStatusUpdate: (taskStatus) => appendTaskStatus(taskStatus, 'Propagation', 0, 65),
+        })
 
-      if (!response.ok) {
-        throw new Error(`Scheduler launch failed with status ${response.status}`)
+        completedPropagationResult = extractionResult?.payload ?? null
+        nextOrbitEngineRunId = completedPropagationResult?.metadata?.task_id ?? extractionReceipt.task_id
+        setOrbitEngineRunId(nextOrbitEngineRunId)
+        setPropagationResult(completedPropagationResult)
+        setPropagationRequestKey(nextPropagationRequestKey)
+        setSatelliteTracks(completedPropagationResult?.global_tracks ?? {})
+      } else {
+        setExtractionStatus('Filtering: Queued')
+        setExtractionProgress(65)
+        setExtractionMessages([
+          { id: `propagation-reused-${nextOrbitEngineRunId}`, text: 'Propagation: Reusing the current orbit-engine result.' },
+        ])
       }
 
-      const receipt = await response.json()
-      const result = await pollTaskResult(receipt.task_id, (taskStatus) => {
-        setExtractionStatus(formatTaskStatusLabel(taskStatus.status))
-        setExtractionProgress(
-          Number.isFinite(taskStatus.progress) ? taskStatus.progress : 0,
-        )
+      activeBackendStage = 'Filtering'
+      setExtractionMessages((current) => [
+        ...current,
+        { id: `filter-queued-${nextOrbitEngineRunId}`, text: 'Filtering: Task queued.' },
+      ])
 
-        if (taskStatus.message) {
-          setExtractionMessages((current) => {
-            if (current[current.length - 1]?.text === taskStatus.message) {
-              return current
-            }
-
-            return [
-              ...current,
-              {
-                id: `${taskStatus.status}-${taskStatus.progress ?? 0}-${current.length}`,
-                text: taskStatus.message,
-              },
-            ]
-          })
-        }
+      const filterReceipt = await startLinkFiltering({
+        orbit_engine_run_id: nextOrbitEngineRunId,
+        min_aos_los_elevation_deg: minimumLinkElevationFilterValue,
+        min_peak_elevation_deg: minimumPeakElevationFilterValue,
+        default_downlink_rate_mbps: Number(dataDownlinkRateMbps),
       }, abortController.signal)
-      const scheduleItems = buildCurrentScheduleItems(
-        assetSchedules,
-        [...selectedSatellites, ...selectedGroundStations],
-      )
-      const realRows = annotateRowsWithSchedulePriority(
-        applyOverviewLinkFilters(buildOverviewRowsFromOverpasses(result?.payload?.overpass_blocks ?? [])),
-        scheduleItems,
-      )
+      const filterResult = await pollBackendTaskResult(filterReceipt.task_id, {
+        signal: abortController.signal,
+        onStatusUpdate: (taskStatus) => appendTaskStatus(taskStatus, 'Filtering', 65, 35),
+      })
 
-      setSatelliteTracks(result?.payload?.global_tracks ?? {})
-      setOverviewRows(assignAvailableLinkIds(realRows))
+      const nextFilteredLinks = filterResult?.payload?.links ?? []
+      setFilterRunId(filterResult?.payload?.filter_run_id ?? filterReceipt.task_id)
+      setFilteredLinks(nextFilteredLinks)
+      setOverviewRows(formatFilteredRows(nextFilteredLinks))
       setExtractionStatus('Completed')
       setExtractionProgress(100)
       return true
@@ -2115,12 +1565,21 @@ export default function App() {
         console.error(err)
       }
       setOverviewRows([])
-      setSatelliteTracks({})
+      setFilterRunId(null)
+      setFilteredLinks([])
+      setSessionId(null)
+      setSessionPlan(null)
       setActivePlanningWindow(null)
       setSchedulerLaunched(false)
       setSidebarCollapsed(false)
-      setExtractionStatus(wasTerminated ? 'Terminated' : 'Failed')
-      setError(wasTerminated ? null : (err.message || 'Failed to extract overpasses from the backend.'))
+      setExtractionStatus(wasTerminated ? 'Stopped waiting' : 'Failed')
+      if (!completedPropagationResult) {
+        setSatelliteTracks({})
+        setOrbitEngineRunId(null)
+        setPropagationResult(null)
+        setPropagationRequestKey(null)
+      }
+      setError(wasTerminated ? null : (err.message || `${activeBackendStage} failed in the backend.`))
       return false
     } finally {
       schedulerAbortControllerRef.current = null
@@ -2142,83 +1601,119 @@ export default function App() {
     }
   }
 
-  // Repurposes the Launch Communication Scheduler button into a Terminate
-  // button while a launch is in flight (see the JSX below): aborts the
-  // in-progress fetch/poll loop via the shared AbortController, which
-  // throws an AbortError back in handleLaunchScheduler's catch block --
-  // that's what actually resets schedulerLaunched/sidebarCollapsed/etc.,
-  // this just requests the cancellation.
+  // The backend has no task-cancellation endpoint. This only stops the browser
+  // from waiting for the current propagation/filtering task.
   const handleTerminateScheduler = () => {
     schedulerAbortControllerRef.current?.abort()
   }
 
-  const handleCalculateTradeOffs = async () => {
-    if (!schedulerLaunched || overviewRows.length === 0 || !useDemoData) return
-
-    setCalculatingTradeOffs(true)
-
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-
-    let demoInputRows = overviewRows
-    let tradeOffState = buildDemoTradeOffState(demoInputRows)
-
-    if (tradeOffState.groups.length === 0) {
-      demoInputRows = buildDemoTradeOffPreviewRows(
-        overviewRows,
-        activePlanningWindow,
-        selectedSatellites,
-        selectedGroundStations,
-      )
-      tradeOffState = buildDemoTradeOffState(demoInputRows)
-    }
-
-    const { enrichedRows, groups } = tradeOffState
-
-    setOverviewRows(assignAvailableLinkIds(enrichedRows))
-    setTradeOffCards(groups)
-    setActiveTradeOffCardIndex(0)
-    focusTimelineOnTradeOffCard(groups[0])
-    setSelectedTradeOffOption(
-      Object.fromEntries(
-        groups
-          .map((group) => [group.id, group.options.find((option) => option.recommended)?.optionId ?? group.options[0]?.optionId ?? null])
-          .filter(([, optionId]) => optionId !== null)
-      )
+  const applyAuthoritativeSessionPlan = (plan, baseRows = overviewRows) => {
+    const plannedRows = applySessionPlanToRows(baseRows, plan)
+    const rawCards = buildTradeOffCardsFromPlan(plan, plannedRows)
+    const colorByLinkId = new Map(
+      rawCards.flatMap((card) => card.options.map((option) => [option.linkId, card.colorIndex])),
     )
+    const nonTrivialGroupIds = new Set(rawCards.map((card) => card.id))
+    const nextRows = plannedRows.map((row) => ({
+      ...row,
+      duration: formatDurationFromSeconds(row.durationSeconds),
+      maxElevation: formatElevation(row.maxElevationDeg),
+      tradeOffId: nonTrivialGroupIds.has(row.backendTradeOffId) ? row.backendTradeOffId : '—',
+      tradeOffColorIndex: colorByLinkId.get(row.backendLinkId) ?? null,
+    }))
+    const nextCards = rawCards.map((card) => ({
+      ...card,
+      options: card.options.map((option) => ({
+        ...option,
+        duration: formatDurationFromSeconds(option.durationSeconds),
+        maxElevation: formatElevation(option.maxElevationDeg),
+      })),
+    }))
+
+    setSessionPlan(plan)
+    setSessionId(plan.session_id)
+    setFilterRunId(plan.filter_run_id)
+    setOverviewRows(nextRows)
+    setTradeOffCards(nextCards)
+    setSelectedTradeOffOption(buildSelectedOptionsFromPlan(plan))
+    setActiveTradeOffCardIndex(0)
     setTradeOffsCalculated(true)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
-    setCalculatingTradeOffs(false)
+    setCreatedActivitiesCount(0)
+    focusTimelineOnTradeOffCard(nextCards[0])
+  }
+
+  const handleCalculateTradeOffs = async () => {
+    if (!schedulerLaunched || !filterRunId || overviewRows.length === 0 || !bufferConfigValid) return
+
+    setCalculatingTradeOffs(true)
+    setError(null)
+
+    try {
+      const receipt = await startTradeOffProcessing({
+        filter_run_id: filterRunId,
+        default_buffer_config: {
+          capacity_mb: dataCapacityValueGb * 1000,
+          initial_level_mb: dataStartFillValueGb * 1000,
+          payload_generation_rate_mbps: dataGenerationRateValue,
+          downlink_rate_mbps: dataDownlinkRateValue,
+        },
+        scoring_config: {
+          name: 'buffer_overflow_avoidance',
+          parameters: { alpha: 2.0, exponent: 2.0 },
+        },
+      })
+      const result = await pollBackendTaskResult(receipt.task_id, {
+        onStatusUpdate: (taskStatus) => appendTaskStatus(taskStatus, 'Scheduling', 0, 100),
+      })
+      const plan = result?.payload
+      if (!plan?.session_id) {
+        throw new Error('The backend returned an invalid scheduling-session result.')
+      }
+      applyAuthoritativeSessionPlan(plan)
+    } catch (err) {
+      console.error(err)
+      setError(err.message || 'Failed to create the backend scheduling session.')
+    } finally {
+      setCalculatingTradeOffs(false)
+    }
   }
 
   const handleConfirmSchedule = async () => {
-    if (!confirmDemoAvailable || confirmingSchedule) {
+    if (!sessionId || finalScheduleRows.length === 0 || confirmingSchedule) {
       return
     }
 
-    const progressStages = [
-      { progress: 12, step: 'Locking workspace and freezing the current schedule selection.' },
-      { progress: 34, step: 'Collecting the final proposed links and preparing activity payloads.' },
-      { progress: 58, step: 'Generating demo SatOS activity objects for the selected planning window.' },
-      { progress: 82, step: 'Simulating SatOS write calls for the final communication schedule.' },
-      { progress: 100, step: 'Communication schedule confirmed.' },
-    ]
-
     setConfirmingSchedule(true)
-    setConfirmationProgress(0)
-    setConfirmationStep('Preparing confirmation workflow...')
+    setConfirmationProgress(20)
+    setConfirmationStep('Committing the backend session to SatOS...')
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
+    setCreatedActivitiesCount(0)
+    setError(null)
 
     try {
-      for (const stage of progressStages) {
-        await wait(700)
-        setConfirmationProgress(stage.progress)
-        setConfirmationStep(stage.step)
-      }
-
+      const result = await commitSession(sessionId)
+      setConfirmationProgress(100)
+      setConfirmationStep('Communication schedule confirmed.')
       setConfirmationSuccess(true)
-      setConfirmedScheduleCount(finalScheduleRows.length)
+      setConfirmedScheduleCount(result.committed_links_count ?? 0)
+      setCreatedActivitiesCount(result.created_activities_count ?? 0)
+
+      try {
+        const initialized = await initializeAssets()
+        if (Array.isArray(initialized?.assets)) {
+          setAssets(initialized.assets)
+          setAssetSchedules(Array.isArray(initialized.schedules) ? initialized.schedules : [])
+        }
+      } catch (refreshError) {
+        console.error(refreshError)
+        setError('The schedule was committed, but the refreshed SatOS baseline could not be loaded.')
+      }
+    } catch (err) {
+      console.error(err)
+      setError(err.message || 'Failed to commit the scheduling session to SatOS.')
     } finally {
       setConfirmingSchedule(false)
     }
@@ -2249,21 +1744,6 @@ export default function App() {
         <div className="app-header-subtitle">Satellite Communication Optimizer and Planning Engine</div>
       </div>
       <div className="app-header-controls">
-        {view !== 'landing' && (
-          <div className="app-header-demo">
-            <span className="app-header-demo-label">Demo</span>
-            <label className="demo-switch">
-              <input
-                type="checkbox"
-                checked={useDemoData}
-                onChange={handleDemoModeToggle}
-              />
-              <span className="demo-switch-track" aria-hidden="true">
-                <span className="demo-switch-thumb"></span>
-              </span>
-            </label>
-          </div>
-        )}
         {showStatus && (
           <div className="app-header-status">
             <div className="app-status-stack">
@@ -2308,6 +1788,21 @@ export default function App() {
   const linkFiltersValid = [minimumLinkElevationFilterValue, minimumPeakElevationFilterValue].every((value) => (
     value === null || (!Number.isNaN(value) && value >= 0 && value <= 90)
   ))
+  const dataCapacityValueGb = Number(dataCapacityGb)
+  const dataStartFillValueGb = Number(dataStartFillGb)
+  const dataGenerationRateValue = Number(dataGenerationMbps)
+  const dataDownlinkRateValue = Number(dataDownlinkRateMbps)
+  const bufferConfigValid = (
+    Number.isFinite(dataCapacityValueGb)
+    && dataCapacityValueGb > 0
+    && Number.isFinite(dataStartFillValueGb)
+    && dataStartFillValueGb >= 0
+    && dataStartFillValueGb <= dataCapacityValueGb
+    && Number.isFinite(dataGenerationRateValue)
+    && dataGenerationRateValue >= 0
+    && Number.isFinite(dataDownlinkRateValue)
+    && dataDownlinkRateValue > 0
+  )
   const planningWindowComplete =
     planningWindowStartDate !== ''
     && planningWindowStartTime !== ''
@@ -2323,6 +1818,7 @@ export default function App() {
     && selectedSatellites.length >= 1
     && selectedGroundStations.length >= 1
     && linkFiltersValid
+    && bufferConfigValid
   const loadMissionAssetsDisabled = loading || launchingScheduler || backendAlive !== true
   const loadScopeDisabled =
     loading
@@ -2344,6 +1840,8 @@ export default function App() {
                 ? 'Select at least one ground station.'
                 : !linkFiltersValid
                   ? 'Optional filter values must stay between 0° and 90°.'
+                  : !bufferConfigValid
+                    ? 'Enter a valid buffer configuration and keep initial fill at or below capacity.'
                   : ''
   const timeOptions = Array.from({ length: 96 }, (_, index) => {
     const hours = String(Math.floor(index / 4)).padStart(2, '0')
@@ -2494,15 +1992,14 @@ export default function App() {
   const visibleOverviewRows = showUnavailableOverviewRows
     ? overviewRows
     : overviewRows.filter((row) => !isOverviewRowUnavailable(row))
-  const tradeOffDemoAvailable = useDemoData && schedulerLaunched && schedulableOverviewRows.length > 0
-  const finalScheduleRows = useMemo(
-    () => getFinalScheduleRows(overviewRows, tradeOffCards, tradeOffsCalculated),
-    // selectedTradeOffOption is the state captured by getFinalScheduleRows.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [overviewRows, selectedTradeOffOption, tradeOffCards, tradeOffsCalculated],
-  )
-  const confirmDemoAvailable =
-    useDemoData
+  const tradeOffAvailable = Boolean(filterRunId)
+    && schedulerLaunched
+    && filteredLinks.some((link) => link.is_eligible)
+    && schedulableOverviewRows.length > 0
+    && bufferConfigValid
+  const finalScheduleRows = getScheduledRows(overviewRows)
+  const confirmScheduleAvailable =
+    Boolean(sessionId)
     && schedulerLaunched
     && tradeOffsCalculated
     && finalScheduleRows.length > 0
@@ -2588,154 +2085,84 @@ export default function App() {
   }
 
   // --- Data Volume -----------------------------------------------------
-  // The curve answers "how does the chosen schedule drain this satellite's
-  // buffer", so it is built from the SELECTED links (finalScheduleRows), not
-  // from every extracted window, and it shares the timeline's exact time span
-  // so a step always sits under its link.
-  const getSatelliteAltitudeMeters = useCallback((satelliteName) => {
-    const altitude = computeMeanTrackAltitudeMeters(preparedSatelliteTracks[satelliteName])
-    return Number.isFinite(altitude) && altitude > 0 ? altitude : DEMO_REFERENCE_ALTITUDE_M
-  }, [preparedSatelliteTracks])
-
-  const buildSatellitePasses = useCallback((rows, satelliteName) => rows
-    .filter((row) => row.satId === satelliteName && !row.scheduleBlocked)
-    .map((row) => {
-      const startTimestamp = toTimestamp(row.startTime)
-      const endTimestamp = toTimestamp(row.endTime)
-
-      if (
-        startTimestamp === null
-        || endTimestamp === null
-        || endTimestamp <= startTimestamp
-      ) {
-        return null
-      }
-
-      const downlinkMbps = getDemoDownlinkMbps(
-        row.maxElevationDeg,
-        getSatelliteAltitudeMeters(satelliteName),
-      )
-
-      return {
-        id: row.overpassId,
-        label: row.overpassId,
-        gsId: row.gsId,
-        maxElevation: row.maxElevation,
-        tradeOffId: row.tradeOffId && row.tradeOffId !== '—' ? row.tradeOffId : null,
-        startTimestamp,
-        endTimestamp,
-        downlinkMbps,
-        downlinkGbPerMs: downlinkMbps * MBPS_TO_GB_PER_MS,
-      }
-    })
-    .filter(Boolean)
-    .sort((left, right) => left.startTimestamp - right.startTimestamp), [getSatelliteAltitudeMeters])
-
-  // The red comparison curve: the option currently marked in the Trade-Off
-  // panel, swapped in for the one that actually drives the schedule. Only one
-  // at a time, and only when it genuinely differs from the current selection.
-  const markedTradeOffCard = markedTradeOffOptionId
-    ? tradeOffCards.find(
-      (card) => card.options.some((option) => option.optionId === markedTradeOffOptionId),
-    ) ?? null
-    : null
-  const markedTradeOffOption = markedTradeOffCard?.options
-    .find((option) => option.optionId === markedTradeOffOptionId) ?? null
-  const effectiveOptionOfMarkedCard = markedTradeOffCard
-    ? getSelectedTradeOffForGroup(markedTradeOffCard)
-    : null
-  const hasDistinctAlternative = Boolean(
-    markedTradeOffOption
-    && effectiveOptionOfMarkedCard
-    && markedTradeOffOption.optionId !== effectiveOptionOfMarkedCard.optionId,
-  )
-  const dataVolumeCapacityGb = Math.max(1, Number(dataCapacityGb) || 0)
-  const dataVolumeStartLevelGb = Math.max(
-    0,
-    Math.min(dataVolumeCapacityGb, Number(dataStartFillGb) || 0),
-  )
-  const dataVolumeGenerationGbPerMs = Math.max(0, Number(dataGenerationMbps) || 0)
-    * MBPS_TO_GB_PER_MS
-
+  // Curves and KPIs are rendered from the authoritative backend session
+  // profiles. The frontend only converts units and positions returned points.
   const dataVolumeModel = useMemo(() => {
-    if (!timelineModel) {
+    if (!timelineModel || !sessionPlan) {
       return null
     }
 
     const startTimestamp = timelineModel.baseDate.getTime()
     const endTimestamp = timelineModel.endDate.getTime()
-    const alternativeScheduleRows = hasDistinctAlternative
-      ? [
-        ...finalScheduleRows.filter(
-          (row) => row.overpassId !== effectiveOptionOfMarkedCard.overpassId,
-        ),
-        ...overviewRows.filter((row) => row.overpassId === markedTradeOffOption.overpassId),
-      ]
-      : []
-
-    // Q4/Q9: only satellites whose timeline group is expanded, ground station
-    // groups do not count. The auto-expand on trade-off cards therefore pulls
-    // exactly the relevant satellite into this view.
-    // A group hidden behind a collapsed section is not "expanded" as far as
-    // this view is concerned -- otherwise curves would appear for satellites
-    // you cannot see in the timeline.
     const satelliteGroups = expandedTimelineSections.satellites
       ? (timelineModel.sections.find((section) => section.id === 'satellites')?.groups ?? [])
         .filter((group) => expandedTimelineGroups[group.id])
       : []
 
     const series = satelliteGroups.map((group) => {
-      const baseSeries = buildDataLevelSeries({
-        startTimestamp,
-        endTimestamp,
-        startLevelGb: dataVolumeStartLevelGb,
-        capacityGb: dataVolumeCapacityGb,
-        generationGbPerMs: dataVolumeGenerationGbPerMs,
-        passes: buildSatellitePasses(finalScheduleRows, group.name),
-      })
+      const profile = sessionPlan.satellite_buffer_profiles?.[group.name]
+      if (!profile) {
+        return null
+      }
 
-      const alternative = (hasDistinctAlternative && markedTradeOffOption.satId === group.name)
-        ? buildDataLevelSeries({
-          startTimestamp,
-          endTimestamp,
-          startLevelGb: dataVolumeStartLevelGb,
-          capacityGb: dataVolumeCapacityGb,
-          generationGbPerMs: dataVolumeGenerationGbPerMs,
-          passes: buildSatellitePasses(alternativeScheduleRows, group.name),
+      const profilePoints = (profile.profile_points ?? []).map((point) => ({
+        timestamp: toTimestamp(point.timestamp),
+        level: Number(point.level_mb ?? 0) / 1000,
+        eventType: point.event_type,
+        associatedId: point.associated_id,
+      })).filter((point) => point.timestamp !== null)
+      const pointsByLinkAndEvent = new Map(
+        profilePoints.map((point) => [`${point.associatedId}:${point.eventType}`, point]),
+      )
+      const downlinkRateMbps = sessionPlan.satellite_configs?.[group.name]?.downlink_rate_mbps ?? 0
+      const steps = finalScheduleRows
+        .filter((row) => row.satId === group.name)
+        .map((row) => {
+          const startPoint = pointsByLinkAndEvent.get(`${row.backendLinkId}:downlink_start`)
+          const endPoint = pointsByLinkAndEvent.get(`${row.backendLinkId}:downlink_end`)
+          return {
+            id: row.backendLinkId,
+            label: row.overpassId,
+            gsId: row.gsId,
+            maxElevation: row.maxElevation,
+            startTimestamp: toTimestamp(row.startTime),
+            endTimestamp: toTimestamp(row.endTime),
+            downlinkMbps: downlinkRateMbps,
+            transferredGb: Number(row.usefulDataOffloadedMb ?? 0) / 1000,
+            levelBefore: startPoint?.level ?? 0,
+            levelAfter: endPoint?.level ?? 0,
+          }
         })
-        : null
+        .filter((step) => step.startTimestamp !== null && step.endTimestamp !== null)
 
       return {
         id: group.id,
         name: group.name,
-        ...baseSeries,
-        alternative,
-        alternativeLabel: alternative ? markedTradeOffOption.overpassId : null,
+        capacityGb: Number(profile.capacity_mb ?? 0) / 1000,
+        points: profilePoints,
+        steps,
+        overflowed: (profile.overflow_events ?? []).length > 0,
+        totalGeneratedGb: Number(profile.total_generated_mb ?? 0) / 1000,
+        totalDownlinkedGb: Number(profile.total_downlinked_mb ?? 0) / 1000,
+        totalLostGb: Number(profile.total_lost_mb ?? 0) / 1000,
+        finalLevelGb: Number(profile.final_level_mb ?? 0) / 1000,
+        peakLevelGb: Number(profile.peak_level_mb ?? 0) / 1000,
       }
-    })
+    }).filter(Boolean)
 
     return {
       startTimestamp,
       endTimestamp,
       durationMs: Math.max(1, endTimestamp - startTimestamp),
-      capacityGb: dataVolumeCapacityGb,
+      capacityGb: Math.max(1, ...series.map((item) => item.capacityGb)),
       series,
       expandedSatelliteCount: satelliteGroups.length,
     }
   }, [
-    dataVolumeCapacityGb,
-    dataVolumeGenerationGbPerMs,
-    dataVolumeStartLevelGb,
-    buildSatellitePasses,
     expandedTimelineGroups,
     expandedTimelineSections.satellites,
-    effectiveOptionOfMarkedCard,
-    // These schedule rows are treated immutably throughout App.
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization
     finalScheduleRows,
-    hasDistinctAlternative,
-    markedTradeOffOption,
-    overviewRows,
+    sessionPlan,
     timelineModel,
   ])
   const timelineBaseTimestamp = timelineModel?.baseDate.getTime() ?? null
@@ -3677,10 +3104,13 @@ export default function App() {
       <span>Start: {formatTimelineDateTime(item.startTime)}</span>
       <span>End: {formatTimelineDateTime(item.endTime)}</span>
       <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
-      {item.tradeOffScore && item.tradeOffScore !== '—' && (
-        <span>Score: {item.tradeOffScore}</span>
+      {item.recommended && <span>Auto-scheduled by the backend</span>}
+      {item.overrideState && item.overrideState !== 'auto' && <span>Override: {item.overrideState}</span>}
+      {Number.isFinite(item.usefulDataOffloadedMb) && item.usefulDataOffloadedMb > 0 && (
+        <span>Useful data offloaded: {(item.usefulDataOffloadedMb / 1000).toFixed(2)} GB</span>
       )}
-      {item.recommended && <span>Recommended trade-off option</span>}
+      {Number.isFinite(item.score) && <span>Backend score: {item.score.toFixed(2)}</span>}
+      {item.rejectionReason && !item.blockMessage && <span>{item.rejectionReason}</span>}
       {item.blockMessage && <span>{item.blockMessage}</span>}
       {item.kind === 'link' && item.tradeOffId && (
         <span>Trade-Off relation: {item.tradeOffId}</span>
@@ -3719,10 +3149,6 @@ export default function App() {
         />
       </svg>
     </span>
-  )
-
-  const renderDemoBadge = () => (
-    <span className="demo-badge">Demo</span>
   )
 
   const getTradeOffAccentColor = (colorIndex) =>
@@ -4075,17 +3501,42 @@ export default function App() {
     </span>
   )
 
-  // Selecting is the one action here that actually commits, so it takes you to
-  // where the consequence shows: timeline panel open, the involved asset groups
-  // expanded, scrolled to the link. The chosen overpass stays marked so the
-  // effect of the selection is immediately visible in the timeline.
-  const handleSelectTradeOffOption = (option) => {
-    setSelectedTradeOffOption((current) => ({
-      ...current,
-      [option.tradeOffGroupId]: option.optionId,
-    }))
-    setConfirmationSuccess(false)
-    setConfirmedScheduleCount(0)
+  const handleLinkOverride = async (option, overrideState) => {
+    if (!sessionId || !option?.linkId || overridingLinkId) {
+      return
+    }
+
+    setOverridingLinkId(option.linkId)
+    setError(null)
+
+    try {
+      let updatedPlan = sessionPlan
+      if (overrideState === 'pinned') {
+        const group = tradeOffCards.find((card) => card.id === option.tradeOffGroupId)
+        const previousPinned = group?.options.find(
+          (candidate) => candidate.linkId !== option.linkId && candidate.overrideState === 'pinned',
+        )
+        if (previousPinned) {
+          updatedPlan = await applySessionOverride(sessionId, {
+            link_id: previousPinned.linkId,
+            override_state: 'auto',
+          })
+        }
+      }
+
+      updatedPlan = await applySessionOverride(updatedPlan.session_id, {
+        link_id: option.linkId,
+        override_state: overrideState,
+      })
+      applyAuthoritativeSessionPlan(updatedPlan)
+    } catch (err) {
+      console.error(err)
+      setError(err.message || 'Failed to update the scheduling-session override.')
+      return
+    } finally {
+      setOverridingLinkId(null)
+    }
+
     setMarkedTimelineLinkId(option.overpassId)
     setMarkedTradeOffOptionId(option.optionId)
 
@@ -4124,40 +3575,6 @@ export default function App() {
         scrollTimelineToTimestamp(startTimestamp, 'smooth')
       }
     })
-  }
-
-  // Q1(a): the link's capacity -- what this pass could downlink at its demo
-  // rate for its whole duration, independent of how full the buffer happens to
-  // be at that moment.
-  const getOptionLinkBudget = (option) => {
-    const row = overviewRows.find((entry) => entry.overpassId === option.overpassId) ?? null
-    const startTimestamp = toTimestamp(option.startTime)
-    const endTimestamp = toTimestamp(option.endTime)
-    const durationSeconds = Number.isFinite(option.durationSeconds)
-      ? option.durationSeconds
-      : (Number.isFinite(row?.durationSeconds)
-        ? row.durationSeconds
-        : ((startTimestamp !== null && endTimestamp !== null)
-          ? (endTimestamp - startTimestamp) / 1000
-          : null))
-
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-      return null
-    }
-
-    const maxElevationDeg = Number.isFinite(option.maxElevationDeg)
-      ? option.maxElevationDeg
-      : row?.maxElevationDeg
-    const rateMbps = getDemoDownlinkMbps(
-      maxElevationDeg,
-      getSatelliteAltitudeMeters(option.satId),
-    )
-
-    return {
-      rateMbps,
-      volumeGb: (rateMbps * durationSeconds) / 8000,
-      maxElevation: option.maxElevation ?? row?.maxElevation ?? null,
-    }
   }
 
   const toggleTimelineSection = (sectionId) => {
@@ -4741,7 +4158,6 @@ export default function App() {
   )
 
   if (view === 'landing') {
-    const filtersDisabled = !missionAssetsLoaded
     const filterTooltip = 'Load SatOS mission data first to enable filtering.'
 
     return (
@@ -4815,7 +4231,7 @@ export default function App() {
                         className="btn-fetch btn-terminate landing-action-button"
                         onClick={handleTerminateScheduler}
                       >
-                        Terminate
+                          Stop waiting
                       </button>
                     ) : (
                       <button
@@ -4865,7 +4281,7 @@ export default function App() {
               <div className="panel-heading-actions">
                 <div className="overview-inline-status">
                   {schedulerLaunched && (
-                    <div className="overview-count-inline">
+                    <div className="overview-count-inline" title={`Orbit run: ${orbitEngineRunId ?? '—'} (${propagationResult?.overpass_blocks?.length ?? 0} propagated) · Filter run: ${filterRunId ?? '—'} (${filteredLinks.length} links) · Session: ${sessionId ?? '—'}`}>
                       <span className="overview-status-label">Overpasses</span>
                       <span className="overview-count-value">{visibleOverviewRows.length}</span>
                     </div>
@@ -4932,22 +4348,20 @@ export default function App() {
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--tradeoff">
                         <span>Trade-Off ID</span>
-                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
                       </span>
                     )}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--score">
                         <span>Score</span>
-                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
                       </span>
                     )}
+                    {tradeOffsCalculated && <span>Offloaded</span>}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--data">
-                        <span>Data</span>
-                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                        <span>Override</span>
                       </span>
                     )}
-                    {tradeOffsCalculated && <span>Select</span>}
+                    {tradeOffsCalculated && <span>Controls</span>}
                   </div>
                   {visibleOverviewRows.length === 0 ? (
                     <>
@@ -4965,6 +4379,7 @@ export default function App() {
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
                       </div>
                     </>
                   ) : (
@@ -4975,19 +4390,20 @@ export default function App() {
                         const rowFiltered = row.availabilityStatus === 'filtered'
                         const rowAvailabilityLabel = getOverviewAvailabilityLabel(row)
                         const rowRejectionReason = row.rejectionReason ?? getScheduleBlockMessage(row)
-                        const isRecommendedRow = tradeOffsCalculated
-                          && row.tradeOffId !== '—'
-                          && row.tradeOffScore !== '—'
-                          && rowOption?.recommended
-                        // The Trade-Off panel used to own this; the Overview is
-                        // the only place it lives now.
+                        const isRecommendedRow = tradeOffsCalculated && row.isScheduled && row.overrideState === 'auto'
                         const isSelectableRow = tradeOffsCalculated
                           && !rowUnavailable
-                          && row.tradeOffId !== '—'
-                          && rowOption !== null
-                        const isSelectedRow = isSelectableRow
-                          && selectedTradeOffOption[rowOption.tradeOffGroupId] === rowOption.optionId
-                        const rowBudget = rowOption ? getOptionLinkBudget(rowOption) : null
+                          && Boolean(sessionId)
+                        const isSelectedRow = isSelectableRow && row.isScheduled
+                        const overrideOption = rowOption ?? {
+                          tradeOffGroupId: row.backendTradeOffId,
+                          optionId: row.backendLinkId,
+                          linkId: row.backendLinkId,
+                          overpassId: row.overpassId,
+                          satId: row.satId,
+                          gsId: row.gsId,
+                          startTime: row.startTime,
+                        }
 
                         return (
                           <div
@@ -4996,12 +4412,12 @@ export default function App() {
                           >
                             <span className="overview-overpass-cell">
                               <span>{row.overpassId}</span>
-                              {rowUnavailable && rowRejectionReason ? renderAssetWarning(rowRejectionReason) : null}
+                              {rowRejectionReason ? renderAssetWarning(rowRejectionReason) : null}
                             </span>
                             <span className="overview-status-cell">
                               {isRecommendedRow ? (
                                 <span className="overview-row-note overview-row-note--recommended">
-                                  Recommended
+                                  Scheduled
                                 </span>
                               ) : null}
                               {rowUnavailable && !rowFiltered && rowAvailabilityLabel ? (
@@ -5009,7 +4425,19 @@ export default function App() {
                                   {rowAvailabilityLabel}
                                 </span>
                               ) : null}
-                              {!isRecommendedRow && !rowUnavailable ? <span className="overview-status-empty">—</span> : null}
+                              {!isRecommendedRow && !rowUnavailable ? (
+                                <span className="overview-status-empty">
+                                  {row.overrideState === 'pinned'
+                                    ? 'Pinned'
+                                    : row.overrideState === 'excluded'
+                                      ? 'Excluded'
+                                      : row.isScheduled
+                                        ? 'Scheduled'
+                                        : tradeOffsCalculated
+                                          ? 'Unscheduled'
+                                          : 'Available'}
+                                </span>
+                              ) : null}
                             </span>
                             <span className="overview-linkid-cell">{row.linkId ?? '—'}</span>
                             <span>{row.satId}</span>
@@ -5037,23 +4465,39 @@ export default function App() {
                                 )
                                 : <span className="overview-tradeoff-cell">—</span>
                             )}
-                            {tradeOffsCalculated && <span className="overview-score-cell">{row.tradeOffScore}</span>}
+                            {tradeOffsCalculated && (
+                              <span className="overview-score-cell">
+                                {Number.isFinite(row.score) ? row.score.toFixed(2) : '—'}
+                              </span>
+                            )}
+                            {tradeOffsCalculated && (
+                              <span className="overview-offloaded-cell">
+                                {row.usefulDataOffloadedMb > 0 ? formatGb(row.usefulDataOffloadedMb / 1000) : '—'}
+                              </span>
+                            )}
                             {tradeOffsCalculated && (
                               <span className="overview-data-cell">
-                                {rowBudget ? formatGb(rowBudget.volumeGb) : '—'}
+                                {row.overrideState ?? 'auto'}
                               </span>
                             )}
                             {tradeOffsCalculated && (
                               <span className="overview-select-cell">
                                 {isSelectableRow ? (
-                                  <button
-                                    type="button"
-                                    className={`overview-select-button ${isSelectedRow ? 'overview-select-button--selected' : ''}`}
-                                    onClick={() => handleSelectTradeOffOption(rowOption)}
-                                    aria-pressed={isSelectedRow}
-                                  >
-                                    {isSelectedRow ? 'Selected' : 'Select'}
-                                  </button>
+                                  <span className="overview-override-controls" role="group" aria-label={`Override ${row.linkId}`}>
+                                    {['auto', 'pinned', 'excluded'].map((state) => (
+                                      <button
+                                        key={state}
+                                        type="button"
+                                        className={`overview-override-button ${row.overrideState === state ? 'overview-override-button--active' : ''}`}
+                                        onClick={() => handleLinkOverride(overrideOption, state)}
+                                        disabled={Boolean(overridingLinkId)}
+                                        aria-pressed={row.overrideState === state}
+                                        title={state === 'auto' ? 'Return to automatic scheduling' : state === 'pinned' ? 'Force this link on' : 'Force this link off'}
+                                      >
+                                        {state === 'auto' ? 'A' : state === 'pinned' ? 'P' : 'X'}
+                                      </button>
+                                    ))}
+                                  </span>
                                 ) : (
                                   <span className="overview-select-empty">—</span>
                                 )}
@@ -5071,7 +4515,7 @@ export default function App() {
               <div className="panel-action-wrapper">
                 <button
                   className="panel-action"
-                  disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffDemoAvailable}
+                  disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffAvailable}
                   onClick={handleCalculateTradeOffs}
                 >
                   {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
@@ -5080,13 +4524,13 @@ export default function App() {
                   <span className="panel-action-tooltip">
                     {!schedulerLaunched
                       ? 'Finish loading SCOPE and wait for extraction to complete.'
-                      : !useDemoData
-                        ? 'Trade-off calculation is not connected for real-data mode yet. Enable demo data to preview this workflow.'
-                        : !tradeOffDemoAvailable
-                          ? overviewRows.length > 0
-                            ? 'All extracted overpasses are blocked by existing scheduled activities with higher priority.'
-                            : 'No extracted overpasses are available for the simulated trade-off step.'
-                          : 'Calculate the simulated trade-off groups for the currently visible extracted overpasses.'}
+                      : !tradeOffAvailable
+                        ? !bufferConfigValid
+                          ? 'Enter a valid buffer configuration; initial fill cannot exceed capacity.'
+                          : overviewRows.length > 0
+                          ? 'All backend-filtered links are ineligible.'
+                          : 'No filtered links are available.'
+                        : 'Create a backend scheduling session for the filtered links.'}
                   </span>
                 )}
               </div>
@@ -5108,7 +4552,6 @@ export default function App() {
                 {renderPanelDragHandle('tradeOff')}
               <div className="panel-heading-title">
                 <h2>Trade-Off</h2>
-                {useDemoData && schedulerLaunched && renderDemoBadge()}
               </div>
               </div>
               <button
@@ -5126,8 +4569,8 @@ export default function App() {
             </div>
             {expandedSections.tradeOff && (
               <div id="tradeoff-panel-content" className="panel-collapsible-content">
-                {!tradeOffsCalculated && !useDemoData && (
-                  <p>Enable Demo mode to use Trade-Off view.</p>
+                {!tradeOffsCalculated && (
+                  <p>Calculate trade-offs to create a backend scheduling session.</p>
                 )}
                 {tradeOffsCalculated && tradeOffCards.length === 0 && (
                   <p>No trade-off groups were identified for the current selection.</p>
@@ -5157,10 +4600,7 @@ export default function App() {
                     </p>
 
                     <div className="tradeoff-option-list">
-                      {card.options.map((option) => {
-                        const budget = getOptionLinkBudget(option)
-
-                        return (
+                      {card.options.map((option) => (
                           <div
                             key={option.optionId}
                             data-option-id={option.optionId}
@@ -5178,7 +4618,7 @@ export default function App() {
                                   <span className="tradeoff-marked-flag">Marked</span>
                                 )}
                                 {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
-                                <span className="tradeoff-score">{option.score}</span>
+                                <span className="tradeoff-score">Score {Number(option.score ?? 0).toFixed(2)}</span>
                               </div>
                             </div>
 
@@ -5193,24 +4633,24 @@ export default function App() {
                               </div>
                               <div className="tradeoff-option-fact">
                                 <dt>Data</dt>
-                                <dd>{budget ? formatGb(budget.volumeGb) : '—'}</dd>
+                                <dd>{option.usefulDataOffloadedMb > 0 ? formatGb(option.usefulDataOffloadedMb / 1000) : '—'}</dd>
                               </div>
                               <div className="tradeoff-option-fact">
                                 <dt>Max Elev.</dt>
-                                <dd>{option.maxElevation ?? budget?.maxElevation ?? '—'}</dd>
+                                <dd>{option.maxElevation ?? '—'}</dd>
                               </div>
                             </dl>
 
                             <button
                               type="button"
                               className="tradeoff-select-button"
-                              onClick={() => handleSelectTradeOffOption(option)}
+                              onClick={() => handleLinkOverride(option, option.overrideState === 'pinned' ? 'auto' : 'pinned')}
+                              disabled={Boolean(overridingLinkId)}
                             >
-                              {selectedTradeOffOption[option.tradeOffGroupId] === option.optionId ? 'Selected' : 'Select'}
+                              {option.overrideState === 'pinned' ? 'Return to Auto' : 'Pin'}
                             </button>
                           </div>
-                        )
-                      })}
+                      ))}
                     </div>
                   </article>
                 ))}
@@ -5234,7 +4674,6 @@ export default function App() {
                 {renderPanelDragHandle('mapView')}
               <div className="panel-heading-title">
                 <h2>Map View</h2>
-                {useDemoData && renderDemoBadge()}
               </div>
               </div>
               <div className="map-panel-controls">
@@ -5272,8 +4711,8 @@ export default function App() {
                         activeAssetId={activeMapAsset?.id ?? null}
                         onSelectAsset={setActiveMapAssetId}
                         timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
-                        showGroundStationVisibility={showGroundStationVisibilityCircles}
-                        showSatelliteVisibility={showSatelliteVisibilityCircles}
+                        showGroundStationVisibility={false}
+                        showSatelliteVisibility={false}
                         showGroundTracks={showGroundTracks}
                         groundTrackWindowHours={groundTrackWindowHours}
                       />
@@ -5293,64 +4732,20 @@ export default function App() {
                         <div className="map-layer-toggle">
                           <span className="map-layer-toggle-label">
                             <span
-                              className="map-layer-toggle-swatch map-layer-toggle-swatch--ground-station"
-                              aria-hidden="true"
-                            ></span>
-                            Ground station visibility circles
-                          </span>
-                          <label className="demo-switch">
-                            <input
-                              type="checkbox"
-                              checked={showGroundStationVisibilityCircles}
-                              disabled={!schedulerLaunched}
-                              onChange={() =>
-                                setShowGroundStationVisibilityCircles((current) => !current)
-                              }
-                            />
-                            <span className="demo-switch-track" aria-hidden="true">
-                              <span className="demo-switch-thumb"></span>
-                            </span>
-                          </label>
-                        </div>
-                        <div className="map-layer-toggle">
-                          <span className="map-layer-toggle-label">
-                            <span
-                              className="map-layer-toggle-swatch map-layer-toggle-swatch--satellite"
-                              aria-hidden="true"
-                            ></span>
-                            Satellite visibility circles
-                          </span>
-                          <label className="demo-switch">
-                            <input
-                              type="checkbox"
-                              checked={showSatelliteVisibilityCircles}
-                              disabled={!schedulerLaunched}
-                              onChange={() =>
-                                setShowSatelliteVisibilityCircles((current) => !current)
-                              }
-                            />
-                            <span className="demo-switch-track" aria-hidden="true">
-                              <span className="demo-switch-thumb"></span>
-                            </span>
-                          </label>
-                        </div>
-                        <div className="map-layer-toggle">
-                          <span className="map-layer-toggle-label">
-                            <span
                               className="map-layer-toggle-swatch map-layer-toggle-swatch--ground-track"
                               aria-hidden="true"
                             ></span>
                             Ground tracks
                           </span>
-                          <label className="demo-switch">
+                          <label className="toggle-switch">
                             <input
                               type="checkbox"
                               checked={showGroundTracks}
                               disabled={!schedulerLaunched}
                               onChange={() => setShowGroundTracks((current) => !current)}
                             />
-                            <span className="demo-switch-track" aria-hidden="true">
-                              <span className="demo-switch-thumb"></span>
+                            <span className="toggle-switch-track" aria-hidden="true">
+                              <span className="toggle-switch-thumb"></span>
                             </span>
                           </label>
                         </div>
@@ -5595,11 +4990,6 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  {!useDemoData && (
-                    <div className="timeline-toolbar-copy">
-                      Current schedule activities and extracted overpasses use backend timestamps. Proposed scheduling remains empty until the backend trade-off workflow is connected.
-                    </div>
-                  )}
                 </div>
 
                 {timelineRenderRows.length === 0 ? (
@@ -5840,34 +5230,29 @@ export default function App() {
                   <div className="timeline-confirmation-copy">
                     <div className="timeline-confirmation-heading">
                       <span className="timeline-confirmation-title">Confirm Communication Schedule</span>
-                      {useDemoData && renderDemoBadge()}
                     </div>
                     <span className="timeline-confirmation-text">
-                      {useDemoData
-                        ? 'Demo mode simulates activity generation, SatOS write calls and the final confirmation state.'
-                        : 'Confirmation remains unavailable until the backend write workflow is connected.'}
+                      Commit the backend session's currently scheduled links to SatOS.
                     </span>
                   </div>
                   <div className="timeline-confirmation-actions">
                     <button
                       type="button"
                       className="btn-fetch timeline-confirm-button"
-                      disabled={!confirmDemoAvailable || confirmingSchedule}
+                      disabled={!confirmScheduleAvailable || confirmingSchedule}
                       onClick={handleConfirmSchedule}
                     >
                       {confirmingSchedule ? 'Confirming...' : 'Confirm Communication Schedule'}
                     </button>
-                    {!confirmingSchedule && !confirmDemoAvailable && (
+                    {!confirmingSchedule && !confirmScheduleAvailable && (
                       <span className="timeline-confirmation-tooltip">
-                        {!useDemoData
-                          ? 'Enable Demo to preview the confirmation workflow.'
-                          : !schedulerLaunched
-                            ? 'Launch Communication Scheduler first.'
-                            : !tradeOffsCalculated
-                              ? 'Calculate Trade-Offs first so a final schedule exists.'
-                              : finalScheduleRows.length === 0
-                                ? 'No schedulable links remain for confirmation.'
-                                : 'The final schedule is not ready yet.'}
+                        {!schedulerLaunched
+                          ? 'Launch Communication Scheduler first.'
+                          : !tradeOffsCalculated
+                            ? 'Calculate Trade-Offs first so a backend session exists.'
+                            : finalScheduleRows.length === 0
+                              ? 'The backend session currently contains no scheduled links.'
+                              : 'The final schedule is not ready yet.'}
                       </span>
                     )}
                   </div>
@@ -5879,7 +5264,7 @@ export default function App() {
                     <div className="confirmation-success-copy">
                       <strong>Success</strong>
                       <span>
-                        {confirmedScheduleCount} schedule entr{confirmedScheduleCount === 1 ? 'y was' : 'ies were'} confirmed in the demo workflow.
+                        {confirmedScheduleCount} link{confirmedScheduleCount === 1 ? '' : 's'} committed as {createdActivitiesCount} SatOS activit{createdActivitiesCount === 1 ? 'y' : 'ies'}.
                       </span>
                     </div>
                   </div>
@@ -5894,7 +5279,7 @@ export default function App() {
   // Same time span, same canvas width, same 50% inline padding as the timeline
   // canvas -- that is what lets a single scrollLeft value be mirrored between
   // the two panels and keeps every step directly under its link.
-  const dataVolumeYMaxGb = dataVolumeCapacityGb * 1.06
+  const dataVolumeYMaxGb = (dataVolumeModel?.capacityGb ?? 1) * 1.06
 
   const buildDataVolumePolyline = (points) => {
     if (!dataVolumeModel || points.length === 0) {
@@ -5967,7 +5352,7 @@ export default function App() {
                         value={dataGenerationMbps}
                         onChange={(event) => setDataGenerationMbps(event.target.value)}
                       />
-                      <span className="data-volume-unit">Mbit/s</span>
+                      <span className="data-volume-unit">MB/s</span>
                     </span>
                   </label>
                   <label className="data-volume-field">
@@ -5983,10 +5368,26 @@ export default function App() {
                       <span className="data-volume-unit">GB</span>
                     </span>
                   </label>
+                  <label className="data-volume-field">
+                    <span>Downlink</span>
+                    <span className="data-volume-input-wrap">
+                      <input
+                        type="number"
+                        min="0.1"
+                        step="0.1"
+                        value={dataDownlinkRateMbps}
+                        onChange={(event) => setDataDownlinkRateMbps(event.target.value)}
+                      />
+                      <span className="data-volume-unit">MB/s</span>
+                    </span>
+                  </label>
                   <span className="data-volume-toolbar-copy">
-                    Demo model: downlink rate scales with 1/range² from each pass's maximum elevation and the satellite's mean orbit altitude.
+                    These defaults are sent to the backend when calculating trade-offs. Relaunch after changing downlink rate so filtering uses the same value.
                   </span>
                 </div>
+                {!bufferConfigValid && (
+                  <p className="filter-error">Capacity and downlink rate must be positive; initial fill must be between zero and capacity.</p>
+                )}
 
                 {!schedulerLaunched && (
                   <p className="timeline-empty-copy">
@@ -6015,15 +5416,13 @@ export default function App() {
                         >
                           <span className="timeline-link-name">{series.name}</span>
                           <span className="data-volume-axis-label">
-                            {formatGb(dataVolumeModel.capacityGb)} capacity
+                            {formatGb(series.capacityGb)} capacity · {formatGb(series.totalDownlinkedGb)} downlinked
                           </span>
                           <span className="data-volume-flags">
                             {series.overflowed && (
                               <span className="data-volume-flag data-volume-flag--overflow">Buffer full</span>
                             )}
-                            {series.starved && (
-                              <span className="data-volume-flag data-volume-flag--starved">Link idle</span>
-                            )}
+                            {series.totalLostGb > 0 && <span className="data-volume-flag data-volume-flag--overflow">{formatGb(series.totalLostGb)} lost</span>}
                           </span>
                         </div>
                       ))}
@@ -6072,15 +5471,9 @@ export default function App() {
                                   className="data-volume-capacity-line"
                                   x1="0"
                                   x2="1000"
-                                  y1={100 - ((dataVolumeModel.capacityGb / dataVolumeYMaxGb) * 100)}
-                                  y2={100 - ((dataVolumeModel.capacityGb / dataVolumeYMaxGb) * 100)}
+                                  y1={100 - ((series.capacityGb / dataVolumeYMaxGb) * 100)}
+                                  y2={100 - ((series.capacityGb / dataVolumeYMaxGb) * 100)}
                                 />
-                                {series.alternative && (
-                                  <polyline
-                                    className="data-volume-curve data-volume-curve--alternative"
-                                    points={buildDataVolumePolyline(series.alternative.points)}
-                                  />
-                                )}
                                 <polyline
                                   className="data-volume-curve"
                                   points={buildDataVolumePolyline(series.points)}
@@ -6096,13 +5489,13 @@ export default function App() {
                                     left: `${((step.startTimestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
                                     width: `${((step.endTimestamp - step.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
                                   }}
-                                  aria-label={`${step.label}: ${Math.round(step.downlinkMbps)} megabit per second, ${formatGb(step.transferredGb)} downlinked.`}
+                                  aria-label={`${step.label}: ${step.downlinkMbps} megabytes per second, ${formatGb(step.transferredGb)} downlinked.`}
                                 >
                                   <span className="timeline-bar-tooltip" role="tooltip">
                                     <span className="timeline-bar-tooltip-inner">
                                       <strong>{step.label}</strong>
                                       <span>{series.name} → {step.gsId}</span>
-                                      <span>Rate: {Math.round(step.downlinkMbps)} Mbit/s</span>
+                                      <span>Rate: {step.downlinkMbps} MB/s</span>
                                       <span>Downlinked: {formatGb(step.transferredGb)}</span>
                                       <span>Buffer: {formatGb(step.levelBefore)} → {formatGb(step.levelAfter)}</span>
                                       {step.maxElevation && <span>Max elevation: {step.maxElevation}</span>}
@@ -6322,7 +5715,7 @@ export default function App() {
                     className="btn-fetch btn-terminate"
                     onClick={handleTerminateScheduler}
                   >
-                    Terminate
+                    Stop waiting
                   </button>
                 ) : (
                   <button

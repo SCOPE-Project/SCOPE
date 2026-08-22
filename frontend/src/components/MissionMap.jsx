@@ -269,11 +269,13 @@ const renderMapOverlay = (
   const selectedSatelliteAssets = allSatelliteAssets.filter((asset) => (
     Number.isFinite(asset.altitude)
   ))
-  const referenceSatellite = (
-    selectedSatelliteAssets.find((asset) => asset.id === activeAssetId)
-    ?? selectedSatelliteAssets[0]
-    ?? null
-  )
+  const referenceSatellite = showGroundStationVisibility
+    ? (
+      selectedSatelliteAssets.find((asset) => asset.id === activeAssetId)
+      ?? selectedSatelliteAssets[0]
+      ?? null
+    )
+    : null
   // Stationary reference altitude for the visibility footprint: the orbit's
   // mean altitude across its whole propagated track, not the live altitude
   // at the current playhead time. Using the live value made the footprint
@@ -281,7 +283,7 @@ const renderMapOverlay = (
   // pulse); the track's mean altitude is a stable stand-in for "the orbit
   // height" instead. Falls back to the live altitude if no track is
   // available yet.
-  const referenceOrbitAltitudeMeters = referenceSatellite
+  const referenceOrbitAltitudeMeters = showGroundStationVisibility && referenceSatellite
     ? (
       computeMeanTrackAltitudeMeters(satelliteTracks[referenceSatellite.name])
       ?? referenceSatellite.altitude
