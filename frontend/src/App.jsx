@@ -4630,6 +4630,17 @@ export default function App() {
             </div>
           </div>
         </div>
+        {warningTooltip.visible && createPortal((
+          <div
+            className="timeline-hover-tooltip warning-hover-tooltip"
+            style={{
+              left: `${Math.max(12, Math.min(warningTooltip.x + 16, window.innerWidth - 320))}px`,
+              top: `${Math.max(12, Math.min(warningTooltip.y + 18, window.innerHeight - 120))}px`,
+            }}
+          >
+            {warningTooltip.message}
+          </div>
+        ), document.body)}
       </div>
     )
   }

@@ -5494,6 +5494,13 @@ body {
   white-space: normal;
 }
 
+.warning-hover-tooltip {
+  border-color: #d7b27a;
+  background: #fff7ea;
+  color: #7a4b00;
+  box-shadow: 0 8px 18px rgba(31, 42, 51, 0.12);
+}
+
 .timeline-hover-tooltip--pinned {
   border-color: rgba(185, 87, 31, 0.38);
 }
