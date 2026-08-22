@@ -252,6 +252,8 @@ export default function App() {
   const [createdActivitiesCount, setCreatedActivitiesCount] = useState(0)
   const [overridingLinkId, setOverridingLinkId] = useState(null)
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
+  const [showGroundStationVisibilityCircles, setShowGroundStationVisibilityCircles] = useState(true)
+  const [showSatelliteVisibilityCircles, setShowSatelliteVisibilityCircles] = useState(true)
   const [showGroundTracks, setShowGroundTracks] = useState(true)
   const [groundTrackWindowHours, setGroundTrackWindowHours] = useState(6)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
@@ -4711,8 +4713,8 @@ export default function App() {
                         activeAssetId={activeMapAsset?.id ?? null}
                         onSelectAsset={setActiveMapAssetId}
                         timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
-                        showGroundStationVisibility={false}
-                        showSatelliteVisibility={false}
+                        showGroundStationVisibility={showGroundStationVisibilityCircles}
+                        showSatelliteVisibility={showSatelliteVisibilityCircles}
                         showGroundTracks={showGroundTracks}
                         groundTrackWindowHours={groundTrackWindowHours}
                       />
@@ -4729,6 +4731,46 @@ export default function App() {
                       }`}
                     >
                       <div className="map-layer-toggle-list">
+                        <div className="map-layer-toggle">
+                          <span className="map-layer-toggle-label">
+                            <span
+                              className="map-layer-toggle-swatch map-layer-toggle-swatch--ground-station"
+                              aria-hidden="true"
+                            ></span>
+                            Ground station visibility circles
+                          </span>
+                          <label className="toggle-switch">
+                            <input
+                              type="checkbox"
+                              checked={showGroundStationVisibilityCircles}
+                              disabled={!schedulerLaunched}
+                              onChange={() => setShowGroundStationVisibilityCircles((current) => !current)}
+                            />
+                            <span className="toggle-switch-track" aria-hidden="true">
+                              <span className="toggle-switch-thumb"></span>
+                            </span>
+                          </label>
+                        </div>
+                        <div className="map-layer-toggle">
+                          <span className="map-layer-toggle-label">
+                            <span
+                              className="map-layer-toggle-swatch map-layer-toggle-swatch--satellite"
+                              aria-hidden="true"
+                            ></span>
+                            Satellite visibility circles
+                          </span>
+                          <label className="toggle-switch">
+                            <input
+                              type="checkbox"
+                              checked={showSatelliteVisibilityCircles}
+                              disabled={!schedulerLaunched}
+                              onChange={() => setShowSatelliteVisibilityCircles((current) => !current)}
+                            />
+                            <span className="toggle-switch-track" aria-hidden="true">
+                              <span className="toggle-switch-thumb"></span>
+                            </span>
+                          </label>
+                        </div>
                         <div className="map-layer-toggle">
                           <span className="map-layer-toggle-label">
                             <span
