@@ -64,6 +64,8 @@ def test_forward_simulator_payload_inflow_and_downlink():
         satellite_configs=sat_configs,
         conflict_structure=conflict_struct,
         asset_schedules=asset_schedules,
+        scenario_start=t0,
+        scenario_end=t3,
     )
 
     assert plan["L1_Sat1"].is_scheduled is True
@@ -82,28 +84,29 @@ def test_forward_simulator_clamping_out_of_window_activities():
     Verifies that SatOS activities outside the scenario time window [T_start, T_end]
     are ignored and do not pollute the simulation.
     """
-    # Scenario window is around 2026-08-18 10:00 -> 10:10
-    t_pass_s = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
-    t_pass_e = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
+    t_scenario_s = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+    t_scenario_e = datetime(2026, 8, 18, 11, 0, 0, tzinfo=timezone.utc)
+    t_pass_s = datetime(2026, 8, 18, 10, 20, 0, tzinfo=timezone.utc)
+    t_pass_e = datetime(2026, 8, 18, 10, 30, 0, tzinfo=timezone.utc)
 
-    # Activity from 3 months ago!
-    t_old_s = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
-    t_old_e = datetime(2026, 5, 1, 1, 0, 0, tzinfo=timezone.utc)
+    # Activity preceding scenario_start (e.g. 1 hour before scenario_start)
+    t_pre_s = datetime(2026, 8, 18, 8, 0, 0, tzinfo=timezone.utc)
+    t_pre_e = datetime(2026, 8, 18, 9, 0, 0, tzinfo=timezone.utc)
 
-    act_old = Activity(
+    act_pre = Activity(
         uuid=uuid.uuid4(),
         schedule_name="Sat-1",
         status=1,
-        start_event=ScheduleEventModel(uuid=uuid.uuid4(), id="OLD_START", name="Old Act", timestamp=t_old_s, schedule_1="Sat-1"),
-        end_event=ScheduleEventModel(uuid=uuid.uuid4(), id="OLD_END", name="Old Act End", timestamp=t_old_e, schedule_1="Sat-1"),
-        name="Ancient Payload Activity",
+        start_event=ScheduleEventModel(uuid=uuid.uuid4(), id="OLD_START", name="Old Act", timestamp=t_pre_s, schedule_1="Sat-1"),
+        end_event=ScheduleEventModel(uuid=uuid.uuid4(), id="OLD_END", name="Old Act End", timestamp=t_pre_e, schedule_1="Sat-1"),
+        name="Preceding Payload Activity",
     )
 
     sat_configs = {
         "Sat-1": SatelliteBufferConfig(
             satellite_name="Sat-1",
             capacity_mb=1000.0,
-            initial_level_mb=50.0,
+            initial_level_mb=0.0,
             payload_generation_rate_mbps=1.0,
             downlink_rate_mbps=1.0,
         )
@@ -125,12 +128,32 @@ def test_forward_simulator_clamping_out_of_window_activities():
         user_overrides={},
         satellite_configs=sat_configs,
         conflict_structure=build_conflict_structure([link]),
-        asset_schedules={"Sat-1": [act_old]},
+        asset_schedules={"Sat-1": [act_pre]},
+        scenario_start=t_scenario_s,
+        scenario_end=t_scenario_e,
     )
 
     prof = profiles["Sat-1"]
-    # Ancient activity must NOT be counted in total_generated_mb
+    # Preceding activity must NOT be counted in total_generated_mb
     assert prof.total_generated_mb == 0.0
+    # Buffer start point must be exactly at t_scenario_s with initial_level_mb (0.0)
+    assert prof.profile_points[0].timestamp == t_scenario_s
+    assert prof.profile_points[0].level_mb == 0.0
+
+
+def test_forward_simulator_fails_hard_without_scenario_bounds():
+    """Verifies that ForwardSimulationScheduler raises ValueError if scenario bounds are missing."""
+    scheduler = ForwardSimulationScheduler()
+    with pytest.raises(ValueError, match="explicit scenario_start and scenario_end"):
+        scheduler.solve(
+            candidate_links={},
+            user_overrides={},
+            satellite_configs={},
+            conflict_structure=ConflictStructure(),
+            asset_schedules={},
+            scenario_start=None,
+            scenario_end=None,
+        )
 
 
 def test_forward_simulator_custom_scoring_rule_injection():
@@ -155,6 +178,8 @@ def test_forward_simulator_custom_scoring_rule_injection():
         conflict_structure=build_conflict_structure([l1, l2]),
         asset_schedules={},
         scoring_rule=DurationScoringRule(),
+        scenario_start=t_start,
+        scenario_end=t_end,
     )
 
     assert plan["L1"].is_scheduled is True
@@ -198,6 +223,8 @@ def test_forward_simulator_buffer_overflow_detection():
         satellite_configs=sat_configs,
         conflict_structure=ConflictStructure(),
         asset_schedules={"Sat-1": [act]},
+        scenario_start=t0,
+        scenario_end=t1,
     )
 
     prof = profiles["Sat-1"]
@@ -232,6 +259,8 @@ def test_forward_simulator_user_overrides():
         satellite_configs=sat_configs,
         conflict_structure=conflict_struct,
         asset_schedules={},
+        scenario_start=t_start,
+        scenario_end=t_end,
     )
     assert plan_auto["L2"].is_scheduled is True
     assert plan_auto["L1"].is_scheduled is False
@@ -243,7 +272,10 @@ def test_forward_simulator_user_overrides():
         satellite_configs=sat_configs,
         conflict_structure=conflict_struct,
         asset_schedules={},
+        scenario_start=t_start,
+        scenario_end=t_end,
     )
     assert plan_pinned["L1"].is_scheduled is True
     assert plan_pinned["L2"].is_scheduled is False
     assert "pinned" in plan_pinned["L2"].rejection_reason.lower()
+

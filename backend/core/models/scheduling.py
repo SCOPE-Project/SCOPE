@@ -132,7 +132,10 @@ class SchedulingSession:
     satellite_configs: Dict[str, SatelliteBufferConfig]
     conflict_structure: ConflictStructure
     active_scoring_strategy: str
+    scenario_start: datetime
+    scenario_end: datetime
     current_plan: Dict[str, ScheduledLinkStatus] = field(default_factory=dict)
     satellite_buffer_profiles: Dict[str, SatelliteBufferProfile] = field(default_factory=dict)
     asset_schedules: Dict[str, List[Activity]] = field(default_factory=dict)
     scoring_parameters: Dict[str, Any] = field(default_factory=dict)
+

@@ -1,6 +1,7 @@
 # core/scheduling/session_manager.py
 import uuid
 import threading
+from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from core.models.scheduling import (
@@ -27,6 +28,8 @@ class SchedulingSessionManager:
         cls,
         filter_run_id: str,
         candidate_links: List[LinkBlock],
+        scenario_start: datetime,
+        scenario_end: datetime,
         asset_schedules: Optional[Dict[str, List[Activity]]] = None,
         satellite_configs: Optional[Dict[str, SatelliteBufferConfig]] = None,
         default_capacity_mb: float = 2000.0,
@@ -43,6 +46,9 @@ class SchedulingSessionManager:
         Creates a new SchedulingSession from candidate links, builds the conflict graph,
         and computes the initial forward simulation schedule using the injected scheduler and scoring rule.
         """
+        if scenario_start is None or scenario_end is None:
+            raise ValueError("SchedulingSessionManager.create_session requires explicit scenario_start and scenario_end.")
+
         if session_id is None:
             session_id = str(uuid.uuid4())
 
@@ -83,6 +89,8 @@ class SchedulingSessionManager:
             conflict_structure=conflict_structure,
             asset_schedules=schedules_map,
             scoring_rule=active_scoring,
+            scenario_start=scenario_start,
+            scenario_end=scenario_end,
         )
 
         session = SchedulingSession(
@@ -94,6 +102,8 @@ class SchedulingSessionManager:
             conflict_structure=conflict_structure,
             active_scoring_strategy=scoring_strategy,
             scoring_parameters=params,
+            scenario_start=scenario_start,
+            scenario_end=scenario_end,
             current_plan=current_plan,
             satellite_buffer_profiles=satellite_profiles,
             asset_schedules=schedules_map,
@@ -150,6 +160,8 @@ class SchedulingSessionManager:
                 conflict_structure=session.conflict_structure,
                 asset_schedules=session.asset_schedules,
                 scoring_rule=active_scoring,
+                scenario_start=session.scenario_start,
+                scenario_end=session.scenario_end,
             )
 
             session.current_plan = current_plan
@@ -185,11 +197,14 @@ class SchedulingSessionManager:
                 conflict_structure=session.conflict_structure,
                 asset_schedules=session.asset_schedules,
                 scoring_rule=active_scoring,
+                scenario_start=session.scenario_start,
+                scenario_end=session.scenario_end,
             )
 
             session.current_plan = current_plan
             session.satellite_buffer_profiles = satellite_profiles
             return session
+
 
     @classmethod
     def get_session(cls, session_id: str) -> Optional[SchedulingSession]:

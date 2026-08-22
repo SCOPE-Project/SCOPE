@@ -124,8 +124,14 @@ def main() -> None:
         satellite_downlink_rates_mbps=sat_dl_rates,
     )
 
-    # 4. Save to LinkRepository
-    LinkRepository.save_links(filter_run_id, links)
+    # 4. Save to LinkRepository with propagation metadata
+    LinkRepository.save_links(
+        filter_run_id=filter_run_id,
+        links=links,
+        orbit_engine_run_id=args.propagation_run_id,
+        start_time=prop_result.metadata.start_time,
+        end_time=prop_result.metadata.end_time,
+    )
 
     eligible_count = sum(1 for l in links if l.is_eligible)
     available_count = sum(1 for l in links if l.is_eligible and l.is_available)

@@ -101,8 +101,14 @@ def run_filter_links_task(
             filter_run_id=task_id,
         )
 
-        # Save to LinkRepository
-        LinkRepository.save_links(filter_run_id, links)
+        # Save to LinkRepository with propagation metadata
+        LinkRepository.save_links(
+            filter_run_id=filter_run_id,
+            links=links,
+            orbit_engine_run_id=orbit_engine_run_id,
+            start_time=propagation_result.metadata.start_time,
+            end_time=propagation_result.metadata.end_time,
+        )
 
         eligible_count = sum(1 for l in links if l.is_eligible)
         baseline_blocked_count = sum(
@@ -143,6 +149,23 @@ def run_process_trade_offs_task(
         if candidate_links is None:
             raise ValueError(f"No filtered links found for filter_run_id '{filter_run_id}'.")
 
+        # Resolve scenario time window from metadata in LinkRepository
+        scenario_start, scenario_end = LinkRepository.get_time_window(filter_run_id)
+        if scenario_start is None or scenario_end is None:
+            meta = LinkRepository.get_metadata(filter_run_id) or {}
+            orbit_id = meta.get("orbit_engine_run_id")
+            if orbit_id:
+                prop_result = PropagationResultRepository.get_result(orbit_id)
+                if prop_result and prop_result.metadata:
+                    scenario_start = prop_result.metadata.start_time
+                    scenario_end = prop_result.metadata.end_time
+
+        if scenario_start is None or scenario_end is None:
+            raise ValueError(
+                f"Scenario time window (start_time, end_time) could not be resolved from metadata for filter_run_id '{filter_run_id}'. "
+                "Ensure orbit propagation and link filtering have completed."
+            )
+
         asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
 
         if scoring_config is None:
@@ -165,6 +188,8 @@ def run_process_trade_offs_task(
         session = SchedulingSessionManager.create_session(
             filter_run_id=filter_run_id,
             candidate_links=candidate_links,
+            scenario_start=scenario_start,
+            scenario_end=scenario_end,
             asset_schedules=asset_schedules,
             satellite_configs=sat_configs if sat_configs else None,
             default_capacity_mb=def_cap,
@@ -180,3 +205,4 @@ def run_process_trade_offs_task(
         state_manager.complete_task(task_id, payload=plan_dto)
     except Exception as e:
         state_manager.update_task(task_id, status="failed", message=str(e), progress=100)
+

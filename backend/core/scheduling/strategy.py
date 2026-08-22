@@ -1,5 +1,6 @@
 # core/scheduling/strategy.py
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from core.models.scheduling import (
@@ -40,9 +41,10 @@ class BufferUrgencyScoringRule(BaseScoringRule):
     Non-linear buffer urgency scoring rule:
     Score = UsefulData * (1.0 + alpha * (Buffer / Capacity)^exponent)
     """
+
     def __init__(self, alpha: float = 2.0, exponent: float = 2.0):
-        self.alpha = alpha
-        self.exponent = exponent
+        self.alpha = float(alpha)
+        self.exponent = float(exponent)
 
     def compute_score(
         self,
@@ -50,68 +52,67 @@ class BufferUrgencyScoringRule(BaseScoringRule):
         current_buffer_mb: float,
         satellite_config: SatelliteBufferConfig,
     ) -> Tuple[float, float]:
-        pass_capacity = link.duration_seconds * satellite_config.downlink_rate_mbps
+        pass_capacity = link.estimated_data_capacity_mb
         useful_data = min(current_buffer_mb, pass_capacity)
 
         capacity = satellite_config.capacity_mb
         buffer_ratio = (current_buffer_mb / capacity) if capacity > 0 else 0.0
         urgency = 1.0 + self.alpha * (buffer_ratio ** self.exponent)
-        score = useful_data * urgency
-        return score, useful_data
+        return useful_data * urgency, useful_data
 
 
 class ThroughputScoringRule(BaseScoringRule):
-    """Linear data throughput scoring rule (maximizes raw megabytes offloaded)."""
+    """Linear throughput scoring: Score = UsefulData."""
+
     def compute_score(
         self,
         link: LinkBlock,
         current_buffer_mb: float,
         satellite_config: SatelliteBufferConfig,
     ) -> Tuple[float, float]:
-        pass_capacity = link.duration_seconds * satellite_config.downlink_rate_mbps
+        pass_capacity = link.estimated_data_capacity_mb
         useful_data = min(current_buffer_mb, pass_capacity)
         return useful_data, useful_data
 
 
 class DurationScoringRule(BaseScoringRule):
-    """Pure geometric pass duration scoring rule."""
+    """Duration scoring: Score = Overpass Duration in seconds."""
+
     def compute_score(
         self,
         link: LinkBlock,
         current_buffer_mb: float,
         satellite_config: SatelliteBufferConfig,
     ) -> Tuple[float, float]:
-        pass_capacity = link.duration_seconds * satellite_config.downlink_rate_mbps
+        pass_capacity = link.estimated_data_capacity_mb
         useful_data = min(current_buffer_mb, pass_capacity)
-        return link.duration_seconds, useful_data
+        return float(link.duration_seconds), useful_data
 
 
-# Registry helper for instantiating scoring rules by name/config
+# Registered Scoring Rules
 SCORING_RULE_REGISTRY = {
     "buffer_overflow_avoidance": BufferUrgencyScoringRule,
     "max_downlink_throughput": ThroughputScoringRule,
     "max_pass_duration": DurationScoringRule,
 }
 
-def get_scoring_rule(name: str, **kwargs) -> BaseScoringRule:
-    """Factory helper to obtain a scoring rule instance by name and arbitrary parameters."""
-    cls = SCORING_RULE_REGISTRY.get(name.lower())
-    if not cls:
+
+def get_scoring_rule(strategy_name: str, **kwargs) -> BaseScoringRule:
+    """Factory resolver for scoring strategy instances."""
+    cls = SCORING_RULE_REGISTRY.get(strategy_name.lower())
+    if cls is None:
         cls = BufferUrgencyScoringRule
 
     if cls is BufferUrgencyScoringRule:
-        alpha = float(kwargs.get("alpha", 2.0))
-        exponent = float(kwargs.get("exponent", 2.0))
+        alpha = kwargs.get("alpha", 2.0)
+        exponent = kwargs.get("exponent", 2.0)
         return BufferUrgencyScoringRule(alpha=alpha, exponent=exponent)
 
-    try:
-        return cls(**kwargs)
-    except TypeError:
-        return cls()
+    return cls()
 
 
 # =====================================================================
-# Solver / Scheduler Interface
+# Scheduler Engine Interface
 # =====================================================================
 
 class BaseScheduler(ABC):
@@ -126,6 +127,8 @@ class BaseScheduler(ABC):
         conflict_structure: ConflictStructure,
         asset_schedules: Dict[str, List[Activity]],
         scoring_rule: BaseScoringRule,
+        scenario_start: datetime,
+        scenario_end: datetime,
     ) -> Tuple[Dict[str, ScheduledLinkStatus], Dict[str, SatelliteBufferProfile]]:
         """
         Executes scheduling optimization under user overrides and constraints.
