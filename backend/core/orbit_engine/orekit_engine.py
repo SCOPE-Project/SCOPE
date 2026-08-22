@@ -228,8 +228,10 @@ def run_orekit_engine(
         )
     # END FOR LOOP
     
-    # Sort overpasses chronologically
+    # Sort overpasses chronologically and assign sequential OP_xxxx identifiers
     overpass_blocks.sort(key=lambda overpass_block: overpass_block.start_time)
+    for idx, block in enumerate(overpass_blocks, start=1):
+        block.overpass_id = f"OP_{idx:04d}"
 
     metadata = build_result_metadata(
         run_id=run_id,

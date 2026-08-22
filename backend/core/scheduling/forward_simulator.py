@@ -269,6 +269,12 @@ class ForwardSimulationScheduler(BaseScheduler):
                     config = satellite_configs[sat_name]
                     override = user_overrides.get(lid, OverrideState.AUTO)
 
+                    # Obtain the computed score for this candidate link
+                    if lid in link_scores:
+                        score_val, _ = link_scores[lid]
+                    else:
+                        score_val, _ = scoring_rule.compute_score(l, current_buffer[sat_name], config)
+
                     if lid in scheduled_link_ids:
                         _, useful_offload = scoring_rule.compute_score(l, current_buffer[sat_name], config)
                         total_downlinked[sat_name] += useful_offload
@@ -302,6 +308,7 @@ class ForwardSimulationScheduler(BaseScheduler):
                             is_scheduled=True,
                             override_state=override,
                             tradeoff_id=tradeoff_id,
+                            score=round(score_val, 2),
                             useful_data_offloaded_mb=round(useful_offload, 2),
                             rejection_reason=None,
                         )
@@ -318,6 +325,7 @@ class ForwardSimulationScheduler(BaseScheduler):
                             is_scheduled=False,
                             override_state=override,
                             tradeoff_id=tradeoff_id,
+                            score=round(score_val, 2),
                             useful_data_offloaded_mb=0.0,
                             rejection_reason=reason,
                         )

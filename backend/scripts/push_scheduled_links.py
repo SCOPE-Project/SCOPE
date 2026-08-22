@@ -81,7 +81,10 @@ def load_links_from_json(json_path: Path) -> list[LinkBlock]:
 
             links.append(
                 LinkBlock(
-                    link_id=item.get("link_id", f"link_{idx}"),
+                    link_id=item.get("link_id", f"L_{idx:04d}"),
+                    link_name=item.get("link_name", item.get("link_id", f"L_{idx:04d}")),
+                    overpass_id=item.get("overpass_id", ""),
+                    overpass_name=item.get("overpass_name", ""),
                     satellite_name=item["satellite_name"],
                     groundstation_name=item["groundstation_name"],
                     start_time=start_time,
@@ -89,6 +92,7 @@ def load_links_from_json(json_path: Path) -> list[LinkBlock]:
                     duration_seconds=float(item.get("duration_seconds", (end_time - start_time).total_seconds())),
                     max_elevation_deg=float(item.get("max_elevation_deg", 0.0)),
                     high_res_trajectory=high_res,
+                    
                 )
             )
         except Exception as e:

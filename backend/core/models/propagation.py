@@ -1,9 +1,9 @@
 # core/models/propagation.py
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 
 from core.models.assets import (
     SatelliteInformation,
@@ -56,13 +56,14 @@ class OverpassProfilePoint:
 @dataclass
 class OverpassBlock:
     overpass_id: str
-    satellite_name: str
-    groundstation_name: str
-    start_time: datetime
-    end_time: datetime
-    duration_seconds: float
-    max_elevation_deg: float
-    high_res_trajectory: List[OverpassProfilePoint]
+    overpass_name: str = ""
+    satellite_name: str = ""
+    groundstation_name: str = ""
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    duration_seconds: float = 0.0
+    max_elevation_deg: float = 0.0
+    high_res_trajectory: List[OverpassProfilePoint] = field(default_factory=list)
 
 
 @dataclass

@@ -29,7 +29,9 @@ from core.scheduling.strategy import (
 
 class LinkBlockDTO(BaseModel):
     link_id: str
+    link_name: str
     overpass_id: str
+    overpass_name: str
     satellite_name: str
     groundstation_name: str
     start_time: str
@@ -46,7 +48,9 @@ class LinkBlockDTO(BaseModel):
     def from_domain(cls, domain: LinkBlock) -> "LinkBlockDTO":
         return cls(
             link_id=domain.link_id,
+            link_name=domain.link_name,
             overpass_id=domain.overpass_id,
+            overpass_name=domain.overpass_name,
             satellite_name=domain.satellite_name,
             groundstation_name=domain.groundstation_name,
             start_time=to_utc_iso_string(domain.start_time),
@@ -172,6 +176,7 @@ class ScheduledLinkStatusDTO(BaseModel):
     is_scheduled: bool
     override_state: str
     tradeoff_id: Optional[str] = None
+    score: float = 0.0
     useful_data_offloaded_mb: float = 0.0
     rejection_reason: Optional[str] = None
 
@@ -182,6 +187,7 @@ class ScheduledLinkStatusDTO(BaseModel):
             is_scheduled=domain.is_scheduled,
             override_state=str(domain.override_state.value if hasattr(domain.override_state, "value") else domain.override_state),
             tradeoff_id=domain.tradeoff_id,
+            score=domain.score,
             useful_data_offloaded_mb=domain.useful_data_offloaded_mb,
             rejection_reason=domain.rejection_reason,
         )

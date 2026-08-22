@@ -74,6 +74,7 @@ class OverpassProfilePointDTO(BaseModel):
 
 class OverpassBlockDTO(BaseModel):
     overpass_id: str
+    overpass_name: str
     satellite_name: str
     groundstation_name: str
     start_time: str
@@ -86,6 +87,7 @@ class OverpassBlockDTO(BaseModel):
     def from_domain(cls, domain: OverpassBlock) -> "OverpassBlockDTO":
         return cls(
             overpass_id=domain.overpass_id,
+            overpass_name=domain.overpass_name,
             satellite_name=domain.satellite_name,
             groundstation_name=domain.groundstation_name,
             start_time=to_utc_iso_string(domain.start_time),
