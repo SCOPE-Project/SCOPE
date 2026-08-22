@@ -1824,7 +1824,7 @@ body {
   --overview-row-height: 2.2rem;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-card);
-  overflow: visible;
+  overflow: hidden;
   margin-bottom: 0.8rem;
   background: var(--bg-panel-strong);
   flex: 1 1 auto;
@@ -1840,6 +1840,8 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   max-width: 100%;
+  padding-inline: 0.14rem;
+  box-sizing: border-box;
   overscroll-behavior-x: contain;
 }
 
@@ -1952,7 +1954,7 @@ body {
 .overview-list-grid {
   display: grid;
   grid-template-columns:
-    minmax(5.3rem, 5.3fr)
+    minmax(4.7rem, 4.7fr)
     minmax(6.6rem, 6.6fr)
     minmax(5.8rem, 5.8fr)
     minmax(6.4rem, 6.4fr)
@@ -1963,30 +1965,30 @@ body {
     minmax(5rem, 5fr);
   column-gap: 0.02rem;
   row-gap: 0;
-  width: 100%;
-  min-width: 52.3rem;
+  width: max(100%, 52.3rem);
+  min-width: 0;
 }
 
 .overview-list-grid--with-tradeoffs {
   grid-template-columns:
-    minmax(5.1rem, 5.1fr)
+    minmax(4rem, 4fr)
     minmax(6.5rem, 6.5fr)
     minmax(5.7rem, 5.7fr)
     minmax(6.2rem, 6.2fr)
     minmax(6.2rem, 6.2fr)
     minmax(5.5rem, 5.5fr)
-    minmax(5.5rem, 5.5fr)
+    minmax(4.3rem, 4.3fr)
     minmax(4.6rem, 4.6fr)
     minmax(4.8rem, 4.8fr)
     minmax(6.3rem, 6.3fr)
     minmax(5.1rem, 5.1fr)
     minmax(4.5rem, 4.5fr)
-    minmax(5.5rem, 5.5fr)
-    minmax(4.1rem, 4.1fr)
-    minmax(4.6rem, 4.6fr);
+    minmax(4.7rem, 4.7fr)
+    minmax(4.8rem, 4.8fr)
+    minmax(6rem, 6fr);
   column-gap: 0.02rem;
-  width: 100%;
-  min-width: 80.2rem;
+  width: max(100%, 80.2rem);
+  min-width: 0;
 }
 
 .overview-list-header,
@@ -2125,7 +2127,7 @@ body {
   justify-content: flex-start;
   text-align: left;
   padding-left: 0.12rem;
-  padding-right: 0.08rem;
+  padding-right: 0.28rem;
 }
 
 .overview-header-note {
@@ -2171,9 +2173,13 @@ body {
 }
 
 .overview-schedule-state-cell {
+  display: flex;
+  align-items: stretch;
   justify-content: flex-end;
+  min-width: 0;
+  overflow: hidden;
   padding-left: 0.08rem;
-  padding-right: 0.08rem;
+  padding-right: 0;
 }
 
 .overview-schedule-state {
@@ -4748,8 +4754,15 @@ body {
 }
 
 .overview-select-button {
-  width: 100%;
-  padding: 0.3rem 0.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 5.5rem;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 0 0.24rem;
   border: 1px solid var(--line-soft);
   border-radius: 0.22rem;
   background: var(--bg-panel);
@@ -4758,6 +4771,10 @@ body {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+  line-height: 1;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .overview-select-button:hover {
