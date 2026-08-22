@@ -5891,13 +5891,13 @@ export default function App() {
                       <div className="timeline-day-row">
                         <div
                           className="timeline-scenario-edge timeline-scenario-edge--start"
-                          style={{ left: `${timelineContentInsetPx}px` }}
+                          style={{ left: 0 }}
                         >
                           <span>Scenario Start</span>
                         </div>
                         <div
                           className="timeline-scenario-edge timeline-scenario-edge--end"
-                          style={{ right: `${timelineContentInsetPx}px` }}
+                          style={{ right: 0 }}
                         >
                           <span>Scenario End</span>
                         </div>
