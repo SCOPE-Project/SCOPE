@@ -39,6 +39,7 @@ def make_overpass(
     end_time: datetime,
     max_elevation: float,
     elevations: list[float],
+    overpass_name: str = "",
 ) -> OverpassBlock:
     duration = (end_time - start_time).total_seconds()
     num_pts = len(elevations)
@@ -59,6 +60,7 @@ def make_overpass(
         )
     return OverpassBlock(
         overpass_id=overpass_id,
+        overpass_name=overpass_name or f"pass__{sat_name}__{gs_name}__001",
         satellite_name=sat_name,
         groundstation_name=gs_name,
         start_time=start_time,
@@ -75,9 +77,9 @@ def test_filter_pipeline_basic_trimming_and_peak_filter():
     end_t = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
 
     # op1: Peak is 45 deg, meets min_peak_elevation=10 deg
-    op1 = make_overpass("op_01", "Sat-1", "GS-1", start_t, end_t, 45.0, [0.0, 5.0, 45.0, 5.0, 0.0])
+    op1 = make_overpass("OP_0001", "Sat-1", "GS-1", start_t, end_t, 45.0, [0.0, 5.0, 45.0, 5.0, 0.0])
     # op2: Peak is 8 deg, fails min_peak_elevation=10 deg
-    op2 = make_overpass("op_02", "Sat-1", "GS-2", start_t, end_t, 8.0, [0.0, 2.0, 8.0, 2.0, 0.0])
+    op2 = make_overpass("OP_0002", "Sat-1", "GS-2", start_t, end_t, 8.0, [0.0, 2.0, 8.0, 2.0, 0.0])
 
     prop_result = PropagationResult(
         metadata=PropagationMetadata(
@@ -103,12 +105,19 @@ def test_filter_pipeline_basic_trimming_and_peak_filter():
 
     assert len(links) == 2
     l1 = links[0]
+    assert l1.link_id == "L_0001"
+    assert l1.link_name.startswith("link__Sat-1__GS-1__filter_")
+    assert l1.overpass_id == "OP_0001"
+    assert l1.overpass_name == "pass__Sat-1__GS-1__001"
     assert l1.is_eligible is True
     assert l1.eligibility_status == LinkEligibilityStatus.ELIGIBLE
     assert l1.start_time > start_t
     assert l1.end_time < end_t
 
     l2 = links[1]
+    assert l2.link_id == "L_0002"
+    assert l2.link_name.startswith("link__Sat-1__GS-2__filter_")
+    assert l2.overpass_id == "OP_0002"
     assert l2.is_eligible is False
     assert l2.eligibility_status == LinkEligibilityStatus.EXCLUDED_BY_PEAK_ELEVATION
 

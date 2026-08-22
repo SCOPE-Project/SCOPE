@@ -28,7 +28,10 @@ def clean_repositories():
 
 
 def create_sample_scheduled_link(
-    link_id: str = "link_001",
+    link_id: str = "L_0001",
+    link_name: str = "link__Satellite-Alpha__GS-Kiruna__filter_0001__0001",
+    overpass_id: str = "OP_0001",
+    overpass_name: str = "pass__Satellite-Alpha__GS-Kiruna__001",
     sat_name: str = "Satellite-Alpha",
     gs_name: str = "GS-Kiruna",
 ) -> LinkBlock:
@@ -45,6 +48,9 @@ def create_sample_scheduled_link(
     )
     return LinkBlock(
         link_id=link_id,
+        link_name=link_name,
+        overpass_id=overpass_id,
+        overpass_name=overpass_name,
         satellite_name=sat_name,
         groundstation_name=gs_name,
         start_time=start_time,
@@ -80,7 +86,7 @@ def test_create_activities_from_single_scheduled_link():
 
     # Validate AOS Event
     aos = sat_activity.start_event
-    assert aos.id == "link_001_AOS"
+    assert aos.id == f"{link.link_id}_AOS"
     assert aos.name == "AOS: Satellite-Alpha - GS-Kiruna"
     assert aos.schedule_1 == "Satellite-Alpha"
     assert aos.schedule_2 == "GS-Kiruna"
@@ -88,7 +94,7 @@ def test_create_activities_from_single_scheduled_link():
 
     # Validate LOS Event
     los = sat_activity.end_event
-    assert los.id == "link_001_LOS"
+    assert los.id == f"{link.link_id}_LOS"
     assert los.name == "LOS: Satellite-Alpha - GS-Kiruna"
     assert los.schedule_1 == "Satellite-Alpha"
     assert los.schedule_2 == "GS-Kiruna"

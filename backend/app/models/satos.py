@@ -105,6 +105,9 @@ class UpdateSatelliteStateResponse(BaseModel):
 
 class ScheduledLinkDTO(BaseModel):
     link_id: str
+    link_name: Optional[str] = None
+    overpass_id: Optional[str] = None
+    overpass_name: Optional[str] = None
     satellite_name: str
     groundstation_name: str
     start_time: datetime
@@ -116,6 +119,9 @@ class ScheduledLinkDTO(BaseModel):
     def to_domain(self) -> LinkBlock:
         return LinkBlock(
             link_id=self.link_id,
+            link_name=self.link_name or "",
+            overpass_id=self.overpass_id or "",
+            overpass_name=self.overpass_name or "",
             satellite_name=self.satellite_name,
             groundstation_name=self.groundstation_name,
             start_time=self.start_time,
@@ -140,6 +146,9 @@ class ScheduledLinkDTO(BaseModel):
     def from_domain(cls, domain: LinkBlock) -> "ScheduledLinkDTO":
         return cls(
             link_id=domain.link_id,
+            link_name=domain.link_name,
+            overpass_id=domain.overpass_id,
+            overpass_name=domain.overpass_name,
             satellite_name=domain.satellite_name,
             groundstation_name=domain.groundstation_name,
             start_time=domain.start_time,

@@ -195,14 +195,14 @@ def build_overpass_block(
 
     satellite_name = overpass_event.satellite_name
     groundstation_name = overpass_event.groundstation_info.name
-    overpass_id = (
-        f"{satellite_name}__"
-        f"{groundstation_name}__"
-        f"pass_{pair_pass_number:03d}"
+    overpass_name = (
+        f"pass__{satellite_name}__{groundstation_name}__{pair_pass_number:03d}"
     )
+    overpass_id = f"OP_{pair_pass_number:04d}"
 
     return OverpassBlock(
         overpass_id=overpass_id,
+        overpass_name=overpass_name,
         satellite_name=satellite_name,
         groundstation_name=groundstation_name,
         start_time=overpass_start_time,

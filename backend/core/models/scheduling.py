@@ -24,13 +24,15 @@ class OverrideState(str, Enum):
 @dataclass
 class LinkBlock:
     link_id: str
-    satellite_name: str
-    groundstation_name: str
-    start_time: datetime
-    end_time: datetime
-    duration_seconds: float
-    max_elevation_deg: float
+    link_name: str = ""
     overpass_id: str = ""
+    overpass_name: str = ""
+    satellite_name: str = ""
+    groundstation_name: str = ""
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    duration_seconds: float = 0.0
+    max_elevation_deg: float = 0.0
     estimated_data_capacity_mb: float = 0.0
     high_res_trajectory: List[OverpassProfilePoint] = field(default_factory=list)
     is_eligible: bool = True

@@ -103,7 +103,8 @@ def derive_and_filter_links(
     derived_links: List[LinkBlock] = []
 
     for idx, overpass in enumerate(propagation_result.overpass_blocks, start=1):
-        link_id = f"link_{overpass.satellite_name}_{overpass.groundstation_name}_{idx:04d}_{filter_run_id[:8]}"
+        link_id = f"L_{idx:04d}"
+        link_name = f"link__{overpass.satellite_name}__{overpass.groundstation_name}__filter_{filter_run_id[:8]}__{idx:04d}"
 
         # 1. Apply Trimming & Peak Elevation Filters
         trimmed_start, trimmed_end, trimmed_trajectory, is_elevation_valid = trim_overpass_by_elevation(
@@ -120,13 +121,15 @@ def derive_and_filter_links(
             )
             link = LinkBlock(
                 link_id=link_id,
+                link_name=link_name,
+                overpass_id=overpass.overpass_id,
+                overpass_name=overpass.overpass_name,
                 satellite_name=overpass.satellite_name,
                 groundstation_name=overpass.groundstation_name,
                 start_time=trimmed_start,
                 end_time=trimmed_end,
                 duration_seconds=0.0,
                 max_elevation_deg=overpass.max_elevation_deg,
-                overpass_id=overpass.overpass_id,
                 estimated_data_capacity_mb=0.0,
                 high_res_trajectory=trimmed_trajectory,
                 is_eligible=False,
@@ -167,13 +170,15 @@ def derive_and_filter_links(
             act_name = colliding_activity.name or f"Activity-{colliding_activity.uuid}"
             link = LinkBlock(
                 link_id=link_id,
+                link_name=link_name,
+                overpass_id=overpass.overpass_id,
+                overpass_name=overpass.overpass_name,
                 satellite_name=overpass.satellite_name,
                 groundstation_name=overpass.groundstation_name,
                 start_time=trimmed_start,
                 end_time=trimmed_end,
                 duration_seconds=duration_sec,
                 max_elevation_deg=overpass.max_elevation_deg,
-                overpass_id=overpass.overpass_id,
                 estimated_data_capacity_mb=estimated_capacity_mb,
                 high_res_trajectory=trimmed_trajectory,
                 is_eligible=False,
@@ -184,13 +189,15 @@ def derive_and_filter_links(
         else:
             link = LinkBlock(
                 link_id=link_id,
+                link_name=link_name,
+                overpass_id=overpass.overpass_id,
+                overpass_name=overpass.overpass_name,
                 satellite_name=overpass.satellite_name,
                 groundstation_name=overpass.groundstation_name,
                 start_time=trimmed_start,
                 end_time=trimmed_end,
                 duration_seconds=duration_sec,
                 max_elevation_deg=overpass.max_elevation_deg,
-                overpass_id=overpass.overpass_id,
                 estimated_data_capacity_mb=estimated_capacity_mb,
                 high_res_trajectory=trimmed_trajectory,
                 is_eligible=True,

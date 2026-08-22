@@ -29,7 +29,9 @@ from core.scheduling.strategy import (
 
 class LinkBlockDTO(BaseModel):
     link_id: str
+    link_name: str
     overpass_id: str
+    overpass_name: str
     satellite_name: str
     groundstation_name: str
     start_time: str
@@ -46,7 +48,9 @@ class LinkBlockDTO(BaseModel):
     def from_domain(cls, domain: LinkBlock) -> "LinkBlockDTO":
         return cls(
             link_id=domain.link_id,
+            link_name=domain.link_name,
             overpass_id=domain.overpass_id,
+            overpass_name=domain.overpass_name,
             satellite_name=domain.satellite_name,
             groundstation_name=domain.groundstation_name,
             start_time=to_utc_iso_string(domain.start_time),

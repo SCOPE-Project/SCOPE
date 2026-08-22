@@ -268,7 +268,8 @@ def test_filter_pipeline_custom_downlink_rate():
         global_tracks=[],
         overpass_blocks=[
             OverpassBlock(
-                overpass_id="op_sat1",
+                overpass_id="OP_0001",
+                overpass_name="pass__Sat-1__GS-1__001",
                 satellite_name="Sat-1",
                 groundstation_name="GS-1",
                 start_time=datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc),
@@ -278,7 +279,8 @@ def test_filter_pipeline_custom_downlink_rate():
                 high_res_trajectory=[],
             ),
             OverpassBlock(
-                overpass_id="op_sat2",
+                overpass_id="OP_0002",
+                overpass_name="pass__Sat-2__GS-1__001",
                 satellite_name="Sat-2",
                 groundstation_name="GS-1",
                 start_time=datetime(2026, 8, 18, 11, 0, 0, tzinfo=timezone.utc),

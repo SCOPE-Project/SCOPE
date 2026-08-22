@@ -126,8 +126,10 @@ class OverrideState(str, Enum):
 
 @dataclass(frozen=True)
 class LinkBlock:
-    link_id: str                                    # e.g., "link_sat1_gs1_001"
-    overpass_id: str                                # Reference to parent OverpassBlock
+    link_id: str                                    # Numerical ID, e.g., "L_0001"
+    link_name: str                                  # Elaborate string, e.g., "link__sat1__gs1__filter_filt-998__0001"
+    overpass_id: str                                # Numerical reference, e.g., "OP_0001"
+    overpass_name: str                              # Elaborate overpass reference, e.g., "pass__sat1__gs1__001"
     satellite_name: str
     groundstation_name: str
     start_time: datetime
@@ -391,8 +393,10 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
     "elevation_excluded_links_count": 2,
     "links": [
       {
-        "link_id": "link_sat1_gs1_001",
-        "overpass_id": "op_001",
+        "link_id": "L_0001",
+        "link_name": "link__sat1__gs1__filter_filt-998__0001",
+        "overpass_id": "OP_0001",
+        "overpass_name": "pass__sat1__gs1__001",
         "satellite_name": "Sat1",
         "groundstation_name": "GS1",
         "start_time": "2026-08-18T10:00:00Z",
@@ -405,8 +409,10 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
         "ineligibility_reason": null
       },
       {
-        "link_id": "link_sat1_gs2_001",
-        "overpass_id": "op_002",
+        "link_id": "L_0002",
+        "link_name": "link__sat1__gs2__filter_filt-998__0002",
+        "overpass_id": "OP_0002",
+        "overpass_name": "pass__sat1__gs2__001",
         "satellite_name": "Sat1",
         "groundstation_name": "GS2",
         "start_time": "2026-08-18T11:30:00Z",
