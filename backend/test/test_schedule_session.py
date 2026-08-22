@@ -312,3 +312,58 @@ def test_filter_pipeline_custom_downlink_rate():
     assert link1.estimated_data_capacity_mb == 600.0 * 10.0   # 6000 MB
     assert link2.estimated_data_capacity_mb == 600.0 * 50.0   # 30000 MB
 
+
+def test_apply_override_auto_unpin_conflicts():
+    """
+    Tests that pinning a link automatically unpins any conflicting links that were
+    previously pinned, reverting them to AUTO.
+    """
+    filter_id = "test_filt_auto_unpin"
+    t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+    t_end = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
+
+    # L1 and L2 compete for the same groundstation GS-1 at the exact same time
+    l1 = LinkBlock(link_id="L1", overpass_id="op1", satellite_name="Sat-1", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+    l2 = LinkBlock(link_id="L2", overpass_id="op2", satellite_name="Sat-2", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+
+    LinkRepository.save_links(filter_id, [l1, l2])
+
+    session = SchedulingSessionManager.create_session(
+        filter_run_id=filter_id,
+        candidate_links=[l1, l2],
+        satellite_configs={
+            "Sat-1": SatelliteBufferConfig(satellite_name="Sat-1", capacity_mb=2000.0, initial_level_mb=500.0),
+            "Sat-2": SatelliteBufferConfig(satellite_name="Sat-2", capacity_mb=2000.0, initial_level_mb=100.0),
+        },
+        session_id="sess_auto_unpin_test",
+    )
+
+    # 1. Initially Sat-1 has higher buffer -> L1 is scheduled in AUTO
+    assert session.current_plan["L1"].is_scheduled is True
+    assert session.current_plan["L2"].is_scheduled is False
+
+    # 2. Pin L2 (even though Sat-2 has lower buffer)
+    session_after_pin_l2 = SchedulingSessionManager.apply_override(
+        session_id="sess_auto_unpin_test",
+        link_id="L2",
+        override_state=OverrideState.PINNED,
+    )
+    assert session_after_pin_l2.user_overrides == {"L2": OverrideState.PINNED}
+    assert session_after_pin_l2.current_plan["L2"].is_scheduled is True
+    assert session_after_pin_l2.current_plan["L1"].is_scheduled is False
+
+    # 3. Now Pin conflicting L1 -> L2 should be automatically unpinned (reverted to AUTO)
+    session_after_pin_l1 = SchedulingSessionManager.apply_override(
+        session_id="sess_auto_unpin_test",
+        link_id="L1",
+        override_state=OverrideState.PINNED,
+    )
+    assert "L2" not in session_after_pin_l1.user_overrides
+    assert session_after_pin_l1.user_overrides == {"L1": OverrideState.PINNED}
+    assert session_after_pin_l1.current_plan["L1"].is_scheduled is True
+    assert session_after_pin_l1.current_plan["L1"].override_state == OverrideState.PINNED
+    assert session_after_pin_l1.current_plan["L2"].is_scheduled is False
+    assert session_after_pin_l1.current_plan["L2"].override_state == OverrideState.AUTO
+    assert "pinned" in session_after_pin_l1.current_plan["L2"].rejection_reason.lower()
+
+

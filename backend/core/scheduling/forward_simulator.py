@@ -229,9 +229,12 @@ class ForwardSimulationScheduler(BaseScheduler):
 
                 scheduled_link_ids: Set[str] = set()
 
-                # Schedule PINNED links unconditionally
+                # Schedule PINNED links (honoring mutual exclusion if multiple pinned links conflict)
                 for p_link in pinned_links:
-                    scheduled_link_ids.add(p_link.link_id)
+                    pid = p_link.link_id
+                    conflicts = conflict_structure.adjacency_list.get(pid, set())
+                    if not any(conflict_id in scheduled_link_ids for conflict_id in conflicts):
+                        scheduled_link_ids.add(pid)
 
                 # For AUTO links, compute scores via injected BaseScoringRule
                 unassigned_links = [

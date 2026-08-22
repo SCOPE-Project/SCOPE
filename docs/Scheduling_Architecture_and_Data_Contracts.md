@@ -488,6 +488,9 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
     "override_state": "pinned"
   }
   ```
+* **Conflict Handling (Auto-Unpin):**
+  - When setting `override_state = "pinned"`, any conflicting candidate links in the same `TradeOffGroup` (e.g. overlapping ground station passes or concurrent satellite contacts) that were previously pinned are **automatically unpinned** and reverted to `"auto"`.
+  - This guarantees physical consistency and prevents multiple concurrent links on single-antenna assets.
 * **Response Body (`SessionPlanDTO`):**
   - Updated `current_plan` (map of link statuses).
   - Updated `satellite_buffer_profiles` (piecewise curve points + overflow events).

@@ -128,6 +128,14 @@ class SchedulingSessionManager:
             # Update override state
             if override_state == OverrideState.AUTO:
                 session.user_overrides.pop(link_id, None)
+            elif override_state == OverrideState.PINNED:
+                # Auto-unpin any conflicting links that are currently pinned
+                if session.conflict_structure and session.conflict_structure.adjacency_list:
+                    conflicts = session.conflict_structure.adjacency_list.get(link_id, set())
+                    for conflict_id in conflicts:
+                        if session.user_overrides.get(conflict_id) == OverrideState.PINNED:
+                            session.user_overrides.pop(conflict_id, None)
+                session.user_overrides[link_id] = OverrideState.PINNED
             else:
                 session.user_overrides[link_id] = override_state
 
