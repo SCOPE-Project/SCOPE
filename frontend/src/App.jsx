@@ -836,6 +836,14 @@ export default function App() {
     return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`
   }
 
+  const formatTimelineItemDuration = (item) => {
+    if (item?.kind === 'link' && Number.isFinite(item.durationSeconds) && item.durationSeconds > 0) {
+      return formatDurationFromSeconds(item.durationSeconds)
+    }
+
+    return formatTimelineDuration(item?.startTime, item?.endTime)
+  }
+
   const formatTimelineDay = (date, timeMode) =>
     `${date.toLocaleDateString([], {
       year: 'numeric',
@@ -1003,6 +1011,7 @@ export default function App() {
           overpassId: row.overpassId,
           satId: row.satId,
           gsId: row.gsId,
+          durationSeconds: row.durationSeconds,
           label: row.backendLinkId ?? row.linkId,
           detail: hasTradeOff
             ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
@@ -1061,6 +1070,7 @@ export default function App() {
           assetName: item.detail,
           label: item.label,
           detail: item.detail,
+          durationSeconds: null,
           startTime: item.startTime,
           endTime: item.endTime,
           startTimestamp,
@@ -3471,7 +3481,7 @@ export default function App() {
       <span>{item.detail}</span>
       <span>Start: {formatTimelineDateTime(item.startTime)}</span>
       <span>End: {formatTimelineDateTime(item.endTime)}</span>
-      <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
+      <span>Duration: {formatTimelineItemDuration(item)}</span>
       {item.recommended && <span>Auto-scheduled by the backend</span>}
       {item.overrideState && item.overrideState !== 'auto' && <span>Override: {item.overrideState}</span>}
       {Number.isFinite(getDisplayDataDownlinkMb(item)) && getDisplayDataDownlinkMb(item) > 0 && (
@@ -4101,7 +4111,7 @@ export default function App() {
         aria-pressed={isLink ? marked : undefined}
         aria-haspopup={isLink ? 'dialog' : undefined}
         aria-expanded={isLink ? pinned : undefined}
-        aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
+        aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineItemDuration(item)}.`}
       ></button>
     )
   }
