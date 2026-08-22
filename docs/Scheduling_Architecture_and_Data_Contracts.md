@@ -150,6 +150,7 @@ class ScheduledLinkStatus:
     is_scheduled: bool
     override_state: OverrideState
     tradeoff_id: Optional[str] = None               # Assigned TradeOffGroup ID (if eligible)
+    score: float = 0.0                              # Computed priority score from scoring rule
     useful_data_offloaded_mb: float = 0.0
     rejection_reason: Optional[str] = None          # e.g., "Lost trade-off to Link_Sat2_GS1", "Ineligible link"
 ```

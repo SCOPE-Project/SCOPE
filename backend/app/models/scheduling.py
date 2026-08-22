@@ -176,6 +176,7 @@ class ScheduledLinkStatusDTO(BaseModel):
     is_scheduled: bool
     override_state: str
     tradeoff_id: Optional[str] = None
+    score: float = 0.0
     useful_data_offloaded_mb: float = 0.0
     rejection_reason: Optional[str] = None
 
@@ -186,6 +187,7 @@ class ScheduledLinkStatusDTO(BaseModel):
             is_scheduled=domain.is_scheduled,
             override_state=str(domain.override_state.value if hasattr(domain.override_state, "value") else domain.override_state),
             tradeoff_id=domain.tradeoff_id,
+            score=domain.score,
             useful_data_offloaded_mb=domain.useful_data_offloaded_mb,
             rejection_reason=domain.rejection_reason,
         )

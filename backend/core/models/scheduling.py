@@ -47,6 +47,7 @@ class ScheduledLinkStatus:
     is_scheduled: bool
     override_state: OverrideState
     tradeoff_id: Optional[str] = None
+    score: float = 0.0
     useful_data_offloaded_mb: float = 0.0
     rejection_reason: Optional[str] = None
 

@@ -68,6 +68,7 @@ def test_forward_simulator_payload_inflow_and_downlink():
 
     assert plan["L1_Sat1"].is_scheduled is True
     assert plan["L1_Sat1"].useful_data_offloaded_mb == 400.0
+    assert plan["L1_Sat1"].score > 0.0
 
     profile = profiles["Sat-1"]
     assert profile.total_generated_mb == 300.0
