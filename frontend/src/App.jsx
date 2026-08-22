@@ -2234,6 +2234,27 @@ export default function App() {
       const pointsByLinkAndEvent = new Map(
         profilePoints.map((point) => [`${point.associatedId}:${point.eventType}`, point]),
       )
+      const payloadWindows = profilePoints
+        .filter((point) => point.eventType === 'payload_start' && point.associatedId)
+        .map((startPoint) => {
+          const endPoint = pointsByLinkAndEvent.get(`${startPoint.associatedId}:payload_end`)
+          if (!endPoint) {
+            return null
+          }
+
+          const visibleStartTimestamp = Math.max(startTimestamp, startPoint.timestamp)
+          const visibleEndTimestamp = Math.min(endTimestamp, endPoint.timestamp)
+          if (visibleEndTimestamp <= visibleStartTimestamp) {
+            return null
+          }
+
+          return {
+            id: startPoint.associatedId,
+            startTimestamp: visibleStartTimestamp,
+            endTimestamp: visibleEndTimestamp,
+          }
+        })
+        .filter(Boolean)
       const downlinkRateMbps = sessionPlan.satellite_configs?.[group.name]?.downlink_rate_mbps ?? 0
       const steps = finalScheduleRows
         .filter((row) => row.satId === group.name)
@@ -2260,6 +2281,7 @@ export default function App() {
         name: group.name,
         capacityGb: Number(profile.capacity_mb ?? 0) / 1000,
         points: profilePoints,
+        payloadWindows,
         steps,
         overflowed: (profile.overflow_events ?? []).length > 0,
         totalGeneratedGb: Number(profile.total_generated_mb ?? 0) / 1000,
@@ -3817,6 +3839,16 @@ export default function App() {
     toggleTimelineTooltipPin(item, event)
   }
 
+  const handleTimelineBackgroundClick = (event) => {
+    if (event.target.closest('button, [role="slider"]')) {
+      return
+    }
+
+    setMarkedTimelineLinkId(null)
+    setMarkedTradeOffOptionId(null)
+    hideTimelineTooltip(true)
+  }
+
   const getOptionForOverpassId = (overpassId) => tradeOffCards
     .flatMap((card) => card.options)
     .find((option) => option.overpassId === overpassId) ?? null
@@ -5360,7 +5392,7 @@ export default function App() {
                 {timelineRenderRows.length === 0 ? (
                   <p className="timeline-empty-copy">Enable at least one timeline layer and one asset section to display the schedule view.</p>
                 ) : (
-                  <div className="timeline-layout">
+                  <div className="timeline-layout" onClick={handleTimelineBackgroundClick}>
                     <div className="timeline-label-column">
                       <div className="timeline-label-cell timeline-label-cell--day"></div>
                       <div className="timeline-label-cell timeline-label-cell--axis"></div>
@@ -5599,6 +5631,19 @@ export default function App() {
                             >
                               {series ? (
                                 <>
+                                  {series.payloadWindows.map((payloadWindow) => (
+                                    <span
+                                      key={`${series.id}-payload-${payloadWindow.id}`}
+                                      className="data-volume-payload-window"
+                                      style={{
+                                        left: `${((payloadWindow.startTimestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
+                                        width: `${((payloadWindow.endTimestamp - payloadWindow.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
+                                      }}
+                                      role="img"
+                                      aria-label={`Payload data generation from ${formatTimelineDateTime(payloadWindow.startTimestamp)} to ${formatTimelineDateTime(payloadWindow.endTimestamp)}.`}
+                                      title={`Payload data generation: ${formatTimelineDateTime(payloadWindow.startTimestamp)} – ${formatTimelineDateTime(payloadWindow.endTimestamp)}`}
+                                    ></span>
+                                  ))}
                                   <svg
                                     className="data-volume-chart"
                                     viewBox="0 0 1000 100"
