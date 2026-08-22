@@ -110,15 +110,17 @@ def test_filter_pipeline_basic_trimming_and_peak_filter():
     assert l1.overpass_id == "OP_0001"
     assert l1.overpass_name == "pass__Sat-1__GS-1__001"
     assert l1.is_eligible is True
+    assert l1.is_available is True
     assert l1.eligibility_status == LinkEligibilityStatus.ELIGIBLE
     assert l1.start_time > start_t
     assert l1.end_time < end_t
 
     l2 = links[1]
-    assert l2.link_id == "L_0002"
-    assert l2.link_name.startswith("link__Sat-1__GS-2__filter_")
+    assert l2.link_id == ""
+    assert l2.link_name == ""
     assert l2.overpass_id == "OP_0002"
     assert l2.is_eligible is False
+    assert l2.is_available is False
     assert l2.eligibility_status == LinkEligibilityStatus.EXCLUDED_BY_PEAK_ELEVATION
 
     stored_links = LinkRepository.get_links(filter_run_id)
@@ -154,7 +156,9 @@ def test_filter_pipeline_no_filters_applied():
 
     assert len(links) == 1
     l = links[0]
+    assert l.link_id == "L_0001"
     assert l.is_eligible is True
+    assert l.is_available is True
     assert l.start_time == start_t
     assert l.end_time == end_t
     assert l.duration_seconds == 600.0
@@ -187,7 +191,9 @@ def test_filter_pipeline_trimming_without_compliant_points():
     LinkRepository.save_links(filter_run_id, links)
 
     assert len(links) == 1
+    assert links[0].link_id == ""
     assert links[0].is_eligible is False
+    assert links[0].is_available is False
     assert links[0].eligibility_status == LinkEligibilityStatus.EXCLUDED_BY_PEAK_ELEVATION
 
 
@@ -235,7 +241,9 @@ def test_filter_pipeline_baseline_collision():
 
     assert len(links) == 1
     link = links[0]
-    assert link.is_eligible is False
+    assert link.link_id == "L_0001"
+    assert link.is_eligible is True
+    assert link.is_available is False
     assert link.eligibility_status == LinkEligibilityStatus.BLOCKED_BY_BASELINE_ACTIVITY
     assert link.conflicting_activity_uuid == str(act_uuid)
     assert "Payload Imaging Pass" in link.ineligibility_reason

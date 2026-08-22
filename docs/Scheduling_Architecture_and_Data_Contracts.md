@@ -124,9 +124,9 @@ class OverrideState(str, Enum):
     PINNED = "pinned"       # User locked ON (Hard constraint = 1)
     EXCLUDED = "excluded"   # User locked OFF (Hard constraint = 0)
 
-@dataclass(frozen=True)
+@dataclass
 class LinkBlock:
-    link_id: str                                    # Numerical ID, e.g., "L_0001"
+    link_id: str                                    # Numerical ID, e.g., "L_0001" (empty string "" if is_eligible is False)
     link_name: str                                  # Elaborate string, e.g., "link__sat1__gs1__filter_filt-998__0001"
     overpass_id: str                                # Numerical reference, e.g., "OP_0001"
     overpass_name: str                              # Elaborate overpass reference, e.g., "pass__sat1__gs1__001"
@@ -139,7 +139,8 @@ class LinkBlock:
     estimated_data_capacity_mb: float
     
     # Eligibility & Baseline Conflict Metadata
-    is_eligible: bool = True                        # True if schedulable by Trade-Off engine
+    is_eligible: bool = True                        # True if geometrically sound potential link (passes elevation thresholds)
+    is_available: bool = True                       # True if no conflict with immutable SatOS schedule (schedulable by Trade-Off engine)
     eligibility_status: LinkEligibilityStatus = LinkEligibilityStatus.ELIGIBLE
     ineligibility_reason: Optional[str] = None      # e.g., "Collides with SatOS Imaging Activity 'OBS_01'"
     conflicting_activity_uuid: Optional[str] = None # UUID of blocking SatOS activity

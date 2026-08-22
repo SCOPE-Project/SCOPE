@@ -40,6 +40,7 @@ class LinkBlockDTO(BaseModel):
     max_elevation_deg: float
     estimated_data_capacity_mb: float
     is_eligible: bool
+    is_available: bool = True
     eligibility_status: str
     ineligibility_reason: Optional[str] = None
     conflicting_activity_uuid: Optional[str] = None
@@ -59,6 +60,7 @@ class LinkBlockDTO(BaseModel):
             max_elevation_deg=domain.max_elevation_deg,
             estimated_data_capacity_mb=domain.estimated_data_capacity_mb,
             is_eligible=domain.is_eligible,
+            is_available=domain.is_available,
             eligibility_status=str(domain.eligibility_status.value if hasattr(domain.eligibility_status, "value") else domain.eligibility_status),
             ineligibility_reason=domain.ineligibility_reason,
             conflicting_activity_uuid=domain.conflicting_activity_uuid,

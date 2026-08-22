@@ -46,11 +46,11 @@ class SchedulingSessionManager:
         if session_id is None:
             session_id = str(uuid.uuid4())
 
-        links_by_id: Dict[str, LinkBlock] = {l.link_id: l for l in candidate_links}
-        eligible_links = [l for l in candidate_links if l.is_eligible]
+        links_by_id: Dict[str, LinkBlock] = {l.link_id: l for l in candidate_links if l.link_id}
+        schedulable_links = [l for l in candidate_links if l.is_eligible and l.is_available]
 
-        # Build conflict graph over eligible links
-        conflict_structure = build_conflict_structure(eligible_links)
+        # Build conflict graph over schedulable links
+        conflict_structure = build_conflict_structure(schedulable_links)
 
         # Set up satellite buffer configurations
         resolved_satellite_configs: Dict[str, SatelliteBufferConfig] = dict(satellite_configs or {})
