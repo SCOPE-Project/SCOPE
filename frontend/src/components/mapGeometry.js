@@ -146,6 +146,42 @@ export const clipPolylineToLatitudeRange = (
 
 export const EARTH_MEAN_RADIUS_METERS = 6371008.8
 
+// Propagated tracks are read far more often than they are replaced. Normalise
+// them once at the API boundary so animation frames do not repeatedly parse
+// every ISO timestamp and sort the same array. The WeakMap keeps callers that
+// still pass a raw backend array fast after their first lookup as well.
+const preparedTrackCache = new WeakMap()
+const meanAltitudeCache = new WeakMap()
+
+export const prepareTrackPoints = (trackPoints) => {
+  if (!Array.isArray(trackPoints) || trackPoints.length === 0) {
+    return []
+  }
+
+  const cached = preparedTrackCache.get(trackPoints)
+  if (cached) {
+    return cached
+  }
+
+  const prepared = trackPoints
+    .map((point) => ({
+      ...point,
+      timestampMs: Number.isFinite(point?.timestampMs)
+        ? point.timestampMs
+        : Date.parse(point?.timestamp),
+    }))
+    .filter((point) => (
+      Number.isFinite(point.timestampMs)
+      && Number.isFinite(point.latitude_deg)
+      && Number.isFinite(point.longitude_deg)
+    ))
+    .sort((first, second) => first.timestampMs - second.timestampMs)
+
+  preparedTrackCache.set(trackPoints, prepared)
+  preparedTrackCache.set(prepared, prepared)
+  return prepared
+}
+
 // WGS84 rotational ellipsoid (semi-major/semi-minor axes). Ground station
 // visibility footprints below are drawn with spherical trigonometry, which
 // needs a single "Earth radius" -- but the true geocentric distance to the
@@ -197,15 +233,33 @@ export const geocentricEarthRadiusMeters = (latitudeDegrees) => {
 // altitude) instead of the live interpolated altitude at the current
 // playhead time.
 export const computeMeanTrackAltitudeMeters = (trackPoints) => {
-  const altitudes = (trackPoints ?? [])
-    .map((point) => point?.altitude_m)
-    .filter((altitude) => Number.isFinite(altitude))
-
-  if (altitudes.length === 0) {
+  if (!Array.isArray(trackPoints) || trackPoints.length === 0) {
     return null
   }
 
-  return altitudes.reduce((sum, altitude) => sum + altitude, 0) / altitudes.length
+  const points = trackPoints
+  const cached = meanAltitudeCache.get(points)
+  if (cached !== undefined) {
+    return cached
+  }
+
+  let altitudeTotal = 0
+  let altitudeCount = 0
+  points.forEach((point) => {
+    if (Number.isFinite(point.altitude_m)) {
+      altitudeTotal += point.altitude_m
+      altitudeCount += 1
+    }
+  })
+
+  if (altitudeCount === 0) {
+    meanAltitudeCache.set(points, null)
+    return null
+  }
+
+  const meanAltitude = altitudeTotal / altitudeCount
+  meanAltitudeCache.set(points, meanAltitude)
+  return meanAltitude
 }
 
 export const buildCoordinateGrid = (
@@ -248,14 +302,7 @@ export const interpolateTrackPosition = (trackPoints, targetTimestamp) => {
     return null
   }
 
-  const points = (trackPoints ?? [])
-    .map((point) => ({ ...point, timestampMs: Date.parse(point?.timestamp) }))
-    .filter((point) => (
-      Number.isFinite(point.timestampMs)
-      && Number.isFinite(point.latitude_deg)
-      && Number.isFinite(point.longitude_deg)
-    ))
-    .sort((first, second) => first.timestampMs - second.timestampMs)
+  const points = prepareTrackPoints(trackPoints)
 
   if (
     points.length === 0
@@ -265,8 +312,22 @@ export const interpolateTrackPosition = (trackPoints, targetTimestamp) => {
     return null
   }
 
-  const exactPoint = points.find((point) => point.timestampMs === targetTimestamp)
-  if (exactPoint) {
+  // Find the first sample at or after the requested timestamp. Binary search
+  // keeps playback lookup logarithmic even for long, high-resolution tracks.
+  let lower = 0
+  let upper = points.length - 1
+  while (lower < upper) {
+    const midpoint = Math.floor((lower + upper) / 2)
+    if (points[midpoint].timestampMs < targetTimestamp) {
+      lower = midpoint + 1
+    } else {
+      upper = midpoint
+    }
+  }
+
+  const nextIndex = lower
+  const exactPoint = points[nextIndex]
+  if (exactPoint.timestampMs === targetTimestamp) {
     return {
       latitude: exactPoint.latitude_deg,
       longitude: normalizeSignedLongitude(exactPoint.longitude_deg),
@@ -275,7 +336,6 @@ export const interpolateTrackPosition = (trackPoints, targetTimestamp) => {
     }
   }
 
-  const nextIndex = points.findIndex((point) => point.timestampMs > targetTimestamp)
   const previous = points[nextIndex - 1]
   const next = points[nextIndex]
   const interpolationRatio = (
@@ -316,21 +376,34 @@ export const interpolateTrackPosition = (trackPoints, targetTimestamp) => {
 // disabled (non-finite/non-positive windowHours), so callers can pass this
 // straight through without an extra branch.
 export const clipTrackToTimeWindow = (trackPoints, centerTimestampIso, windowHours) => {
-  const points = trackPoints ?? []
+  const sourcePoints = Array.isArray(trackPoints) ? trackPoints : []
   const centerTimestampMs = Date.parse(centerTimestampIso)
 
   if (!Number.isFinite(centerTimestampMs) || !Number.isFinite(windowHours) || windowHours <= 0) {
-    return points
+    return sourcePoints
   }
+
+  const points = prepareTrackPoints(sourcePoints)
 
   const halfWindowMs = (windowHours / 2) * 60 * 60 * 1000
   const rangeStartMs = centerTimestampMs - halfWindowMs
   const rangeEndMs = centerTimestampMs + halfWindowMs
 
-  return points.filter((point) => {
-    const timestampMs = Date.parse(point?.timestamp)
-    return Number.isFinite(timestampMs) && timestampMs >= rangeStartMs && timestampMs <= rangeEndMs
-  })
+  const lowerBound = (target) => {
+    let lower = 0
+    let upper = points.length
+    while (lower < upper) {
+      const midpoint = Math.floor((lower + upper) / 2)
+      if (points[midpoint].timestampMs < target) {
+        lower = midpoint + 1
+      } else {
+        upper = midpoint
+      }
+    }
+    return lower
+  }
+
+  return points.slice(lowerBound(rangeStartMs), lowerBound(rangeEndMs + 1))
 }
 
 export const calculateElevationFootprintAngle = (

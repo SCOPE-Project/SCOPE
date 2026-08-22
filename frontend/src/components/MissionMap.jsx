@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import {
   buildGeodesicCircle,
   calculateElevationFootprintAngle,
@@ -6,6 +6,7 @@ import {
   clipTrackToTimeWindow,
   computeMeanTrackAltitudeMeters,
   geocentricEarthRadiusMeters,
+  interpolateTrackPosition,
   normalizeSignedLongitude,
   splitCoordinatesAtAntimeridian,
   splitTrackAtAntimeridian,
@@ -205,13 +206,21 @@ const renderMapOverlay = (
   showSatelliteVisibility,
   showGroundTracks,
   groundTrackWindowHours,
+  {
+    renderGrid = true,
+    renderStatic = true,
+    renderDynamic = true,
+  } = {},
 ) => {
   if (!overlayGroup || width <= 0 || height <= 0) {
     return
   }
 
   const projectPoint = (coordinate) => project(coordinate[0], coordinate[1], view, width, height)
-  const fragment = document.createDocumentFragment()
+  const toWorldPoint = (coordinate) => ({ x: coordinate[0], y: -coordinate[1] })
+  const gridFragment = document.createDocumentFragment()
+  const staticFragment = document.createDocumentFragment()
+  const dynamicFragment = document.createDocumentFragment()
   const {
     minimumLongitude,
     maximumLongitude,
@@ -219,40 +228,42 @@ const renderMapOverlay = (
     maximumLatitude,
   } = getVisibleGeographicBounds(view, width, height)
 
-  const longitudeValues = getGridValues(
-    minimumLongitude,
-    maximumLongitude,
-    getNiceGridStep(maximumLongitude - minimumLongitude),
-  )
-  const latitudeValues = getGridValues(
-    minimumLatitude,
-    maximumLatitude,
-    getNiceGridStep(maximumLatitude - minimumLatitude),
-  )
+  if (renderGrid) {
+    const longitudeValues = getGridValues(
+      minimumLongitude,
+      maximumLongitude,
+      getNiceGridStep(maximumLongitude - minimumLongitude),
+    )
+    const latitudeValues = getGridValues(
+      minimumLatitude,
+      maximumLatitude,
+      getNiceGridStep(maximumLatitude - minimumLatitude),
+    )
 
-  longitudeValues.forEach((longitude) => {
-    const start = projectPoint([longitude, minimumLatitude])
-    const end = projectPoint([longitude, maximumLatitude])
-    appendPath(fragment, 'mission-map-coordinate-grid-line', [start, end])
-    const x = projectPoint([longitude, 0]).x
-    if (x > 34 && x < width - 34) {
-      const label = formatGridCoordinate(longitude, 'E', 'W')
-      appendGridLabel(fragment, label, x, 14, 'middle', 'longitude', 'start')
-      appendGridLabel(fragment, label, x, height - 5, 'middle', 'longitude', 'end')
-    }
-  })
+    longitudeValues.forEach((longitude) => {
+      const start = projectPoint([longitude, minimumLatitude])
+      const end = projectPoint([longitude, maximumLatitude])
+      appendPath(gridFragment, 'mission-map-coordinate-grid-line', [start, end])
+      const x = projectPoint([longitude, 0]).x
+      if (x > 34 && x < width - 34) {
+        const label = formatGridCoordinate(longitude, 'E', 'W')
+        appendGridLabel(gridFragment, label, x, 14, 'middle', 'longitude', 'start')
+        appendGridLabel(gridFragment, label, x, height - 5, 'middle', 'longitude', 'end')
+      }
+    })
 
-  latitudeValues.forEach((latitude) => {
-    const start = projectPoint([minimumLongitude, latitude])
-    const end = projectPoint([maximumLongitude, latitude])
-    appendPath(fragment, 'mission-map-coordinate-grid-line', [start, end])
-    const y = projectPoint([0, latitude]).y
-    if (y > 22 && y < height - 22) {
-      const label = formatGridCoordinate(latitude, 'N', 'S')
-      appendGridLabel(fragment, label, 5, y + 3, 'start', 'latitude', 'start')
-      appendGridLabel(fragment, label, width - 5, y + 3, 'end', 'latitude', 'end')
-    }
-  })
+    latitudeValues.forEach((latitude) => {
+      const start = projectPoint([minimumLongitude, latitude])
+      const end = projectPoint([maximumLongitude, latitude])
+      appendPath(gridFragment, 'mission-map-coordinate-grid-line', [start, end])
+      const y = projectPoint([0, latitude]).y
+      if (y > 22 && y < height - 22) {
+        const label = formatGridCoordinate(latitude, 'N', 'S')
+        appendGridLabel(gridFragment, label, 5, y + 3, 'start', 'latitude', 'start')
+        appendGridLabel(gridFragment, label, width - 5, y + 3, 'end', 'latitude', 'end')
+      }
+    })
+  }
 
   const allSatelliteAssets = assets.filter((asset) => asset.markerType === 'satellite')
   const selectedSatelliteAssets = allSatelliteAssets.filter((asset) => (
@@ -277,7 +288,7 @@ const renderMapOverlay = (
     )
     : null
 
-  if (showGroundStationVisibility && referenceSatellite && Number.isFinite(referenceOrbitAltitudeMeters)) {
+  if (renderStatic && showGroundStationVisibility && referenceSatellite && Number.isFinite(referenceOrbitAltitudeMeters)) {
     assets
       .filter((asset) => (
         asset.markerType === 'ground-station'
@@ -307,11 +318,11 @@ const renderMapOverlay = (
           ))
           .forEach((segment) => {
             appendPath(
-              fragment,
+              staticFragment,
               isActiveStation
                 ? 'mission-map-elevation-footprint mission-map-elevation-footprint--active'
                 : 'mission-map-elevation-footprint',
-              segment.map(projectPoint),
+              segment.map(toWorldPoint),
             )
           })
       })
@@ -325,7 +336,7 @@ const renderMapOverlay = (
   // than the live interpolated altitude, for the same reason ground-station
   // footprints do: it keeps the circle a stable size instead of pulsing on
   // every timeline tick for eccentric orbits.
-  if (showSatelliteVisibility) {
+  if (renderDynamic && showSatelliteVisibility) {
     selectedSatelliteAssets.forEach((satellite) => {
       const satelliteAltitudeMeters = (
         computeMeanTrackAltitudeMeters(satelliteTracks[satellite.name])
@@ -356,17 +367,17 @@ const renderMapOverlay = (
         ))
         .forEach((segment) => {
           appendPath(
-            fragment,
+            dynamicFragment,
             isActiveSatellite
               ? 'mission-map-satellite-footprint mission-map-satellite-footprint--active'
               : 'mission-map-satellite-footprint',
-            segment.map(projectPoint),
+            segment.map(toWorldPoint),
           )
         })
     })
   }
 
-  if (showGroundTracks) {
+  if (renderDynamic && showGroundTracks) {
     allSatelliteAssets.forEach((satellite) => {
       // Center the windowed track on this satellite's own live (interpolated)
       // position timestamp, so each satellite's "current pass" window tracks
@@ -386,17 +397,60 @@ const renderMapOverlay = (
 
       segments.forEach((segment) => {
         appendPath(
-          fragment,
+          dynamicFragment,
           isActiveSatellite
             ? 'mission-map-track-path mission-map-orbit-path mission-map-orbit-path--active'
             : 'mission-map-track-path mission-map-orbit-path',
-          segment.map(projectPoint),
+          segment.map(toWorldPoint),
         )
       })
     })
   }
 
-  overlayGroup.replaceChildren(fragment)
+  const ensureLayer = (className) => {
+    let layer = overlayGroup.querySelector(`:scope > .${className}`)
+    if (!layer) {
+      layer = createSvgElement('g', className)
+      overlayGroup.append(layer)
+    }
+    return layer
+  }
+
+  const gridLayer = ensureLayer('mission-map-overlay-grid')
+  const staticLayer = ensureLayer('mission-map-overlay-static')
+  const dynamicLayer = ensureLayer('mission-map-overlay-dynamic')
+  const overlayTransform = worldGroupTransform(view, width, height)
+  staticLayer.setAttribute('transform', overlayTransform)
+  dynamicLayer.setAttribute('transform', overlayTransform)
+  if (renderGrid) {
+    gridLayer.replaceChildren(gridFragment)
+  }
+  if (renderStatic) {
+    staticLayer.replaceChildren(staticFragment)
+  }
+  if (renderDynamic) {
+    dynamicLayer.replaceChildren(dynamicFragment)
+  }
+}
+
+const assetTimestampFormatters = {
+  local: new Intl.DateTimeFormat([], {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }),
+  utc: new Intl.DateTimeFormat([], {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'UTC',
+  }),
 }
 
 const formatAssetTimestamp = (value, timeMode) => {
@@ -405,15 +459,7 @@ const formatAssetTimestamp = (value, timeMode) => {
     return '—'
   }
 
-  const formatted = new Intl.DateTimeFormat([], {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    ...(timeMode === 'utc' ? { timeZone: 'UTC' } : {}),
-  }).format(date)
+  const formatted = assetTimestampFormatters[timeMode === 'utc' ? 'utc' : 'local'].format(date)
   return `${formatted} ${timeMode === 'local' ? 'Local' : 'UTC'}`
 }
 
@@ -588,7 +634,7 @@ const syncAssetMarkers = (
   })
 }
 
-export default function MissionMap({
+const MissionMap = memo(forwardRef(function MissionMap({
   assets,
   satelliteTracks,
   activeAssetId,
@@ -599,7 +645,7 @@ export default function MissionMap({
   showSatelliteVisibility = true,
   showGroundTracks = true,
   groundTrackWindowHours = 0,
-}) {
+}, forwardedRef) {
   // Below this height there isn't room for the informational overlays
   // (legend, fit-to-selection buttons, coordinate readout, scale bar, grid
   // labels) without them overlapping each other, so they're hidden while
@@ -619,6 +665,7 @@ export default function MissionMap({
   const mapReadyRef = useRef(false)
   const overlayInteractionSnapshotRef = useRef(null)
   const renderFrameRef = useRef(null)
+  const lastDynamicOverlayRenderRef = useRef(0)
   const markersRef = useRef(new Map())
   const assetsRef = useRef(assets)
   const satelliteTracksRef = useRef(satelliteTracks)
@@ -631,6 +678,43 @@ export default function MissionMap({
   const groundTrackWindowHoursRef = useRef(groundTrackWindowHours)
   const [mapStatus, setMapStatus] = useState('loading')
   const [worldPaths, setWorldPaths] = useState([])
+
+  useImperativeHandle(forwardedRef, () => ({
+    setHeight(nextHeightPx) {
+      if (!mapShellRef.current || !Number.isFinite(nextHeightPx)) {
+        return
+      }
+      mapShellRef.current.style.height = `${nextHeightPx}px`
+      mapShellRef.current.classList.toggle('mission-map-shell--compact', nextHeightPx < 140)
+    },
+    setPlayheadTime(timestamp) {
+      if (!Number.isFinite(timestamp)) {
+        return
+      }
+
+      const nextAssets = assetsRef.current.map((asset) => {
+        if (asset.markerType !== 'satellite') {
+          return asset
+        }
+
+        const position = interpolateTrackPosition(
+          satelliteTracksRef.current[asset.name],
+          timestamp,
+        )
+        return position ? { ...asset, ...position } : asset
+      })
+      assetsRef.current = nextAssets
+      const now = (typeof performance !== 'undefined' ? performance : Date).now()
+      const redrawDynamicOverlay = now - lastDynamicOverlayRenderRef.current >= 80
+      if (redrawDynamicOverlay) {
+        lastDynamicOverlayRenderRef.current = now
+      }
+      renderFrameRef.current?.({
+        dynamicOnly: redrawDynamicOverlay,
+        markersOnly: !redrawDynamicOverlay,
+      })
+    },
+  }), [])
 
   // This MUST be useLayoutEffect, not useEffect: the render-triggering
   // effect further below (the one that calls renderFrameRef.current?.() for
@@ -713,7 +797,7 @@ export default function MissionMap({
       height: container.clientHeight,
     })
 
-    const renderFrame = () => {
+    const renderFrame = ({ dynamicOnly = false, markersOnly = false, viewOnly = false } = {}) => {
       const { width, height } = getSize()
       if (width <= 0 || height <= 0) {
         return
@@ -724,25 +808,39 @@ export default function MissionMap({
       if (worldGroupRef.current) {
         worldGroupRef.current.setAttribute('transform', worldGroupTransform(view, width, height))
       }
+      const overlayTransform = worldGroupTransform(view, width, height)
+      overlayGroupRef.current
+        ?.querySelector(':scope > .mission-map-overlay-static')
+        ?.setAttribute('transform', overlayTransform)
+      overlayGroupRef.current
+        ?.querySelector(':scope > .mission-map-overlay-dynamic')
+        ?.setAttribute('transform', overlayTransform)
 
       const overlayData = overlayInteractionSnapshotRef.current ?? {
         assets: assetsRef.current,
         satelliteTracks: satelliteTracksRef.current,
         activeAssetId: activeAssetIdRef.current,
       }
-      renderMapOverlay(
-        overlayGroupRef.current,
-        view,
-        width,
-        height,
-        overlayData.assets,
-        overlayData.satelliteTracks,
-        overlayData.activeAssetId,
-        showGroundStationVisibilityRef.current,
-        showSatelliteVisibilityRef.current,
-        showGroundTracksRef.current,
-        groundTrackWindowHoursRef.current,
-      )
+      if (!markersOnly) {
+        renderMapOverlay(
+          overlayGroupRef.current,
+          view,
+          width,
+          height,
+          overlayData.assets,
+          overlayData.satelliteTracks,
+          overlayData.activeAssetId,
+          showGroundStationVisibilityRef.current,
+          showSatelliteVisibilityRef.current,
+          showGroundTracksRef.current,
+          groundTrackWindowHoursRef.current,
+          viewOnly
+            ? { renderGrid: true, renderStatic: false, renderDynamic: false }
+            : dynamicOnly
+              ? { renderGrid: false, renderStatic: false, renderDynamic: true }
+              : undefined,
+        )
+      }
       syncAssetMarkers(
         container,
         markers,
@@ -771,14 +869,18 @@ export default function MissionMap({
     renderFrameRef.current = renderFrame
 
     let renderQueued = false
-    const scheduleRender = () => {
+    let queuedFullRender = false
+    const scheduleRender = ({ full = false } = {}) => {
+      queuedFullRender ||= full
       if (renderQueued) {
         return
       }
       renderQueued = true
       window.requestAnimationFrame(() => {
         renderQueued = false
-        renderFrame()
+        const renderFullFrame = queuedFullRender
+        queuedFullRender = false
+        renderFrame(renderFullFrame ? undefined : { viewOnly: true })
       })
     }
 
@@ -832,7 +934,7 @@ export default function MissionMap({
 
     const endInteractionSnapshot = () => {
       overlayInteractionSnapshotRef.current = null
-      scheduleRender()
+      scheduleRender({ full: true })
     }
 
     const recomputeInteractionMode = () => {
@@ -1069,17 +1171,9 @@ export default function MissionMap({
   }, [worldPaths])
 
   // useLayoutEffect (not useEffect) is required here: this does the actual
-  // imperative DOM write for marker/overlay positions on every asset update.
-  // During fast timeline playback, `assets` changes up to ~60x/second (once
-  // per animation frame). useEffect's "passive effect" flush is scheduled
-  // asynchronously and can interleave out of order with other
-  // requestAnimationFrame callbacks (including the playback loop that
-  // drives these very updates), which let an older position occasionally
-  // get painted after a newer one -- visible as the satellite marker
-  // briefly jumping backward ("vibrating") before snapping forward again,
-  // especially at high playback speeds where updates are most frequent.
-  // useLayoutEffect runs synchronously right after each commit, before the
-  // browser paints, so writes always land in commit order.
+  // imperative DOM write for marker/overlay positions on every React asset
+  // update. Playback frames use setPlayheadTime above and avoid React commits;
+  // this effect keeps ordinary selection/data commits synchronous with paint.
   useLayoutEffect(() => {
     if (!mapReadyRef.current) {
       return
@@ -1297,4 +1391,6 @@ export default function MissionMap({
       )}
     </div>
   )
-}
+}))
+
+export default MissionMap
