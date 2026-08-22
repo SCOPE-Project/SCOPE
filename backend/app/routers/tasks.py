@@ -70,12 +70,8 @@ def trigger_process_trade_offs(payload: TradeOffRequest, background_tasks: Backg
         task_orchestrator.run_process_trade_offs_task,
         task_id=task_id,
         filter_run_id=payload.filter_run_id,
-        initial_buffer_levels_mb=payload.initial_buffer_levels_mb,
         satellite_buffer_configs=payload.satellite_buffer_configs,
         default_buffer_config=payload.default_buffer_config,
-        buffer_capacities_mb=payload.buffer_capacities_mb,
-        payload_generation_rates_mbps=payload.payload_generation_rates_mbps,
-        downlink_rates_mbps=payload.downlink_rates_mbps,
         scoring_config=payload.scoring_config,
     )
     return {"task_id": task_id, "status": "Queued"}

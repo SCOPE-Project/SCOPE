@@ -29,10 +29,6 @@ class SchedulingSessionManager:
         candidate_links: List[LinkBlock],
         asset_schedules: Optional[Dict[str, List[Activity]]] = None,
         satellite_configs: Optional[Dict[str, SatelliteBufferConfig]] = None,
-        initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
-        buffer_capacities_mb: Optional[Dict[str, float]] = None,
-        payload_generation_rates_mbps: Optional[Dict[str, float]] = None,
-        downlink_rates_mbps: Optional[Dict[str, float]] = None,
         default_capacity_mb: float = 2000.0,
         default_initial_level_mb: float = 0.0,
         default_payload_generation_rate_mbps: float = 15.0,
@@ -50,55 +46,26 @@ class SchedulingSessionManager:
         if session_id is None:
             session_id = str(uuid.uuid4())
 
-        links_by_id: Dict[str, LinkBlock] = {l.link_id: l for l in candidate_links}
-        eligible_links = [l for l in candidate_links if l.is_eligible]
+        links_by_id: Dict[str, LinkBlock] = {l.link_id: l for l in candidate_links if l.link_id}
+        schedulable_links = [l for l in candidate_links if l.is_eligible and l.is_available]
 
-        # Build conflict graph over eligible links
-        conflict_structure = build_conflict_structure(eligible_links)
+        # Build conflict graph over schedulable links
+        conflict_structure = build_conflict_structure(schedulable_links)
 
         # Set up satellite buffer configurations
-        configs_dict = dict(satellite_configs or {})
-        initial_buffers = initial_buffer_levels_mb or {}
-        capacities = buffer_capacities_mb or {}
-        generation_rates = payload_generation_rates_mbps or {}
-        downlink_rates = downlink_rates_mbps or {}
+        resolved_satellite_configs: Dict[str, SatelliteBufferConfig] = dict(satellite_configs or {})
 
-        resolved_satellite_configs: Dict[str, SatelliteBufferConfig] = {}
-
-        # 1. Ingest any explicitly provided SatelliteBufferConfig objects
-        for sat, cfg in configs_dict.items():
-            resolved_satellite_configs[sat] = cfg
-
-        # 2. Ensure every satellite present in candidate_links has a complete config
+        # Ensure every satellite present in candidate_links has a complete config
         for link in candidate_links:
             sat = link.satellite_name
             if sat not in resolved_satellite_configs:
                 resolved_satellite_configs[sat] = SatelliteBufferConfig(
                     satellite_name=sat,
-                    capacity_mb=capacities.get(sat, default_capacity_mb),
-                    initial_level_mb=initial_buffers.get(sat, default_initial_level_mb),
-                    payload_generation_rate_mbps=generation_rates.get(sat, default_payload_generation_rate_mbps),
-                    downlink_rate_mbps=downlink_rates.get(sat, default_downlink_rate_mbps),
+                    capacity_mb=default_capacity_mb,
+                    initial_level_mb=default_initial_level_mb,
+                    payload_generation_rate_mbps=default_payload_generation_rate_mbps,
+                    downlink_rate_mbps=default_downlink_rate_mbps,
                 )
-            else:
-                existing = resolved_satellite_configs[sat]
-                new_init = initial_buffers.get(sat, existing.initial_level_mb)
-                new_cap = capacities.get(sat, existing.capacity_mb)
-                new_gen = generation_rates.get(sat, existing.payload_generation_rate_mbps)
-                new_dl = downlink_rates.get(sat, existing.downlink_rate_mbps)
-                if (
-                    new_init != existing.initial_level_mb
-                    or new_cap != existing.capacity_mb
-                    or new_gen != existing.payload_generation_rate_mbps
-                    or new_dl != existing.downlink_rate_mbps
-                ):
-                    resolved_satellite_configs[sat] = SatelliteBufferConfig(
-                        satellite_name=sat,
-                        capacity_mb=new_cap,
-                        initial_level_mb=new_init,
-                        payload_generation_rate_mbps=new_gen,
-                        downlink_rate_mbps=new_dl,
-                    )
 
         user_overrides: Dict[str, OverrideState] = {}
         schedules_map = asset_schedules or {}
@@ -161,6 +128,14 @@ class SchedulingSessionManager:
             # Update override state
             if override_state == OverrideState.AUTO:
                 session.user_overrides.pop(link_id, None)
+            elif override_state == OverrideState.PINNED:
+                # Auto-unpin any conflicting links that are currently pinned
+                if session.conflict_structure and session.conflict_structure.adjacency_list:
+                    conflicts = session.conflict_structure.adjacency_list.get(link_id, set())
+                    for conflict_id in conflicts:
+                        if session.user_overrides.get(conflict_id) == OverrideState.PINNED:
+                            session.user_overrides.pop(conflict_id, None)
+                session.user_overrides[link_id] = OverrideState.PINNED
             else:
                 session.user_overrides[link_id] = override_state
 

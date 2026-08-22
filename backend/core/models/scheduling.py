@@ -36,6 +36,7 @@ class LinkBlock:
     estimated_data_capacity_mb: float = 0.0
     high_res_trajectory: List[OverpassProfilePoint] = field(default_factory=list)
     is_eligible: bool = True
+    is_available: bool = True
     eligibility_status: LinkEligibilityStatus = LinkEligibilityStatus.ELIGIBLE
     ineligibility_reason: Optional[str] = None
     conflicting_activity_uuid: Optional[str] = None

@@ -150,16 +150,16 @@ class ForwardSimulationScheduler(BaseScheduler):
         # 4. Output Plan Maps
         current_plan: Dict[str, ScheduledLinkStatus] = {}
 
-        # Initialize ineligible links in current_plan immediately
+        # Initialize unavailable or ineligible links in current_plan immediately
         for lid, link in candidate_links.items():
-            if not link.is_eligible:
+            if not link.is_available or not link.is_eligible:
                 current_plan[lid] = ScheduledLinkStatus(
                     link=link,
                     is_scheduled=False,
                     override_state=user_overrides.get(lid, OverrideState.AUTO),
                     tradeoff_id=None,
                     useful_data_offloaded_mb=0.0,
-                    rejection_reason=link.ineligibility_reason or "Ineligible link",
+                    rejection_reason=link.ineligibility_reason or "Unavailable link",
                 )
 
         # 5. Simulation Execution Loop
@@ -229,9 +229,12 @@ class ForwardSimulationScheduler(BaseScheduler):
 
                 scheduled_link_ids: Set[str] = set()
 
-                # Schedule PINNED links unconditionally
+                # Schedule PINNED links (honoring mutual exclusion if multiple pinned links conflict)
                 for p_link in pinned_links:
-                    scheduled_link_ids.add(p_link.link_id)
+                    pid = p_link.link_id
+                    conflicts = conflict_structure.adjacency_list.get(pid, set())
+                    if not any(conflict_id in scheduled_link_ids for conflict_id in conflicts):
+                        scheduled_link_ids.add(pid)
 
                 # For AUTO links, compute scores via injected BaseScoringRule
                 unassigned_links = [
