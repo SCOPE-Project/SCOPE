@@ -88,6 +88,7 @@ class BufferEventType(str, Enum):
     DOWNLINK_START = "downlink_start"
     DOWNLINK_END = "downlink_end"
     OVERFLOW_OCCURRED = "overflow"
+    SCENARIO_END = "end"
 
 
 @dataclass
