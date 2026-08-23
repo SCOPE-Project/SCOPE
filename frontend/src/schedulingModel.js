@@ -191,3 +191,75 @@ export const buildSelectedOptionsFromPlan = (sessionPlan) => Object.fromEntries(
 )
 
 export const getScheduledRows = (rows) => rows.filter((row) => row.isScheduled)
+
+export const buildCommitSummary = (finalScheduleRows = [], sessionPlan = null) => {
+  const satelliteMap = new Map()
+  const groundStationMap = new Map()
+
+  let totalOffloadedMb = 0
+  let totalDurationSeconds = 0
+
+  const sortedRows = [...finalScheduleRows].sort((a, b) =>
+    new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+  )
+
+  sortedRows.forEach((row) => {
+    const offloadMb = Number(row.usefulDataOffloadedMb ?? 0)
+    const duration = Number(row.durationSeconds ?? 0)
+    totalOffloadedMb += offloadMb
+    totalDurationSeconds += duration
+
+    const satId = row.satId || 'Unknown Satellite'
+    if (!satelliteMap.has(satId)) {
+      const profile = sessionPlan?.satellite_buffer_profiles?.[satId]
+      satelliteMap.set(satId, {
+        satId,
+        links: [],
+        totalDurationSeconds: 0,
+        totalOffloadedMb: 0,
+        capacityMb: Number(profile?.capacity_mb ?? 0),
+        peakBufferMb: Number(profile?.peak_level_mb ?? 0),
+        finalBufferMb: Number(profile?.final_level_mb ?? 0),
+        totalGeneratedMb: Number(profile?.total_generated_mb ?? 0),
+        totalDownlinkedMb: Number(profile?.total_downlinked_mb ?? 0),
+        totalLostMb: Number(profile?.total_lost_mb ?? 0),
+      })
+    }
+    const satGroup = satelliteMap.get(satId)
+    satGroup.links.push(row)
+    satGroup.totalDurationSeconds += duration
+    satGroup.totalOffloadedMb += offloadMb
+
+    const gsId = row.gsId || 'Unknown Station'
+    if (!groundStationMap.has(gsId)) {
+      groundStationMap.set(gsId, {
+        gsId,
+        links: [],
+        totalDurationSeconds: 0,
+        totalOffloadedMb: 0,
+      })
+    }
+    const gsGroup = groundStationMap.get(gsId)
+    gsGroup.links.push(row)
+    gsGroup.totalDurationSeconds += duration
+    gsGroup.totalOffloadedMb += offloadMb
+  })
+
+  const satellites = Array.from(satelliteMap.values()).sort((a, b) =>
+    a.satId.localeCompare(b.satId)
+  )
+
+  const groundStations = Array.from(groundStationMap.values()).sort((a, b) =>
+    a.gsId.localeCompare(b.gsId)
+  )
+
+  return {
+    totalScheduledLinks: finalScheduleRows.length,
+    totalOffloadedMb,
+    totalOffloadedGb: (totalOffloadedMb / 1000).toFixed(2),
+    totalDurationSeconds,
+    totalDurationMinutes: Math.round(totalDurationSeconds / 60),
+    satellites,
+    groundStations,
+  }
+}

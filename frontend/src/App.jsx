@@ -16,6 +16,7 @@ import {
 } from './api/scopeApi.js'
 import {
   applySessionPlanToRows,
+  buildCommitSummary,
   buildRowsFromFilteredLinks,
   buildSelectedOptionsFromPlan,
   buildTradeOffCardsFromPlan,
@@ -256,6 +257,7 @@ export default function App() {
   const [confirmingSchedule, setConfirmingSchedule] = useState(false)
   const [confirmationProgress, setConfirmationProgress] = useState(0)
   const [confirmationStep, setConfirmationStep] = useState('')
+  const [isScheduleStaged, setIsScheduleStaged] = useState(false)
   const [confirmationSuccess, setConfirmationSuccess] = useState(false)
   const [confirmedScheduleCount, setConfirmedScheduleCount] = useState(0)
   const [createdActivitiesCount, setCreatedActivitiesCount] = useState(0)
@@ -491,6 +493,7 @@ export default function App() {
 
   useEffect(() => {
     const animationFrameId = window.requestAnimationFrame(() => {
+      setIsScheduleStaged(false)
       setConfirmationSuccess(false)
       setConfirmedScheduleCount(0)
       setCreatedActivitiesCount(0)
@@ -577,6 +580,19 @@ export default function App() {
     }
 
     return `${Math.round(seconds / 60)} min`
+  }
+
+  const formatUtcEventDateTime = (value) => {
+    if (!value) return '—'
+    const date = new Date(value)
+    if (!Number.isFinite(date.getTime())) return '—'
+    const year = date.getUTCFullYear()
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+    const day = String(date.getUTCDate()).padStart(2, '0')
+    const hours = String(date.getUTCHours()).padStart(2, '0')
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0')
+    const seconds = String(date.getUTCSeconds()).padStart(2, '0')
+    return `${year}-${month}-${day}, ${hours}:${minutes}:${seconds}`
   }
 
   const getTimeZoneFormatOptions = (timeMode) =>
@@ -1379,6 +1395,7 @@ export default function App() {
     setConfirmingSchedule(false)
     setConfirmationProgress(0)
     setConfirmationStep('')
+    setIsScheduleStaged(false)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
@@ -1614,6 +1631,7 @@ export default function App() {
     setExpandedTimelineSections({ satellites: true, groundStations: true })
     setMarkedTimelineLinkId(null)
     setMarkedTradeOffOptionId(null)
+    setIsScheduleStaged(false)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
@@ -1772,6 +1790,7 @@ export default function App() {
         : 0,
     )
     setTradeOffsCalculated(true)
+    setIsScheduleStaged(false)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
@@ -1824,7 +1843,20 @@ export default function App() {
     }
   }
 
-  const handleConfirmSchedule = async () => {
+  const handleConfirmSchedule = () => {
+    if (!sessionId || finalScheduleRows.length === 0 || confirmingSchedule) {
+      return
+    }
+    setError(null)
+    setConfirmationSuccess(false)
+    setIsScheduleStaged(true)
+  }
+
+  const handleBackToEdit = () => {
+    setIsScheduleStaged(false)
+  }
+
+  const handleCommitToSatOS = async () => {
     if (!sessionId || finalScheduleRows.length === 0 || confirmingSchedule) {
       return
     }
@@ -2239,6 +2271,10 @@ export default function App() {
     && bufferConfigValid
     && tradeOffConfigValid
   const finalScheduleRows = getScheduledRows(overviewRows)
+  const commitSummary = useMemo(
+    () => buildCommitSummary(finalScheduleRows, sessionPlan),
+    [finalScheduleRows, sessionPlan],
+  )
   const overviewRowByLinkId = useMemo(
     () => new Map(overviewRows.map((row) => [row.backendLinkId ?? row.linkId, row])),
     [overviewRows],
@@ -6158,17 +6194,17 @@ export default function App() {
                       <span className="timeline-confirmation-title">Confirm Communication Schedule</span>
                     </div>
                     <span className="timeline-confirmation-text">
-                      Commit the backend session's currently scheduled links to SatOS.
+                      Stage and review the schedule summary before writing activities to SatOS.
                     </span>
                   </div>
                   <div className="timeline-confirmation-actions">
                     <button
                       type="button"
                       className="btn-fetch timeline-confirm-button"
-                      disabled={!confirmScheduleAvailable || confirmingSchedule}
+                      disabled={!confirmScheduleAvailable || confirmingSchedule || isScheduleStaged}
                       onClick={handleConfirmSchedule}
                     >
-                      {confirmingSchedule ? 'Confirming...' : 'Confirm Communication Schedule'}
+                      {isScheduleStaged ? '✓ Schedule Staged for Review' : 'Confirm Communication Schedule'}
                     </button>
                     {!confirmingSchedule && !confirmScheduleAvailable && (
                       <span className="timeline-confirmation-tooltip">
@@ -6183,6 +6219,203 @@ export default function App() {
                     )}
                   </div>
                 </div>
+
+                {isScheduleStaged && finalScheduleRows.length > 0 && (
+                  <div className="schedule-staging-review-panel" role="region" aria-label="Staged Schedule Review">
+                    <div className="staging-review-header">
+                      <span className="staging-review-badge">Stage 2 · Staged Review</span>
+                      <h3 className="staging-review-title">Staged Communication Schedule & SatOS Commit Review</h3>
+                      <p className="staging-review-description">
+                        Review the aggregated link allocations and data volume profile per asset before pushing activities to SatOS.
+                      </p>
+                    </div>
+
+                    {/* Summary KPI Banner */}
+                    <div className="staging-metrics-banner">
+                      <div className="staging-metric-card">
+                        <span className="staging-metric-label">Total Scheduled Links</span>
+                        <span className="staging-metric-value">{commitSummary.totalScheduledLinks}</span>
+                        <span className="staging-metric-subtext">Active contact passes</span>
+                      </div>
+                      <div className="staging-metric-card">
+                        <span className="staging-metric-label">Total Data Offload</span>
+                        <span className="staging-metric-value">{commitSummary.totalOffloadedGb} GB</span>
+                        <span className="staging-metric-subtext">{(commitSummary.totalOffloadedMb).toLocaleString()} MB</span>
+                      </div>
+                      <div className="staging-metric-card">
+                        <span className="staging-metric-label">Total Contact Time</span>
+                        <span className="staging-metric-value">{commitSummary.totalDurationMinutes} min</span>
+                        <span className="staging-metric-subtext">{commitSummary.totalDurationSeconds} seconds total</span>
+                      </div>
+                      <div className="staging-metric-card">
+                        <span className="staging-metric-label">Participating Assets</span>
+                        <span className="staging-metric-value">
+                          {commitSummary.satellites.length} Sat · {commitSummary.groundStations.length} GS
+                        </span>
+                        <span className="staging-metric-subtext">Coordinated resources</span>
+                      </div>
+                    </div>
+
+                    {/* Per-Satellite Schedule Breakdown & Buffer Volumes */}
+                    <div className="staging-asset-section">
+                      <h4 className="staging-section-title">Satellite Allocations & Data Buffer Summaries</h4>
+                      <div className="staging-asset-cards-grid">
+                        {commitSummary.satellites.map((sat) => (
+                          <div key={sat.satId} className="staging-asset-card">
+                            <div className="staging-asset-header">
+                              <div className="staging-asset-title-group">
+                                <span className="staging-asset-name">{sat.satId}</span>
+                                <span className="staging-chip">{sat.links.length} Link{sat.links.length === 1 ? '' : 's'}</span>
+                              </div>
+                              <div className="staging-asset-chips">
+                                <span className="staging-chip">
+                                  Offload: <strong>{(sat.totalOffloadedMb / 1000).toFixed(2)} GB</strong>
+                                </span>
+                                <span className="staging-chip">
+                                  Duration: <strong>{formatDurationFromSeconds(sat.totalDurationSeconds)}</strong>
+                                </span>
+                                {sat.capacityMb > 0 && (
+                                  <span className="staging-chip">
+                                    Peak Buffer: <strong>{(sat.peakBufferMb / 1000).toFixed(2)} / {(sat.capacityMb / 1000).toFixed(2)} GB</strong>
+                                  </span>
+                                )}
+                                {sat.capacityMb > 0 && (
+                                  <span className="staging-chip">
+                                    Final Buffer: <strong>{(sat.finalBufferMb / 1000).toFixed(2)} GB</strong>
+                                  </span>
+                                )}
+                                {sat.totalLostMb > 0 && (
+                                  <span className="staging-chip staging-chip--warn">
+                                    Overflow / Lost: <strong>{(sat.totalLostMb / 1000).toFixed(2)} GB</strong>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="staging-links-table-container">
+                              <table className="staging-links-table">
+                                <thead>
+                                  <tr>
+                                    <th>Link ID</th>
+                                    <th>Activity Name</th>
+                                    <th>Initiator</th>
+                                    <th>Ground Station</th>
+                                    <th>Start Event (UTC)</th>
+                                    <th>End Event (UTC)</th>
+                                    <th>Duration</th>
+                                    <th>Expected Data Downlinked</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {sat.links.map((link) => {
+                                    const linkId = link.backendLinkId || link.linkId
+                                    const actName = `DOWNLINK_${linkId}_${link.satId}-${link.gsId}`
+                                    return (
+                                      <tr key={linkId}>
+                                        <td><strong>{linkId}</strong></td>
+                                        <td><code className="staging-code-cell">{actName}</code></td>
+                                        <td><span className="staging-initiator-badge">SCOPE_Scheduler</span></td>
+                                        <td>{link.gsId}</td>
+                                        <td>{formatUtcEventDateTime(link.startTime)}</td>
+                                        <td>{formatUtcEventDateTime(link.endTime)}</td>
+                                        <td>{link.duration || formatDurationFromSeconds(link.durationSeconds)}</td>
+                                        <td>
+                                          <strong>{(Number(link.usefulDataOffloadedMb ?? 0) / 1000).toFixed(2)} GB</strong>{' '}
+                                          <span className="staging-table-subtext">({Number(link.usefulDataOffloadedMb ?? 0).toFixed(1)} MB)</span>
+                                        </td>
+                                      </tr>
+                                    )
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Per-Ground Station Schedule Breakdown */}
+                    <div className="staging-asset-section">
+                      <h4 className="staging-section-title">Ground Station Allocations & Contact Passes</h4>
+                      <div className="staging-asset-cards-grid">
+                        {commitSummary.groundStations.map((gs) => (
+                          <div key={gs.gsId} className="staging-asset-card">
+                            <div className="staging-asset-header">
+                              <div className="staging-asset-title-group">
+                                <span className="staging-asset-name">{gs.gsId}</span>
+                                <span className="staging-chip">{gs.links.length} Pass{gs.links.length === 1 ? '' : 'es'}</span>
+                              </div>
+                              <div className="staging-asset-chips">
+                                <span className="staging-chip">
+                                  Data Received: <strong>{(gs.totalOffloadedMb / 1000).toFixed(2)} GB</strong>
+                                </span>
+                                <span className="staging-chip">
+                                  Total Contact: <strong>{formatDurationFromSeconds(gs.totalDurationSeconds)}</strong>
+                                </span>
+                              </div>
+                            </div>
+                            <div className="staging-links-table-container">
+                              <table className="staging-links-table">
+                                <thead>
+                                  <tr>
+                                    <th>Link ID</th>
+                                    <th>Activity Name</th>
+                                    <th>Initiator</th>
+                                    <th>Satellite</th>
+                                    <th>Start Event (UTC)</th>
+                                    <th>End Event (UTC)</th>
+                                    <th>Duration</th>
+                                    <th>Expected Data Received</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {gs.links.map((link) => {
+                                    const linkId = link.backendLinkId || link.linkId
+                                    const actName = `DOWNLINK_${linkId}_${link.satId}-${link.gsId}`
+                                    return (
+                                      <tr key={linkId}>
+                                        <td><strong>{linkId}</strong></td>
+                                        <td><code className="staging-code-cell">{actName}</code></td>
+                                        <td><span className="staging-initiator-badge">SCOPE_Scheduler</span></td>
+                                        <td>{link.satId}</td>
+                                        <td>{formatUtcEventDateTime(link.startTime)}</td>
+                                        <td>{formatUtcEventDateTime(link.endTime)}</td>
+                                        <td>{link.duration || formatDurationFromSeconds(link.durationSeconds)}</td>
+                                        <td>
+                                          <strong>{(Number(link.usefulDataOffloadedMb ?? 0) / 1000).toFixed(2)} GB</strong>{' '}
+                                          <span className="staging-table-subtext">({Number(link.usefulDataOffloadedMb ?? 0).toFixed(1)} MB)</span>
+                                        </td>
+                                      </tr>
+                                    )
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Action Bar for SatOS Commit */}
+                    <div className="staging-commit-action-bar">
+                      <button
+                        type="button"
+                        className="btn-modify-overrides"
+                        onClick={handleBackToEdit}
+                        disabled={confirmingSchedule}
+                      >
+                        Modify Overrides / Back
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-fetch timeline-confirm-button btn-commit-satos"
+                        disabled={confirmingSchedule || !sessionId || finalScheduleRows.length === 0}
+                        onClick={handleCommitToSatOS}
+                      >
+                        {confirmingSchedule ? 'Committing Activities to SatOS...' : 'Commit SCOPE Communication Activities to SatOS'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {confirmationSuccess && (
                   <div className="confirmation-success" role="status" aria-live="polite">

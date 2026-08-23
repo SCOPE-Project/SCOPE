@@ -371,7 +371,8 @@ class AssetRepository:
         )
 
         # 3. Create Satellite Activity
-        act_name = f"Pass {link.satellite_name} - {link.groundstation_name} at {start_time.isoformat()}"
+        act_name = f"DOWNLINK_{link.link_id}_{link.satellite_name}-{link.groundstation_name}"
+        act_description = f"Downlink from {link.satellite_name} to {link.groundstation_name} from {start_time.isoformat()} to {end_time.isoformat()}"
         sat_activity = Activity(
             uuid=uuid.uuid4(),
             schedule_name=link.satellite_name,
@@ -379,7 +380,7 @@ class AssetRepository:
             start_event=aos_event,
             end_event=los_event,
             name=act_name,
-            description=act_name,
+            description=act_description,
             priority=1,
             initiator="SCOPE_Scheduler",
             executor=link.satellite_name,
@@ -393,7 +394,7 @@ class AssetRepository:
             start_event=aos_event,
             end_event=los_event,
             name=act_name,
-            description=act_name,
+            description=act_description,
             priority=1,
             initiator="SCOPE_Scheduler",
             executor=link.groundstation_name,
