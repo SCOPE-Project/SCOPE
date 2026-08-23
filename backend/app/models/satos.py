@@ -65,6 +65,29 @@ class DeleteActivitiesResponse(BaseModel):
     schedules_cleared: dict[str, list[str]] = {}
 
 
+class ClearScopeActivitiesRequest(BaseModel):
+    schedule_names: list[str] = Field(
+        default_factory=list,
+        description="List of schedule names to clear SCOPE activities from.",
+    )
+    start_time: Optional[datetime] = Field(
+        default=None,
+        description="Optional start of time window filter (inclusive).",
+    )
+    end_time: Optional[datetime] = Field(
+        default=None,
+        description="Optional end of time window filter (inclusive).",
+    )
+
+
+class ClearScopeActivitiesResponse(BaseModel):
+    status: str = "success"
+    message: str
+    deleted_count: int
+    deleted_activities: list[str] = []
+    schedules_cleared: dict[str, list[str]] = {}
+
+
 # ==========================================
 # Satellite State Simulation / Update DTOs
 # ==========================================

@@ -7,6 +7,7 @@ import {
 import {
   BACKEND_BASE_URL,
   applySessionOverride,
+  clearScopeActivities,
   commitSession,
   initializeAssets,
   pollTaskResult as pollBackendTaskResult,
@@ -258,6 +259,7 @@ export default function App() {
   const [confirmationProgress, setConfirmationProgress] = useState(0)
   const [confirmationStep, setConfirmationStep] = useState('')
   const [isScheduleStaged, setIsScheduleStaged] = useState(false)
+  const [clearExistingScopeActivities, setClearExistingScopeActivities] = useState(false)
   const [confirmationSuccess, setConfirmationSuccess] = useState(false)
   const [confirmedScheduleCount, setConfirmedScheduleCount] = useState(0)
   const [createdActivitiesCount, setCreatedActivitiesCount] = useState(0)
@@ -1602,14 +1604,24 @@ export default function App() {
 
     setLaunchingScheduler(true)
     setError(null)
-    setExtractionStatus('Queued')
     setExtractionProgress(0)
-    setExtractionMessages([
-      {
-        id: `queued-${Date.now()}`,
-        text: 'Task queued. Waiting for backend processing to start.',
-      },
-    ])
+
+    const initialMessages = clearExistingScopeActivities
+      ? [
+          {
+            id: `clear-scope-init-${Date.now()}`,
+            text: 'SatOS: Clearing all existing SCOPE activities from configured schedules...',
+          },
+        ]
+      : [
+          {
+            id: `queued-${Date.now()}`,
+            text: 'Task queued. Waiting for backend processing to start.',
+          },
+        ]
+
+    setExtractionStatus(clearExistingScopeActivities ? 'SatOS: Purging SCOPE activities' : 'Queued')
+    setExtractionMessages(initialMessages)
     setOverviewRows([])
     if (!canReusePropagation) {
       setSatelliteTracks({})
@@ -1648,6 +1660,44 @@ export default function App() {
     schedulerAbortControllerRef.current = abortController
 
     try {
+      if (clearExistingScopeActivities) {
+        activeBackendStage = 'SatOS Purge'
+        const clearPayload = {
+          schedule_names: [...selectedSatellites, ...selectedGroundStations],
+          start_time: planningWindow.startTime,
+          end_time: planningWindow.endTime,
+        }
+        const clearResult = await clearScopeActivities(clearPayload, abortController.signal)
+        const deletedCount = clearResult?.deleted_count ?? 0
+        const schedCount = Object.keys(clearResult?.schedules_cleared || {}).length
+        const summaryText = deletedCount > 0
+          ? `SatOS: Purge complete. Successfully cleared ${deletedCount} SCOPE activit${deletedCount === 1 ? 'y' : 'ies'} across ${schedCount} schedule(s).`
+          : 'SatOS: Purge complete. No existing SCOPE activities found in the selected schedule interval.'
+
+        setExtractionMessages((current) => [
+          ...current,
+          {
+            id: `clear-scope-done-${Date.now()}`,
+            text: summaryText,
+          },
+          {
+            id: `queued-after-clear-${Date.now()}`,
+            text: 'Task queued. Waiting for backend processing to start.',
+          },
+        ])
+
+        try {
+          const freshAssets = await initializeAssets()
+          if (freshAssets && Array.isArray(freshAssets.schedules)) {
+            setAssetSchedules(freshAssets.schedules)
+          }
+        } catch (refreshErr) {
+          console.warn('Failed to refresh asset schedules after clearing SatOS activities:', refreshErr)
+        }
+      }
+
+      activeBackendStage = canReusePropagation ? 'Filtering' : 'Propagation'
+
       if (!canReusePropagation) {
         const extractionReceipt = await startOrbitExtraction({
           satellites: selectedSatellites,
@@ -1669,7 +1719,8 @@ export default function App() {
       } else {
         setExtractionStatus('Filtering: Queued')
         setExtractionProgress(65)
-        setExtractionMessages([
+        setExtractionMessages((current) => [
+          ...current,
           { id: `propagation-reused-${nextOrbitEngineRunId}`, text: 'Propagation: Reusing the current orbit-engine result.' },
         ])
       }
@@ -4877,6 +4928,15 @@ export default function App() {
                 )}
 
                 <div className="landing-config-footer">
+                  <label className="landing-clear-scope-option">
+                    <input
+                      type="checkbox"
+                      checked={clearExistingScopeActivities}
+                      onChange={(e) => setClearExistingScopeActivities(e.target.checked)}
+                      disabled={launchingScheduler}
+                    />
+                    <span>Clear all existing SCOPE activities from the SatOS schedule</span>
+                  </label>
                   <div className="landing-action-wrapper">
                     {launchingScheduler ? (
                       <button

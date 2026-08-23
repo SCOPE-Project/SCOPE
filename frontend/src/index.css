@@ -377,12 +377,41 @@ body {
 
 .landing-config-footer {
   display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
-  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
   margin-top: 1.1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.landing-clear-scope-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.landing-clear-scope-option:hover {
+  color: var(--color-primary-dark, #0b4e8c);
+}
+
+.landing-clear-scope-option input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  cursor: pointer;
+  accent-color: var(--color-primary, #0066cc);
+}
+
+.landing-clear-scope-option input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .landing-progress-shell {

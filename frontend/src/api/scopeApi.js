@@ -172,3 +172,7 @@ export const commitSession = (sessionId, signal) => (
     signal,
   })
 )
+
+export const clearScopeActivities = (payload, signal) => (
+  postJson('/utilities/satos/clear-scope-activities', payload, signal)
+)

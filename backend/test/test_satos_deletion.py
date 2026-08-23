@@ -2,6 +2,7 @@ import pytest
 import uuid
 import subprocess
 import sys
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
@@ -287,6 +288,170 @@ def test_router_delete_activities_by_schedule_names(mock_clear_repo):
     assert data["deleted_count"] == 1
     assert data["deleted_activities"] == [str(uuid1)]
     assert data["schedules_cleared"] == {"Sat-1": [str(uuid1)]}
+
+
+# =========================================================
+# 4. satos_clear_scope_activities Tests
+# =========================================================
+
+@patch("app.services.satos_connector.delete_schedule_events")
+@patch("app.services.satos_connector.delete_activity")
+@patch("app.services.satos_connector.get_activity_list")
+@patch("app.services.satos_connector.SatIOSession")
+def test_satos_clear_scope_activities_initiator_filtering(mock_session_cls, mock_get_acts, mock_delete_act, mock_delete_ev):
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_delete_act.return_value = mock_resp
+    mock_delete_ev.return_value = mock_resp
+
+    uuid_scope1 = uuid.uuid4()
+    uuid_manual = uuid.uuid4()
+    uuid_scope2 = uuid.uuid4()
+
+    ev_uuid1 = uuid.uuid4()
+    ev_uuid2 = uuid.uuid4()
+
+    mock_act_scope1 = MagicMock(
+        uuid=uuid_scope1,
+        initiator="SCOPE_Scheduler",
+        start_event=MagicMock(uuid=ev_uuid1, timestamp=datetime(2026, 8, 20, 10, 0, tzinfo=timezone.utc)),
+        end_event=MagicMock(uuid=ev_uuid2, timestamp=datetime(2026, 8, 20, 10, 10, tzinfo=timezone.utc)),
+    )
+    mock_act_manual = MagicMock(
+        uuid=uuid_manual,
+        initiator="Manual_Planner",
+        start_event=MagicMock(uuid=uuid.uuid4(), timestamp=datetime(2026, 8, 20, 10, 5, tzinfo=timezone.utc)),
+        end_event=MagicMock(uuid=uuid.uuid4(), timestamp=datetime(2026, 8, 20, 10, 15, tzinfo=timezone.utc)),
+    )
+    mock_act_scope2 = MagicMock(
+        uuid=uuid_scope2,
+        initiator="SCOPE_Scheduler",
+        start_event=None,
+        end_event=None,
+    )
+
+    mock_get_acts.return_value = [mock_act_scope1, mock_act_manual, mock_act_scope2]
+
+    cleared = satos_connector.satos_clear_scope_activities(["Sat-1"])
+
+    assert "Sat-1" in cleared
+    # Only SCOPE_Scheduler activities should be deleted (scope1 and scope2)
+    assert set(cleared["Sat-1"]) == {str(uuid_scope1), str(uuid_scope2)}
+    assert mock_delete_act.call_count == 2
+    # Anchored schedule events for scope1 should be deleted
+    assert mock_delete_ev.call_count == 2
+
+
+@patch("app.services.satos_connector.delete_schedule_events")
+@patch("app.services.satos_connector.delete_activity")
+@patch("app.services.satos_connector.get_activity_list")
+@patch("app.services.satos_connector.SatIOSession")
+def test_satos_clear_scope_activities_time_window_filtering(mock_session_cls, mock_get_acts, mock_delete_act, mock_delete_ev):
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_delete_act.return_value = mock_resp
+    mock_delete_ev.return_value = mock_resp
+
+    uuid_early = uuid.uuid4()
+    uuid_in_window = uuid.uuid4()
+    uuid_late = uuid.uuid4()
+
+    mock_act_early = MagicMock(
+        uuid=uuid_early,
+        initiator="SCOPE_Scheduler",
+        start_event=MagicMock(uuid=uuid.uuid4(), timestamp=datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)),
+        end_event=MagicMock(uuid=uuid.uuid4(), timestamp=datetime(2026, 8, 20, 8, 10, tzinfo=timezone.utc)),
+    )
+    mock_act_in_window = MagicMock(
+        uuid=uuid_in_window,
+        initiator="SCOPE_Scheduler",
+        start_event=MagicMock(uuid=uuid.uuid4(), timestamp=datetime(2026, 8, 20, 10, 0, tzinfo=timezone.utc)),
+        end_event=MagicMock(uuid=uuid.uuid4(), timestamp=datetime(2026, 8, 20, 10, 10, tzinfo=timezone.utc)),
+    )
+    mock_act_late = MagicMock(
+        uuid=uuid_late,
+        initiator="SCOPE_Scheduler",
+        start_event=MagicMock(uuid=uuid.uuid4(), timestamp=datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)),
+        end_event=MagicMock(uuid=uuid.uuid4(), timestamp=datetime(2026, 8, 20, 12, 10, tzinfo=timezone.utc)),
+    )
+
+    mock_get_acts.return_value = [mock_act_early, mock_act_in_window, mock_act_late]
+
+    cleared = satos_connector.satos_clear_scope_activities(
+        ["Sat-1"],
+        start_time=datetime(2026, 8, 20, 9, 0, tzinfo=timezone.utc),
+        end_time=datetime(2026, 8, 20, 11, 0, tzinfo=timezone.utc),
+    )
+
+    assert cleared["Sat-1"] == [str(uuid_in_window)]
+    assert mock_delete_act.call_count == 1
+
+
+def test_satos_clear_scope_activities_empty():
+    cleared = satos_connector.satos_clear_scope_activities([])
+    assert cleared == {}
+
+
+@patch("app.repositories.asset_repository.satos_clear_scope_activities")
+def test_repository_clear_scope_activities_updates_caches(mock_connector_clear):
+    uuid1 = uuid.uuid4()
+    uuid2 = uuid.uuid4()
+    mock_connector_clear.return_value = {"Sat-A": [str(uuid1)]}
+
+    act1 = Activity(uuid=uuid1, schedule_name="Sat-A", status=2, start_event=MagicMock(), end_event=MagicMock(), name="Act1")
+    act2 = Activity(uuid=uuid2, schedule_name="Sat-A", status=2, start_event=MagicMock(), end_event=MagicMock(), name="Act2")
+
+    AssetRepository._schedules = [
+        AssetSchedule(name="Sat-A", activities=[act1, act2], schedule_events=[]),
+    ]
+    AssetRepository._raw_schedules = {
+        "Sat-A": [MagicMock(uuid=uuid1), MagicMock(uuid=uuid2)],
+    }
+
+    cleared = AssetRepository.clear_scope_activities_in_satos(["Sat-A"])
+
+    assert cleared == {"Sat-A": [str(uuid1)]}
+    assert len(AssetRepository.get_asset_raw_schedules()["Sat-A"]) == 1
+    assert AssetRepository.get_asset_raw_schedules()["Sat-A"][0].uuid == uuid2
+
+    sat_a_sched = next(s for s in AssetRepository.get_asset_schedules() if s.name == "Sat-A")
+    assert len(sat_a_sched.activities) == 1
+    assert sat_a_sched.activities[0].uuid == uuid2
+
+
+@patch("app.repositories.asset_repository.AssetRepository.clear_scope_activities_in_satos")
+def test_router_clear_scope_activities_endpoint(mock_clear_repo):
+    uuid1 = uuid.uuid4()
+    mock_clear_repo.return_value = {"Sat-1": [str(uuid1)]}
+
+    client = TestClient(app)
+    response = client.post(
+        "/utilities/satos/clear-scope-activities",
+        json={
+            "schedule_names": ["Sat-1"],
+            "start_time": "2026-08-20T10:00:00Z",
+            "end_time": "2026-08-20T12:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["deleted_count"] == 1
+    assert data["deleted_activities"] == [str(uuid1)]
+    assert data["schedules_cleared"] == {"Sat-1": [str(uuid1)]}
+
+
+def test_router_clear_scope_activities_empty():
+    client = TestClient(app)
+    response = client.post("/utilities/satos/clear-scope-activities", json={"schedule_names": []})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["deleted_count"] == 0
+    assert data["deleted_activities"] == []
+    assert data["schedules_cleared"] == {}
 
 
 # =========================================================
