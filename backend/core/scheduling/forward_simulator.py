@@ -47,39 +47,21 @@ class ForwardSimulationScheduler(BaseScheduler):
         if scoring_rule is None:
             scoring_rule = BufferUrgencyScoringRule()
 
-        # 1. Determine Scenario Time Horizon Bounds [T_start, T_end]
+        # 1. Validate Scenario Time Horizon Bounds [T_start, T_end]
         if scenario_start is None or scenario_end is None:
-            all_link_times = []
-            for l in candidate_links.values():
-                all_link_times.append(l.start_time)
-                all_link_times.append(l.end_time)
-
-            if all_link_times:
-                min_link_t = min(all_link_times)
-                max_link_t = max(all_link_times)
-                # Expand to include activities within +/- 24h of candidate links if not specified
-                activity_starts = [
-                    _ensure_utc(act.start_event.timestamp)
-                    for acts in asset_schedules.values()
-                    for act in acts
-                    if act.start_event and getattr(act.start_event, "timestamp", None) is not None
-                    and abs((_ensure_utc(act.start_event.timestamp) - min_link_t).total_seconds()) <= 86400 * 2
-                ]
-                activity_ends = [
-                    _ensure_utc(act.end_event.timestamp)
-                    for acts in asset_schedules.values()
-                    for act in acts
-                    if act.end_event and getattr(act.end_event, "timestamp", None) is not None
-                    and abs((_ensure_utc(act.end_event.timestamp) - max_link_t).total_seconds()) <= 86400 * 2
-                ]
-                scenario_start = min([min_link_t] + activity_starts) if scenario_start is None else scenario_start
-                scenario_end = max([max_link_t] + activity_ends) if scenario_end is None else scenario_end
-            else:
-                scenario_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
-                scenario_end = datetime(2026, 1, 2, tzinfo=timezone.utc)
+            raise ValueError(
+                "Forward simulation requires explicit scenario_start and scenario_end boundaries. "
+                "No fallback horizon expansion is permitted."
+            )
 
         scenario_start = _ensure_utc(scenario_start)
         scenario_end = _ensure_utc(scenario_end)
+
+        if scenario_end <= scenario_start:
+            raise ValueError(
+                f"scenario_end ({scenario_end.isoformat()}) must be strictly after scenario_start ({scenario_start.isoformat()})."
+            )
+
 
         # 2. Initialize State Tracking for Satellites
         current_buffer: Dict[str, float] = {
@@ -150,16 +132,16 @@ class ForwardSimulationScheduler(BaseScheduler):
         # 4. Output Plan Maps
         current_plan: Dict[str, ScheduledLinkStatus] = {}
 
-        # Initialize ineligible links in current_plan immediately
+        # Initialize unavailable or ineligible links in current_plan immediately
         for lid, link in candidate_links.items():
-            if not link.is_eligible:
+            if not link.is_available or not link.is_eligible:
                 current_plan[lid] = ScheduledLinkStatus(
                     link=link,
                     is_scheduled=False,
                     override_state=user_overrides.get(lid, OverrideState.AUTO),
                     tradeoff_id=None,
                     useful_data_offloaded_mb=0.0,
-                    rejection_reason=link.ineligibility_reason or "Ineligible link",
+                    rejection_reason=link.ineligibility_reason or "Unavailable link",
                 )
 
         # 5. Simulation Execution Loop
@@ -229,9 +211,12 @@ class ForwardSimulationScheduler(BaseScheduler):
 
                 scheduled_link_ids: Set[str] = set()
 
-                # Schedule PINNED links unconditionally
+                # Schedule PINNED links (honoring mutual exclusion if multiple pinned links conflict)
                 for p_link in pinned_links:
-                    scheduled_link_ids.add(p_link.link_id)
+                    pid = p_link.link_id
+                    conflicts = conflict_structure.adjacency_list.get(pid, set())
+                    if not any(conflict_id in scheduled_link_ids for conflict_id in conflicts):
+                        scheduled_link_ids.add(pid)
 
                 # For AUTO links, compute scores via injected BaseScoringRule
                 unassigned_links = [
@@ -269,6 +254,12 @@ class ForwardSimulationScheduler(BaseScheduler):
                     config = satellite_configs[sat_name]
                     override = user_overrides.get(lid, OverrideState.AUTO)
 
+                    # Obtain the computed score for this candidate link
+                    if lid in link_scores:
+                        score_val, _ = link_scores[lid]
+                    else:
+                        score_val, _ = scoring_rule.compute_score(l, current_buffer[sat_name], config)
+
                     if lid in scheduled_link_ids:
                         _, useful_offload = scoring_rule.compute_score(l, current_buffer[sat_name], config)
                         total_downlinked[sat_name] += useful_offload
@@ -302,6 +293,7 @@ class ForwardSimulationScheduler(BaseScheduler):
                             is_scheduled=True,
                             override_state=override,
                             tradeoff_id=tradeoff_id,
+                            score=round(score_val, 2),
                             useful_data_offloaded_mb=round(useful_offload, 2),
                             rejection_reason=None,
                         )
@@ -318,6 +310,7 @@ class ForwardSimulationScheduler(BaseScheduler):
                             is_scheduled=False,
                             override_state=override,
                             tradeoff_id=tradeoff_id,
+                            score=round(score_val, 2),
                             useful_data_offloaded_mb=0.0,
                             rejection_reason=reason,
                         )

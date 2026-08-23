@@ -173,7 +173,7 @@ def main() -> None:
             st_str = block.start_time.isoformat() if hasattr(block.start_time, "isoformat") else str(block.start_time)
             et_str = block.end_time.isoformat() if hasattr(block.end_time, "isoformat") else str(block.end_time)
             print(
-                f"  {idx:02d}. [{block.overpass_id}] {block.satellite_name} <-> {block.groundstation_name} | "
+                f"  {idx:02d}. [{block.overpass_id}] ({block.overpass_name}) {block.satellite_name} <-> {block.groundstation_name} | "
                 f"{st_str} -> {et_str} "
                 f"({dur_min:.1f} min, Peak {block.max_elevation_deg:.1f}°, {len(block.high_res_trajectory)} profile pts)"
             )

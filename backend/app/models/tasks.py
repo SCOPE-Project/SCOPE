@@ -42,10 +42,6 @@ class TradeOffRequest(BaseModel):
     Request model for the trade-off scheduling session task.
     """ 
     filter_run_id: str = Field(..., description="Run ID of the filtered links dataset")
-    initial_buffer_levels_mb: Optional[Dict[str, float]] = Field(
-        default=None,
-        description="Initial satellite storage levels in MB (legacy/shorthand map: sat_name -> initial_level_mb)",
-    )
     satellite_buffer_configs: Optional[Dict[str, SatelliteBufferConfigDTO]] = Field(
         default=None,
         description="Per-satellite buffer configuration overrides (capacity, initial level, generation rate, downlink rate)",
@@ -53,18 +49,6 @@ class TradeOffRequest(BaseModel):
     default_buffer_config: Optional[SatelliteBufferConfigDTO] = Field(
         default=None,
         description="Default buffer configuration applied to any satellite not explicitly configured in satellite_buffer_configs",
-    )
-    buffer_capacities_mb: Optional[Dict[str, float]] = Field(
-        default=None,
-        description="Optional shorthand map of per-satellite capacities in MB",
-    )
-    payload_generation_rates_mbps: Optional[Dict[str, float]] = Field(
-        default=None,
-        description="Optional shorthand map of per-satellite payload generation rates in MB/s",
-    )
-    downlink_rates_mbps: Optional[Dict[str, float]] = Field(
-        default=None,
-        description="Optional shorthand map of per-satellite downlink rates in MB/s",
     )
     scoring_config: ScoringStrategyConfigDTO = Field(
         default_factory=lambda: ScoringStrategyConfigDTO(name="buffer_overflow_avoidance", parameters={"alpha": 2.0, "exponent": 2.0}),

@@ -31,6 +31,7 @@ if credentials_path.exists():
     load_dotenv(credentials_path)
 
 from app.repositories import LinkRepository, AssetRepository
+from core.models.scheduling import SatelliteBufferConfig
 from core.scheduling.session_manager import SchedulingSessionManager
 from core.scheduling.strategy import get_scoring_rule
 
@@ -186,14 +187,39 @@ def main() -> None:
 
     print(f"Executing forward simulation with strategy='{args.strategy}' (parameters={strategy_params})...")
     asset_scheds = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
+
+    all_sats = set()
+    if initial_buffers:
+        all_sats.update(initial_buffers.keys())
+    if capacities:
+        all_sats.update(capacities.keys())
+    if generation_rates:
+        all_sats.update(generation_rates.keys())
+    if downlink_rates:
+        all_sats.update(downlink_rates.keys())
+
+    satellite_configs = {}
+    for sat in all_sats:
+        satellite_configs[sat] = SatelliteBufferConfig(
+            satellite_name=sat,
+            capacity_mb=capacities.get(sat, args.default_capacity) if capacities else args.default_capacity,
+            initial_level_mb=initial_buffers.get(sat, 0.0) if initial_buffers else 0.0,
+            payload_generation_rate_mbps=generation_rates.get(sat, args.default_generation_rate) if generation_rates else args.default_generation_rate,
+            downlink_rate_mbps=downlink_rates.get(sat, args.default_downlink_rate) if downlink_rates else args.default_downlink_rate,
+        )
+
+    scenario_start, scenario_end = LinkRepository.get_time_window(filter_run_id)
+    if scenario_start is None or scenario_end is None:
+        print(f"HARD FAIL: Scenario time window (start_time, end_time) could not be resolved from LinkRepository metadata for filter run '{filter_run_id}'.", file=sys.stderr)
+        sys.exit(1)
+
     session = SchedulingSessionManager.create_session(
         filter_run_id=args.filter_run_id,
         candidate_links=links,
+        scenario_start=scenario_start,
+        scenario_end=scenario_end,
         asset_schedules=asset_scheds,
-        initial_buffer_levels_mb=initial_buffers,
-        buffer_capacities_mb=capacities,
-        payload_generation_rates_mbps=generation_rates,
-        downlink_rates_mbps=downlink_rates,
+        satellite_configs=satellite_configs if satellite_configs else None,
         default_capacity_mb=args.default_capacity,
         default_payload_generation_rate_mbps=args.default_generation_rate,
         default_downlink_rate_mbps=args.default_downlink_rate,

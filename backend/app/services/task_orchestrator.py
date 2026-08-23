@@ -101,8 +101,14 @@ def run_filter_links_task(
             filter_run_id=task_id,
         )
 
-        # Save to LinkRepository
-        LinkRepository.save_links(filter_run_id, links)
+        # Save to LinkRepository with propagation metadata
+        LinkRepository.save_links(
+            filter_run_id=filter_run_id,
+            links=links,
+            orbit_engine_run_id=orbit_engine_run_id,
+            start_time=propagation_result.metadata.start_time,
+            end_time=propagation_result.metadata.end_time,
+        )
 
         eligible_count = sum(1 for l in links if l.is_eligible)
         baseline_blocked_count = sum(
@@ -130,12 +136,8 @@ def run_filter_links_task(
 def run_process_trade_offs_task(
     task_id: str, 
     filter_run_id: str,
-    initial_buffer_levels_mb: Optional[Dict[str, float]] = None,
     satellite_buffer_configs: Optional[Dict[str, SatelliteBufferConfigDTO]] = None,
     default_buffer_config: Optional[SatelliteBufferConfigDTO] = None,
-    buffer_capacities_mb: Optional[Dict[str, float]] = None,
-    payload_generation_rates_mbps: Optional[Dict[str, float]] = None,
-    downlink_rates_mbps: Optional[Dict[str, float]] = None,
     scoring_config: Optional[ScoringStrategyConfigDTO] = None,
 ):
     """
@@ -146,6 +148,23 @@ def run_process_trade_offs_task(
         candidate_links = LinkRepository.get_links(filter_run_id)
         if candidate_links is None:
             raise ValueError(f"No filtered links found for filter_run_id '{filter_run_id}'.")
+
+        # Resolve scenario time window from metadata in LinkRepository
+        scenario_start, scenario_end = LinkRepository.get_time_window(filter_run_id)
+        if scenario_start is None or scenario_end is None:
+            meta = LinkRepository.get_metadata(filter_run_id) or {}
+            orbit_id = meta.get("orbit_engine_run_id")
+            if orbit_id:
+                prop_result = PropagationResultRepository.get_result(orbit_id)
+                if prop_result and prop_result.metadata:
+                    scenario_start = prop_result.metadata.start_time
+                    scenario_end = prop_result.metadata.end_time
+
+        if scenario_start is None or scenario_end is None:
+            raise ValueError(
+                f"Scenario time window (start_time, end_time) could not be resolved from metadata for filter_run_id '{filter_run_id}'. "
+                "Ensure orbit propagation and link filtering have completed."
+            )
 
         asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
 
@@ -169,12 +188,10 @@ def run_process_trade_offs_task(
         session = SchedulingSessionManager.create_session(
             filter_run_id=filter_run_id,
             candidate_links=candidate_links,
+            scenario_start=scenario_start,
+            scenario_end=scenario_end,
             asset_schedules=asset_schedules,
             satellite_configs=sat_configs if sat_configs else None,
-            initial_buffer_levels_mb=initial_buffer_levels_mb,
-            buffer_capacities_mb=buffer_capacities_mb,
-            payload_generation_rates_mbps=payload_generation_rates_mbps,
-            downlink_rates_mbps=downlink_rates_mbps,
             default_capacity_mb=def_cap,
             default_initial_level_mb=def_init,
             default_payload_generation_rate_mbps=def_gen,
@@ -188,3 +205,4 @@ def run_process_trade_offs_task(
         state_manager.complete_task(task_id, payload=plan_dto)
     except Exception as e:
         state_manager.update_task(task_id, status="failed", message=str(e), progress=100)
+

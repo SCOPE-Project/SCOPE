@@ -48,7 +48,8 @@ def test_propagation_repository_and_dto_mapping():
     )
     
     overpass_block = OverpassBlock(
-        overpass_id="sat1__gs1__pass_001",
+        overpass_id="OP_0001",
+        overpass_name="pass__sat1__gs1__001",
         satellite_name="sat1",
         groundstation_name="gs1",
         start_time=start_time,
@@ -90,7 +91,8 @@ def test_propagation_repository_and_dto_mapping():
     assert dto.global_tracks["sat1"][0].position_gcrf_m == [7000000.0, 0.0, 0.0]
     
     assert len(dto.overpass_blocks) == 1
-    assert dto.overpass_blocks[0].overpass_id == "sat1__gs1__pass_001"
+    assert dto.overpass_blocks[0].overpass_id == "OP_0001"
+    assert dto.overpass_blocks[0].overpass_name == "pass__sat1__gs1__001"
     assert dto.overpass_blocks[0].start_time == "2026-07-15T12:00:00Z"
     assert dto.overpass_blocks[0].high_res_trajectory[0].elevation_deg == 15.0
     

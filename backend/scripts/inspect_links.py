@@ -55,12 +55,14 @@ def show_link_run_detail(filter_run_id: str) -> None:
         sys.exit(1)
 
     eligible_count = sum(1 for l in links if l.is_eligible)
+    available_count = sum(1 for l in links if l.is_eligible and l.is_available)
+    blocked_count = sum(1 for l in links if l.is_eligible and not l.is_available)
     ineligible_count = len(links) - eligible_count
 
     print("=======================================================================")
     print(f"  Filter Run Detail: {filter_run_id}")
     print("=======================================================================")
-    print(f"Total Candidate Links: {len(links)} (Eligible: {eligible_count}, Ineligible: {ineligible_count})")
+    print(f"Total Overpasses: {len(links)} (Eligible: {eligible_count} [{available_count} Available, {blocked_count} Blocked], Ineligible: {ineligible_count})")
     print("-" * 71)
 
     if links:
@@ -68,11 +70,18 @@ def show_link_run_detail(filter_run_id: str) -> None:
             dur_min = l.duration_seconds / 60.0
             st_str = l.start_time.isoformat() if hasattr(l.start_time, "isoformat") else str(l.start_time)
             et_str = l.end_time.isoformat() if hasattr(l.end_time, "isoformat") else str(l.end_time)
-            status_str = "[ELIGIBLE]" if l.is_eligible else f"[INELIGIBLE: {l.eligibility_status.value}]"
-            print(f"{idx:02d}. [{l.link_id}] {l.satellite_name} <-> {l.groundstation_name}")
+            if l.is_eligible and l.is_available:
+                status_str = "[ELIGIBLE - AVAILABLE]"
+            elif l.is_eligible and not l.is_available:
+                status_str = "[ELIGIBLE - BLOCKED BY SATOS]"
+            else:
+                status_str = f"[INELIGIBLE: {l.eligibility_status.value}]"
+
+            lid_display = f"[{l.link_id}]" if l.link_id else "[--]"
+            print(f"{idx:02d}. {lid_display} ({l.link_name or 'N/A'}) {l.satellite_name} <-> {l.groundstation_name}")
             print(f"    Time:      {st_str} -> {et_str} ({dur_min:.1f} min)")
             print(f"    Peak Elev: {l.max_elevation_deg:.1f}° | Status: {status_str}")
-            if not l.is_eligible and l.ineligibility_reason:
+            if l.ineligibility_reason:
                 print(f"    Reason:    {l.ineligibility_reason}")
     else:
         print("  (No candidate links stored under this run ID)")

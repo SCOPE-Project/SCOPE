@@ -1,11 +1,27 @@
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
-  computeMeanTrackAltitudeMeters,
   interpolateTrackPosition,
   prepareTrackPoints,
 } from './components/mapGeometry.js'
+import {
+  BACKEND_BASE_URL,
+  applySessionOverride,
+  commitSession,
+  initializeAssets,
+  pollTaskResult as pollBackendTaskResult,
+  startLinkFiltering,
+  startOrbitExtraction,
+  startTradeOffProcessing,
+} from './api/scopeApi.js'
+import {
+  applySessionPlanToRows,
+  buildRowsFromFilteredLinks,
+  buildSelectedOptionsFromPlan,
+  buildTradeOffCardsFromPlan,
+  getScheduledRows,
+} from './schedulingModel.js'
 
-const BACKEND_BASE_URL = 'http://localhost:8000'
 const MissionMap = lazy(() => import('./components/MissionMap.jsx'))
 const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
 // Reset View puts the whole planning window back on screen. Everything between
@@ -15,181 +31,45 @@ const TIMELINE_DEFAULT_ZOOM_LEVEL = 'fit'
 // asset-centric they are pure filters over which kind of bar is drawn.
 const TIMELINE_LAYERS = [
   { id: 'current', label: 'Current Schedule' },
-  { id: 'potential', label: 'Potential Links' },
+  { id: 'potential', label: 'Unselected Links' },
   { id: 'proposed', label: 'Proposed Schedule' },
 ]
 const TIMELINE_WHEEL_ZOOM_STEP = 0.6
 const TIMELINE_MIN_ZOOM_MULTIPLIER = 1
-const TIMELINE_MAX_ZOOM_MULTIPLIER = 24
+const TIMELINE_FIT_EDGE_INSET_PX = 14
 const TIMELINE_PLAYBACK_SPEEDS = [1, 2, 4, 8, 16, 32, 64, 128]
 const DEFAULT_PLANNING_TIME_MODE = 'utc'
 const MAP_PANEL_CHROME_OVERHEAD_PX = 88
 // Panel identity is separate from panel position: PANEL_LABELS/panelSlotAssignment
-// let every panel (Overview, Trade-Off, Map View, Timeline, Data Volume) be
-// dragged into any of the 5 layout slots, while collapse state etc. stays keyed
+// let every panel (Overview, Trade-Off, Map View, Timeline) be
+// dragged between layout slots, while collapse state etc. stays keyed
 // to the panel itself.
 const PANEL_LABELS = {
   overview: 'Overview',
   tradeOff: 'Trade-Off',
   mapView: 'Map View',
   timeline: 'Timeline',
-  dataVolume: 'Data Volume',
 }
 
-// The Trade-Off panel is deprecated: its selection moved into the Overview
-// table, which now carries a Select column per trade-off row. The panel and
-// everything it needs (tradeOffPanelNode, the card band, getOptionLinkBudget,
-// showTradeOffCard, ...) is deliberately left intact and still builds -- flip
-// this flag back to true to get the card view and its top-right slot back.
-// activeTradeOffCardIndex stays meaningful either way: it is what the timeline
-// auto-expand and the red comparison curve in the Data Volume panel key off,
-// and the Overview trade-off pill sets it.
+// The separate Trade-Off panel is deprecated. Backend-owned scheduling status
+// and override controls live in the Overview; the dormant card view remains
+// available behind this flag for layouts that still need it.
 const TRADE_OFF_PANEL_ENABLED = false
 
-// Demo assumptions for the on-board data budget. Nothing in the backend
-// supplies these yet, so they are user-editable in the Data Volume toolbar and
-// shared by every satellite.
+// Values entered in GB are converted to MB at the API boundary. Backend rate
+// fields currently use MB/s semantics despite their historical `_mbps` names.
 const DEFAULT_DATA_START_FILL_GB = 40
 const DEFAULT_DATA_GENERATION_MBPS = 100
 const DEFAULT_DATA_CAPACITY_GB = 100
-
-const hexToRgba = (hex, alpha) => {
-  const normalized = String(hex ?? '').replace('#', '')
-
-  if (normalized.length !== 6) {
-    return `rgba(0, 57, 117, ${alpha})`
-  }
-
-  const red = Number.parseInt(normalized.slice(0, 2), 16)
-  const green = Number.parseInt(normalized.slice(2, 4), 16)
-  const blue = Number.parseInt(normalized.slice(4, 6), 16)
-
-  if (![red, green, blue].every(Number.isFinite)) {
-    return `rgba(0, 57, 117, ${alpha})`
-  }
-
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`
-}
-// Downlink rate model: rate falls off with the square of the slant range, so a
-// high-elevation (short range) pass downlinks faster. Normalised so that a
-// zenith pass from a 550 km orbit hits DEMO_PEAK_DOWNLINK_MBPS.
-const DEMO_PEAK_DOWNLINK_MBPS = 640
-const DEMO_REFERENCE_ALTITUDE_M = 550000
-const EARTH_RADIUS_M = 6371008.8
-// Decimal gigabytes: 1 GB = 8000 Mbit, so Mbit/s -> GB/ms is /8000/1000.
-const MBPS_TO_GB_PER_MS = 1 / 8000 / 1000
-
-// Slant range to a satellite seen at `elevationDegrees` above the horizon.
-const computeSlantRangeMeters = (elevationDegrees, altitudeMeters) => {
-  const elevationRadians = (Math.max(0, Math.min(90, elevationDegrees)) * Math.PI) / 180
-  const orbitRadius = EARTH_RADIUS_M + Math.max(1, altitudeMeters)
-  const horizontal = EARTH_RADIUS_M * Math.cos(elevationRadians)
-
-  return Math.sqrt((orbitRadius * orbitRadius) - (horizontal * horizontal))
-    - (EARTH_RADIUS_M * Math.sin(elevationRadians))
-}
-
-// Demo downlink rate: free-space loss goes with the square of the distance, so
-// a high-elevation pass (short slant range) downlinks faster. Normalised so a
-// zenith pass from the reference altitude reaches the peak rate. This is a
-// stand-in until the backend supplies real link budgets.
-const getDemoDownlinkMbps = (maxElevationDeg, altitudeMeters) => {
-  const elevation = Number.isFinite(maxElevationDeg) ? maxElevationDeg : 30
-  const altitude = Number.isFinite(altitudeMeters) && altitudeMeters > 0
-    ? altitudeMeters
-    : DEMO_REFERENCE_ALTITUDE_M
-  const slantRange = computeSlantRangeMeters(elevation, altitude)
-
-  if (!Number.isFinite(slantRange) || slantRange <= 0) {
-    return DEMO_PEAK_DOWNLINK_MBPS / 4
-  }
-
-  const rate = DEMO_PEAK_DOWNLINK_MBPS
-    * ((DEMO_REFERENCE_ALTITUDE_M / slantRange) ** 2)
-
-  return Math.max(4, Math.min(DEMO_PEAK_DOWNLINK_MBPS, rate))
-}
-
-// Walks the planning window once, filling at the generation rate and draining
-// during each pass, clamping at both 0 and the capacity. Returns the polyline
-// plus flags for the two interesting failure modes: the buffer ran full (data
-// would have been lost) or ran dry mid-pass (the link went unused).
-const buildDataLevelSeries = ({
-  startTimestamp,
-  endTimestamp,
-  startLevelGb,
-  capacityGb,
-  generationGbPerMs,
-  passes,
-}) => {
-  const points = []
-  let level = Math.max(0, Math.min(capacityGb, startLevelGb))
-  let cursor = startTimestamp
-  let overflowed = false
-  let starved = false
-
-  points.push({ timestamp: cursor, level })
-
-  const advanceTo = (targetTimestamp, ratePerMs) => {
-    if (targetTimestamp <= cursor) {
-      return
-    }
-
-    const projected = level + (ratePerMs * (targetTimestamp - cursor))
-
-    if (ratePerMs > 0 && projected > capacityGb) {
-      const crossTimestamp = cursor + ((capacityGb - level) / ratePerMs)
-      points.push({ timestamp: crossTimestamp, level: capacityGb })
-      points.push({ timestamp: targetTimestamp, level: capacityGb })
-      level = capacityGb
-      overflowed = true
-    } else if (ratePerMs < 0 && projected < 0) {
-      const crossTimestamp = cursor + ((0 - level) / ratePerMs)
-      points.push({ timestamp: crossTimestamp, level: 0 })
-      points.push({ timestamp: targetTimestamp, level: 0 })
-      level = 0
-      starved = true
-    } else {
-      level = projected
-      points.push({ timestamp: targetTimestamp, level })
-    }
-
-    cursor = targetTimestamp
-  }
-
-  const steps = []
-
-  passes.forEach((pass) => {
-    const passStart = Math.max(cursor, pass.startTimestamp)
-    const passEnd = Math.min(endTimestamp, pass.endTimestamp)
-
-    if (passEnd <= passStart) {
-      return
-    }
-
-    advanceTo(passStart, generationGbPerMs)
-    const levelBefore = level
-    advanceTo(passEnd, generationGbPerMs - pass.downlinkGbPerMs)
-
-    steps.push({
-      ...pass,
-      startTimestamp: passStart,
-      endTimestamp: passEnd,
-      levelBefore,
-      levelAfter: level,
-      // Generation keeps running during the pass, so the downlinked amount is
-      // not simply the drop in level.
-      transferredGb: Math.max(
-        0,
-        levelBefore + (generationGbPerMs * (passEnd - passStart)) - level,
-      ),
-    })
-  })
-
-  advanceTo(endTimestamp, generationGbPerMs)
-
-  return { points, steps, overflowed, starved }
-}
+const DEFAULT_DOWNLINK_RATE_MBPS = 25
+const DEFAULT_TRADE_OFF_STRATEGY = 'buffer_overflow_avoidance'
+const DEFAULT_SCORING_ALPHA = 2
+const DEFAULT_SCORING_EXPONENT = 2
+const TRADE_OFF_STRATEGIES = [
+  { value: 'buffer_overflow_avoidance', label: 'Buffer overflow avoidance' },
+  { value: 'max_downlink_throughput', label: 'Maximum downlink throughput' },
+  { value: 'max_pass_duration', label: 'Maximum pass duration' },
+]
 
 class MapErrorBoundary extends Component {
   state = { error: null }
@@ -240,8 +120,10 @@ const parsePlanningDateFields = (dateValue, timeValue, timeMode) => {
 }
 
 const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start = new Date()) => {
-  const end = new Date(start.getTime() + 60 * 60000)
-  const startFields = formatPlanningDateFields(start, timeMode)
+  const roundedStart = new Date(start)
+  roundedStart.setMinutes(0, 0, 0)
+  const end = new Date(roundedStart.getTime() + 60 * 60000)
+  const startFields = formatPlanningDateFields(roundedStart, timeMode)
   const endFields = formatPlanningDateFields(end, timeMode)
 
   return {
@@ -249,7 +131,7 @@ const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start 
     startTime: startFields.time,
     endDate: endFields.date,
     endTime: endFields.time,
-    startIso: start.toISOString(),
+    startIso: roundedStart.toISOString(),
     endIso: end.toISOString(),
   }
 }
@@ -259,30 +141,26 @@ const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
 export default function App() {
   const splitPanelsRef = useRef(null)
   const planningRowResizeDragCleanupRef = useRef(null)
-  const bottomRowResizeDragCleanupRef = useRef(null)
   const topPanelsResizeDragCleanupRef = useRef(null)
   const splitDragCleanupRef = useRef(null)
   const timelineScrollRef = useRef(null)
   const timelineScrollFrameRef = useRef(null)
-  const timelineLayoutKeyRef = useRef('')
-  const timelineProgrammaticScrollRef = useRef(false)
+  const timelineHorizontalRangeRef = useRef(null)
   const timelinePlayheadSliderRef = useRef(null)
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
-  const timelinePlaybackDomRef = useRef({ markers: [], bars: [], thumb: null, label: null })
+  const timelinePlayheadDraggingRef = useRef(false)
+  const timelinePlaybackDomRef = useRef({ playhead: null, bars: [], label: null })
   const timelinePlaybackLastTextSyncRef = useRef(0)
   const missionMapRef = useRef(null)
+  const visibleMapAssetListRef = useRef(null)
   const tradeOffCardListRef = useRef(null)
   const timelinePanelRef = useRef(null)
-  const dataVolumeScrollRef = useRef(null)
-  // Guards the two-way scroll mirror below from ping-ponging: whichever
-  // container the user actually scrolled writes to the other, and the write
-  // itself must not bounce back.
-  const scrollSyncLockRef = useRef(false)
   const timelineWheelHintRef = useRef(null)
   const timelineWheelHintTimeoutRef = useRef(null)
   const timelineWheelHandlerRef = useRef(null)
+  const timelineTradeOffDrawerDragCleanupRef = useRef(null)
   const schedulerAbortControllerRef = useRef(null)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
@@ -311,15 +189,23 @@ export default function App() {
   const [overviewRows, setOverviewRows] = useState([])
   const [showUnavailableOverviewRows, setShowUnavailableOverviewRows] = useState(true)
   const [satelliteTracks, setSatelliteTracks] = useState({})
+  const [orbitEngineRunId, setOrbitEngineRunId] = useState(null)
+  const [propagationResult, setPropagationResult] = useState(null)
+  const [propagationRequestKey, setPropagationRequestKey] = useState(null)
+  const [filterRunId, setFilterRunId] = useState(null)
+  const [filteredLinks, setFilteredLinks] = useState([])
+  const [sessionId, setSessionId] = useState(null)
+  const [sessionPlan, setSessionPlan] = useState(null)
   const [extractionStatus, setExtractionStatus] = useState('Not started')
   const [extractionProgress, setExtractionProgress] = useState(0)
   const [extractionMessages, setExtractionMessages] = useState([])
   const [calculatingTradeOffs, setCalculatingTradeOffs] = useState(false)
-  const [useDemoData, setUseDemoData] = useState(false)
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
   const [selectedTradeOffOption, setSelectedTradeOffOption] = useState({})
+  const [timelineTradeOffViewId, setTimelineTradeOffViewId] = useState(null)
+  const [timelineTradeOffDrawerOffset, setTimelineTradeOffDrawerOffset] = useState({ x: 0, y: 0 })
   const [warningTooltip, setWarningTooltip] = useState({
     visible: false,
     message: '',
@@ -327,9 +213,9 @@ export default function App() {
     y: 0,
   })
   const [overviewPanelWidth, setOverviewPanelWidth] = useState(58)
-  // Which panel currently occupies which of the 5 layout slots. The top row
+  // Which panel currently occupies which layout slot. The top row
   // (topLeft/topRight) sits side by side with a width-resizer between them;
-  // the bottom column (bottomTop/bottomMiddle/bottomBottom) is stacked with a
+  // the bottom column (bottomTop/bottomMiddle) is stacked with a
   // height-resizer between each pair.
   //
   // Every divider in this layout obeys the same rule: dragging it moves the
@@ -337,29 +223,31 @@ export default function App() {
   // for vertical). For that to hold, each slot that has a divider below it
   // needs an explicit pixel height -- a slot sized `auto` pins its own bottom
   // edge to its content, so its divider could never follow the pointer. Hence
-  // bottomTop and bottomMiddle are pixel-sized and only the LAST slot, which
-  // has no divider below it, grows with its content. Dragging a panel's handle onto another panel swaps their
+  // bottomTop is pixel-sized and the last slot grows with its content.
+  // Dragging a panel's handle onto another panel swaps their
   // slots, regardless of row — this does not persist across reloads.
   const [panelSlotAssignment, setPanelSlotAssignment] = useState(() => ({
     topLeft: 'overview',
     ...(TRADE_OFF_PANEL_ENABLED ? { topRight: 'tradeOff' } : {}),
     bottomTop: 'mapView',
     bottomMiddle: 'timeline',
-    bottomBottom: 'dataVolume',
   }))
   const [draggedPanelId, setDraggedPanelId] = useState(null)
   const [dragOverPanelId, setDragOverPanelId] = useState(null)
   // Height (px) of the bottomTop slot -- this is the whole panel's grid
   // row (heading + padding + content), not just its content area; the
-  // bottomBottom slot always flows naturally beneath it. 540px is 50%
+  // bottomMiddle slot always flows naturally beneath it. 540px is 50%
   // taller again on top of the previous 360px default (itself 50% taller
   // than 240px, which was 50% taller than the original 160px default).
   const [bottomTopHeightPx, setBottomTopHeightPx] = useState(540)
-  const [bottomMiddleHeightPx, setBottomMiddleHeightPx] = useState(620)
-  // Demo assumptions behind the data-volume curves, editable in that panel.
+  // Default buffer configuration sent to the backend session engine.
   const [dataStartFillGb, setDataStartFillGb] = useState(DEFAULT_DATA_START_FILL_GB)
   const [dataGenerationMbps, setDataGenerationMbps] = useState(DEFAULT_DATA_GENERATION_MBPS)
   const [dataCapacityGb, setDataCapacityGb] = useState(DEFAULT_DATA_CAPACITY_GB)
+  const [dataDownlinkRateMbps, setDataDownlinkRateMbps] = useState(DEFAULT_DOWNLINK_RATE_MBPS)
+  const [tradeOffStrategy, setTradeOffStrategy] = useState(DEFAULT_TRADE_OFF_STRATEGY)
+  const [scoringAlpha, setScoringAlpha] = useState(DEFAULT_SCORING_ALPHA)
+  const [scoringExponent, setScoringExponent] = useState(DEFAULT_SCORING_EXPONENT)
   // Shared height (px) of the top row (Overview/Trade-Off by default);
   // both panels stretch to this height and scroll their own content
   // internally. 346px is 60% of the panels' original fixed 36rem (576px)
@@ -370,18 +258,20 @@ export default function App() {
   const [confirmationStep, setConfirmationStep] = useState('')
   const [confirmationSuccess, setConfirmationSuccess] = useState(false)
   const [confirmedScheduleCount, setConfirmedScheduleCount] = useState(0)
+  const [createdActivitiesCount, setCreatedActivitiesCount] = useState(0)
+  const [overridingLinkId, setOverridingLinkId] = useState(null)
   const [activeMapAssetId, setActiveMapAssetId] = useState(null)
   const [showGroundStationVisibilityCircles, setShowGroundStationVisibilityCircles] = useState(true)
   const [showSatelliteVisibilityCircles, setShowSatelliteVisibilityCircles] = useState(true)
   const [showGroundTracks, setShowGroundTracks] = useState(true)
   const [groundTrackWindowHours, setGroundTrackWindowHours] = useState(6)
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
-  const [timelineNow, setTimelineNow] = useState(() => Date.now())
   const [timelinePlayheadTime, setTimelinePlayheadTime] = useState(() => Date.now())
-  const [timelineLive, setTimelineLive] = useState(true)
+  const [timelineLive, setTimelineLive] = useState(false)
   const [timelinePlaying, setTimelinePlaying] = useState(false)
   const [timelinePlaybackSpeed, setTimelinePlaybackSpeed] = useState(1)
   const [timelineZoomLevel, setTimelineZoomLevel] = useState(TIMELINE_DEFAULT_ZOOM_LEVEL)
+  const [timelineViewportWidthPx, setTimelineViewportWidthPx] = useState(0)
   // null means "use the preset multiplier from timelineZoomLevel"; a number
   // means the person has zoomed continuously with Ctrl/⌘ + scroll (mirroring
   // the map's Ctrl-gated wheel zoom) and that exact value overrides the
@@ -416,8 +306,14 @@ export default function App() {
     visible: false,
     pinned: false,
     item: null,
+    anchorItemId: null,
     x: 0,
     y: 0,
+  })
+  const [timelineHorizontalControl, setTimelineHorizontalControl] = useState({
+    visible: false,
+    left: 0,
+    width: 0,
   })
   const [expandedSections, setExpandedSections] = useState({
     timeWindow: true,
@@ -425,11 +321,12 @@ export default function App() {
     groundStations: true,
     unavailableAssets: false,
     linkFilters: true,
+    bufferConfig: true,
+    tradeOffConfig: true,
     mapView: true,
     overview: true,
     tradeOff: true,
     timeline: true,
-    dataVolume: true,
   })
 
   const preparedSatelliteTracks = useMemo(() => Object.fromEntries(
@@ -558,16 +455,27 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!schedulerLaunched || !timelineLive) {
-      return undefined
+    const isNumberInput = (target) => (
+      target instanceof HTMLInputElement && target.type === 'number'
+    )
+    const preventNumberInputStepping = (event) => {
+      if (isNumberInput(event.target) && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault()
+      }
+    }
+    const preventNumberInputWheel = (event) => {
+      if (isNumberInput(event.target) && document.activeElement === event.target) {
+        event.preventDefault()
+      }
     }
 
-    const intervalId = window.setInterval(() => {
-      setTimelineNow(Date.now())
-    }, 1000)
-
-    return () => window.clearInterval(intervalId)
-  }, [schedulerLaunched, timelineLive])
+    document.addEventListener('keydown', preventNumberInputStepping, true)
+    document.addEventListener('wheel', preventNumberInputWheel, { capture: true, passive: false })
+    return () => {
+      document.removeEventListener('keydown', preventNumberInputStepping, true)
+      document.removeEventListener('wheel', preventNumberInputWheel, true)
+    }
+  }, [])
 
   useEffect(() => () => {
     if (splitDragCleanupRef.current) {
@@ -575,9 +483,6 @@ export default function App() {
     }
     if (planningRowResizeDragCleanupRef.current) {
       planningRowResizeDragCleanupRef.current()
-    }
-    if (bottomRowResizeDragCleanupRef.current) {
-      bottomRowResizeDragCleanupRef.current()
     }
     if (topPanelsResizeDragCleanupRef.current) {
       topPanelsResizeDragCleanupRef.current()
@@ -588,9 +493,10 @@ export default function App() {
     const animationFrameId = window.requestAnimationFrame(() => {
       setConfirmationSuccess(false)
       setConfirmedScheduleCount(0)
+      setCreatedActivitiesCount(0)
     })
     return () => window.cancelAnimationFrame(animationFrameId)
-  }, [selectedTradeOffOption, tradeOffsCalculated, useDemoData, schedulerLaunched])
+  }, [selectedTradeOffOption, tradeOffsCalculated, schedulerLaunched])
 
   const toggleSatellite = (name) => {
     setSelectedSatellites((current) =>
@@ -620,252 +526,6 @@ export default function App() {
       ...current,
       [layer]: !current[layer],
     }))
-  }
-
-  const handleDemoModeToggle = () => {
-    setUseDemoData((current) => !current)
-    setError(null)
-    setOverviewRows((current) =>
-      assignAvailableLinkIds(
-        current
-        .filter((row) => !row.demoGenerated)
-        .map((row) => ({
-          ...row,
-          tradeOffId: '—',
-          tradeOffScore: '—',
-          tradeOffColorIndex: null,
-        }))
-      )
-    )
-    setCalculatingTradeOffs(false)
-    setTradeOffsCalculated(false)
-    setTradeOffCards([])
-    setActiveTradeOffCardIndex(0)
-    setSelectedTradeOffOption({})
-    setMarkedTimelineLinkId(null)
-    setMarkedTradeOffOptionId(null)
-    setConfirmingSchedule(false)
-    setConfirmationProgress(0)
-    setConfirmationStep('')
-    setConfirmationSuccess(false)
-    setConfirmedScheduleCount(0)
-  }
-
-  const buildDemoTradeOffState = (rows) => {
-    const schedulableRows = rows.filter((row) => !row.scheduleBlocked)
-    const rowTradeOffMap = new Map()
-    const sortedRows = [...schedulableRows].sort((left, right) => {
-      const satCompare = String(left.satId).localeCompare(String(right.satId))
-      if (satCompare !== 0) {
-        return satCompare
-      }
-      return (toTimestamp(left.startTime) ?? 0) - (toTimestamp(right.startTime) ?? 0)
-    })
-
-    const groupedRows = []
-
-    sortedRows.forEach((row) => {
-      const startTimestamp = toTimestamp(row.startTime)
-      const endTimestamp = toTimestamp(row.endTime)
-
-      if (startTimestamp === null || endTimestamp === null || endTimestamp <= startTimestamp) {
-        return
-      }
-
-      const overlapsWithGroup = (group) =>
-        group.satId === row.satId
-        && group.rows.some((groupRow) => {
-          const groupStart = toTimestamp(groupRow.startTime)
-          const groupEnd = toTimestamp(groupRow.endTime)
-
-          if (groupStart === null || groupEnd === null) {
-            return false
-          }
-
-          return startTimestamp < groupEnd && endTimestamp > groupStart
-        })
-
-      const existingGroup = groupedRows.find(overlapsWithGroup)
-
-      if (existingGroup) {
-        existingGroup.rows.push(row)
-        return
-      }
-
-      groupedRows.push({
-        satId: row.satId,
-        rows: [row],
-      })
-    })
-
-    const groups = groupedRows
-      .filter((group) => group.rows.length > 1)
-      .map((group, groupIndex) => {
-        const tradeOffId = `TO-${String(groupIndex + 1).padStart(2, '0')}`
-        const tradeOffGroupId = `tradeoff-${tradeOffId}`
-        const colorIndex = groupIndex % TRADE_OFF_ACCENT_COLORS.length
-
-        const options = group.rows
-          .map((row) => {
-            const durationScore = Math.min(35, (row.durationSeconds ?? 0) / 60 * 3)
-            const elevationScore = Math.min(45, Number(row.maxElevationDeg ?? 0) * 0.8)
-            const totalScoreValue = Math.round(20 + durationScore + elevationScore)
-
-            return {
-              tradeOffGroupId,
-              optionId: `${tradeOffId}-${row.overpassId}`,
-              overpassId: row.overpassId,
-              satId: row.satId,
-              gsId: row.gsId,
-              duration: row.duration,
-              durationSeconds: row.durationSeconds,
-              maxElevationDeg: row.maxElevationDeg,
-              startTime: row.startTime,
-              endTime: row.endTime,
-              maxElevation: row.maxElevation,
-              scoreValue: totalScoreValue,
-              score: `${totalScoreValue}/100`,
-              colorIndex,
-            }
-          })
-          .sort((left, right) => right.scoreValue - left.scoreValue)
-          .map((option, optionIndex) => ({
-            ...option,
-            recommended: optionIndex === 0,
-          }))
-
-        options.forEach((option) => {
-          rowTradeOffMap.set(option.overpassId, {
-            tradeOffId,
-            score: option.score,
-            colorIndex,
-          })
-        })
-
-        return {
-          id: tradeOffGroupId,
-          title: tradeOffId,
-          resourceLabel: group.satId,
-          reason: `${group.satId} has overlapping downlink opportunities in this planning window and can only serve one of them.`,
-          options,
-          colorIndex,
-        }
-      })
-
-    const enrichedRows = rows.map((row) => ({
-      ...row,
-      tradeOffId: row.scheduleBlocked ? '—' : rowTradeOffMap.get(row.overpassId)?.tradeOffId ?? '—',
-      tradeOffScore: row.scheduleBlocked ? '—' : rowTradeOffMap.get(row.overpassId)?.score ?? '—',
-      tradeOffColorIndex: row.scheduleBlocked ? null : rowTradeOffMap.get(row.overpassId)?.colorIndex ?? null,
-    }))
-
-    return { enrichedRows, groups }
-  }
-
-  const buildDemoTradeOffPreviewRows = (
-    rows,
-    planningWindow,
-    selectedSatelliteNames,
-    selectedGroundStationNames,
-  ) => {
-    const startTimestamp = toTimestamp(planningWindow?.startTime)
-    const endTimestamp = toTimestamp(planningWindow?.endTime)
-
-    if (
-      startTimestamp === null
-      || endTimestamp === null
-      || endTimestamp <= startTimestamp
-    ) {
-      return rows
-    }
-
-    const demoSatellites =
-      selectedSatelliteNames.length > 0
-        ? selectedSatelliteNames
-        : [...new Set(rows.map((row) => row.satId).filter(Boolean))]
-    const demoGroundStations =
-      selectedGroundStationNames.length > 1
-        ? selectedGroundStationNames
-        : [...new Set(rows.map((row) => row.gsId).filter(Boolean))]
-
-    if (demoSatellites.length === 0 || demoGroundStations.length < 2) {
-      return rows
-    }
-
-    const totalWindowMinutes = Math.max(90, Math.floor((endTimestamp - startTimestamp) / 60000))
-    const nextOverpassSequence =
-      rows.reduce((highest, row) => {
-        const match = String(row.overpassId ?? '').match(/^OP-(\d+)$/)
-        if (!match) {
-          return highest
-        }
-        return Math.max(highest, Number.parseInt(match[1], 10))
-      }, 0) + 1
-
-    const previewRows = []
-    const groupCount = Math.min(2, demoSatellites.length)
-    let sequence = nextOverpassSequence
-
-    for (let groupIndex = 0; groupIndex < groupCount; groupIndex += 1) {
-      const satId = demoSatellites[groupIndex]
-      const gsA = demoGroundStations[groupIndex % demoGroundStations.length]
-      const gsB = demoGroundStations[(groupIndex + 1) % demoGroundStations.length]
-
-      if (!satId || !gsA || !gsB || gsA === gsB) {
-        continue
-      }
-
-      const baseOffsetMinutes = Math.min(
-        totalWindowMinutes - 22,
-        Math.max(12, Math.floor(totalWindowMinutes * (0.26 + groupIndex * 0.22))),
-      )
-
-      const firstStart = new Date(startTimestamp + baseOffsetMinutes * 60000)
-      const firstEnd = new Date(firstStart.getTime() + 9 * 60000)
-      const secondStart = new Date(firstStart.getTime() + 2 * 60000)
-      const secondEnd = new Date(secondStart.getTime() + 10 * 60000)
-
-      previewRows.push(
-        {
-          overpassId: `OP-${String(sequence++).padStart(3, '0')}`,
-          satId,
-          gsId: gsA,
-          duration: '9 min',
-          durationSeconds: 9 * 60,
-          startTime: firstStart.toISOString(),
-          endTime: firstEnd.toISOString(),
-          maxElevation: '57.4°',
-          maxElevationDeg: 57.4,
-          scheduleBlocked: false,
-          scheduleBlockLabel: null,
-          scheduleBlockAsset: null,
-          tradeOffId: '—',
-          tradeOffScore: '—',
-          tradeOffColorIndex: null,
-          demoGenerated: true,
-        },
-        {
-          overpassId: `OP-${String(sequence++).padStart(3, '0')}`,
-          satId,
-          gsId: gsB,
-          duration: '10 min',
-          durationSeconds: 10 * 60,
-          startTime: secondStart.toISOString(),
-          endTime: secondEnd.toISOString(),
-          maxElevation: '52.1°',
-          maxElevationDeg: 52.1,
-          scheduleBlocked: false,
-          scheduleBlockLabel: null,
-          scheduleBlockAsset: null,
-          tradeOffId: '—',
-          tradeOffScore: '—',
-          tradeOffColorIndex: null,
-          demoGenerated: true,
-        },
-      )
-    }
-
-    return previewRows.length > 0 ? [...rows, ...previewRows] : rows
   }
 
   const getEventTimestamp = (event) => {
@@ -991,28 +651,6 @@ export default function App() {
     return dayOffset > 0 ? `${timeLabel} +${dayOffset}` : timeLabel
   }
 
-  const formatDateTimeCompact = (
-    value,
-    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
-  ) => {
-    if (!value) {
-      return '—'
-    }
-
-    const parsed = new Date(value)
-    if (!Number.isFinite(parsed.getTime())) {
-      return '—'
-    }
-
-    return parsed.toLocaleString([], {
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      ...getTimeZoneFormatOptions(timeMode),
-    })
-  }
-
   const formatElevation = (value) => {
     if (!Number.isFinite(value)) {
       return '—'
@@ -1020,32 +658,6 @@ export default function App() {
 
     return `${value.toFixed(1)}°`
   }
-
-  const formatOverpassDisplayId = (index) => `OP-${String(index + 1).padStart(3, '0')}`
-  const formatLinkDisplayId = (index) => `L-${String(index + 1).padStart(3, '0')}`
-
-  const buildOverviewRowsFromOverpasses = (overpassBlocks) =>
-    [...overpassBlocks]
-      .sort((left, right) => {
-        const leftTimestamp = toTimestamp(left.start_time) ?? 0
-        const rightTimestamp = toTimestamp(right.start_time) ?? 0
-        return leftTimestamp - rightTimestamp
-      })
-      .map((block, index) => ({
-        overpassId: formatOverpassDisplayId(index),
-        linkId: null,
-        backendOverpassId: block.overpass_id,
-        satId: block.satellite_name,
-        gsId: block.groundstation_name,
-        duration: formatDurationFromSeconds(block.duration_seconds),
-        durationSeconds: block.duration_seconds,
-        startTime: block.start_time,
-        endTime: block.end_time,
-        maxElevation: formatElevation(block.max_elevation_deg),
-        maxElevationDeg: block.max_elevation_deg,
-        availabilityStatus: block.availability_status ?? (block.rejection_reason ? 'unavailable' : 'available'),
-        rejectionReason: block.rejection_reason ?? null,
-      }))
 
   const buildCurrentScheduleItems = (schedules, relevantScheduleNames) => {
     const relevantNames = new Set(relevantScheduleNames)
@@ -1063,6 +675,7 @@ export default function App() {
 
           return {
             id: `current-${schedule.name}-${activity.uuid ?? activityIndex}`,
+            activityUuid: activity.uuid ? String(activity.uuid) : null,
             label: activity.name?.trim() || 'Scheduled activity',
             detail: schedule.name,
             startTime,
@@ -1078,89 +691,68 @@ export default function App() {
       })
   }
 
-  const isUnavailableOverviewRow = (row) => (
-    row.scheduleBlocked
-    || row.availabilityStatus === 'filtered'
-    || row.availabilityStatus === 'blocked'
-    || row.availabilityStatus === 'unavailable'
-    || Boolean(row.rejectionReason)
-  )
-
-  const assignAvailableLinkIds = (rows) => {
-    let availableIndex = 0
-
-    return rows.map((row) => {
-      if (isUnavailableOverviewRow(row)) {
-        return {
-          ...row,
-          linkId: '—',
-        }
-      }
-
-      const nextLinkId = formatLinkDisplayId(availableIndex)
-      availableIndex += 1
-
-      return {
-        ...row,
-        linkId: nextLinkId,
-      }
-    })
-  }
-
-  const hasTimeOverlap = (startA, endA, startB, endB) => startA < endB && endA > startB
-
-  const getBlockingScheduledActivity = (row, scheduleItems) => {
-    const rowStartTimestamp = toTimestamp(row.startTime)
-    const rowEndTimestamp = toTimestamp(row.endTime)
-
-    if (
-      rowStartTimestamp === null
-      || rowEndTimestamp === null
-      || rowEndTimestamp <= rowStartTimestamp
-    ) {
-      return null
+  const getOverviewRowStatus = (row) => {
+    if (row.scheduleBlocked || row.availabilityStatus === 'blocked') {
+      return 'blocked'
     }
 
-    return scheduleItems.find((item) => {
-      const itemStartTimestamp = toTimestamp(item.startTime)
-      const itemEndTimestamp = toTimestamp(item.endTime)
-      const scheduleOwner = item.detail ?? ''
-      const sameAsset = scheduleOwner === row.satId || scheduleOwner === row.gsId
+    if (
+      row.isEligible === false
+      || row.availabilityStatus === 'filtered'
+      || row.availabilityStatus === 'unavailable'
+    ) {
+      return 'ineligible'
+    }
 
-      if (
-        !sameAsset
-        || itemStartTimestamp === null
-        || itemEndTimestamp === null
-        || itemEndTimestamp <= itemStartTimestamp
-      ) {
-        return false
-      }
-
-      return hasTimeOverlap(
-        rowStartTimestamp,
-        rowEndTimestamp,
-        itemStartTimestamp,
-        itemEndTimestamp,
-      )
-    }) ?? null
+    return 'eligible'
   }
 
-  const annotateRowsWithSchedulePriority = (rows, scheduleItems) =>
-    rows.map((row) => {
-      const blockingActivity = getBlockingScheduledActivity(row, scheduleItems)
-      const rejectionReason = blockingActivity
-        ? `${row.overpassId} is blocked because ${blockingActivity?.label ?? 'a scheduled activity'} on ${blockingActivity?.detail ?? 'the current schedule'} has priority.`
-        : row.rejectionReason ?? null
+  const isUnavailableOverviewRow = (row) => getOverviewRowStatus(row) !== 'eligible'
 
-      return {
-        ...row,
-        scheduleBlocked: Boolean(blockingActivity),
-        scheduleBlockLabel: blockingActivity?.label ?? null,
-        scheduleBlockAsset: blockingActivity?.detail ?? null,
-        availabilityStatus: blockingActivity ? 'blocked' : (row.availabilityStatus ?? 'available'),
-        rejectionReason,
-      }
-    })
+  const shouldHideOverviewRowInAvailableMode = (row) => getOverviewRowStatus(row) === 'ineligible'
+
+  const getOverviewDisplayLinkId = (row) => {
+    if (getOverviewRowStatus(row) === 'ineligible') {
+      return '—'
+    }
+
+    return row.backendLinkId ?? row.linkId ?? '—'
+  }
+
+  const formatDataDownlinkGb = (valueMb) => {
+    if (!Number.isFinite(valueMb)) {
+      return '—'
+    }
+
+    return formatGb(valueMb / 1000)
+  }
+
+  const getDisplayDataDownlinkMb = (item) => {
+    const usefulDataOffloadedMb = Number(item?.usefulDataOffloadedMb)
+    const estimatedDataCapacityMb = Number(item?.estimatedDataCapacityMb)
+
+    if (Number.isFinite(usefulDataOffloadedMb) && usefulDataOffloadedMb > 0) {
+      return usefulDataOffloadedMb
+    }
+
+    if (Number.isFinite(estimatedDataCapacityMb) && estimatedDataCapacityMb > 0) {
+      return estimatedDataCapacityMb
+    }
+
+    if (Number.isFinite(usefulDataOffloadedMb)) {
+      return usefulDataOffloadedMb
+    }
+
+    return Number.isFinite(estimatedDataCapacityMb) ? estimatedDataCapacityMb : Number.NaN
+  }
+
+  const formatBufferLevelGb = (valueMb) => {
+    if (!Number.isFinite(valueMb)) {
+      return '—'
+    }
+
+    return formatGb(valueMb / 1000)
+  }
 
   const getDayOfYear = (date, timeMode = DEFAULT_PLANNING_TIME_MODE) => {
     const useUtc = timeMode === 'utc'
@@ -1246,6 +838,14 @@ export default function App() {
     return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`
   }
 
+  const formatTimelineItemDuration = (item) => {
+    if (item?.kind === 'link' && Number.isFinite(item.durationSeconds) && item.durationSeconds > 0) {
+      return formatDurationFromSeconds(item.durationSeconds)
+    }
+
+    return formatTimelineDuration(item?.startTime, item?.endTime)
+  }
+
   const formatTimelineDay = (date, timeMode) =>
     `${date.toLocaleDateString([], {
       year: 'numeric',
@@ -1288,28 +888,6 @@ export default function App() {
     }
 
     return `${formatTimelineDateTime(startValue, timeMode)} - ${formatTimelineDateTime(endValue, timeMode)}`
-  }
-
-  const getSelectedTradeOffForGroup = (group) =>
-    group.options.find((option) => option.optionId === selectedTradeOffOption[group.id])
-    ?? group.options.find((option) => option.recommended)
-    ?? group.options[0]
-
-  const getSelectedTradeOffOptions = (groups) => groups.map((group) => getSelectedTradeOffForGroup(group))
-
-  const getFinalScheduleRows = (rows, groups, tradeOffsReady) => {
-    const schedulableRows = rows.filter((row) => !row.scheduleBlocked)
-
-    if (!tradeOffsReady) {
-      return []
-    }
-
-    const selectedOptions = getSelectedTradeOffOptions(groups)
-    const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
-
-    return schedulableRows.filter(
-      (row) => row.tradeOffId === '—' || selectedOverpassIds.has(row.overpassId),
-    )
   }
 
   const layoutTimelineItems = (items) => {
@@ -1386,10 +964,6 @@ export default function App() {
   // a `linkId` so marking one marks the other.
   const buildTimelineModel = (rows, groups, currentScheduleItems, planningWindow) => {
     const timeMode = planningWindow?.timeMode ?? DEFAULT_PLANNING_TIME_MODE
-    const selectedOptions = groups
-      .map((group) => getSelectedTradeOffForGroup(group))
-      .filter(Boolean)
-    const selectedOverpassIds = new Set(selectedOptions.map((option) => option.overpassId))
     const optionByOverpassId = new Map(
       groups
         .flatMap((group) => group.options)
@@ -1415,31 +989,32 @@ export default function App() {
 
         const linkedOption = optionByOverpassId.get(row.overpassId)
         const hasTradeOff = Boolean(row.tradeOffId && row.tradeOffId !== '—')
-        const partOfProposal = tradeOffsCalculated
-          && !row.scheduleBlocked
-          && (!hasTradeOff || selectedOverpassIds.has(row.overpassId))
-        // Q9/Q12: once trade-offs exist, every option that is not the one
-        // actually driving the schedule is damped -- per group, so the
-        // recommended option of an untouched group stays legible.
-        const dimmed = tradeOffsCalculated
-          && hasTradeOff
-          && !selectedOverpassIds.has(row.overpassId)
+        const partOfProposal = tradeOffsCalculated && row.isScheduled
+        const dimmed = tradeOffsCalculated && hasTradeOff && !row.isScheduled
 
         let variant = 'neutral'
         if (row.scheduleBlocked) {
           variant = 'blocked'
+        } else if (row.overrideState === 'excluded') {
+          variant = 'excluded'
+        } else if (row.overrideState === 'pinned') {
+          variant = 'pinned'
+        } else if (row.isScheduled) {
+          variant = 'selected'
         } else if (hasTradeOff) {
-          variant = selectedOverpassIds.has(row.overpassId) ? 'selected' : 'candidate'
+          variant = 'candidate'
         } else if (tradeOffsCalculated) {
-          variant = 'fixed'
+          variant = 'neutral'
         }
 
         return {
           kind: 'link',
-          linkId: row.overpassId,
+          linkId: row.backendLinkId ?? row.linkId,
+          overpassId: row.overpassId,
           satId: row.satId,
           gsId: row.gsId,
-          label: row.overpassId,
+          durationSeconds: row.durationSeconds,
+          label: row.backendLinkId ?? row.linkId,
           detail: hasTradeOff
             ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
             : `${row.satId} → ${row.gsId}`,
@@ -1452,13 +1027,19 @@ export default function App() {
           dimmed,
           blocked: Boolean(row.scheduleBlocked),
           blockMessage: row.scheduleBlocked
-            ? `${row.overpassId} is blocked because ${row.scheduleBlockLabel ?? 'a scheduled activity'} on ${row.scheduleBlockAsset ?? 'the current schedule'} has priority.`
+            ? row.rejectionReason
             : null,
           tradeOffId: hasTradeOff ? row.tradeOffId : null,
-          tradeOffScore: row.tradeOffScore ?? null,
+          tradeOffGroupId: linkedOption?.tradeOffGroupId ?? (hasTradeOff ? row.tradeOffId : null),
           tradeOffColorIndex: row.tradeOffColorIndex ?? null,
           optionId: linkedOption?.optionId ?? null,
-          recommended: linkedOption?.recommended ?? false,
+          isSchedulable: getOverviewRowStatus(row) === 'eligible',
+          isScheduled: Boolean(row.isScheduled),
+          recommended: row.isScheduled && row.overrideState === 'auto',
+          overrideState: row.overrideState,
+          usefulDataOffloadedMb: row.usefulDataOffloadedMb,
+          score: row.score,
+          rejectionReason: row.rejectionReason,
         }
       })
       .filter(Boolean)
@@ -1481,7 +1062,7 @@ export default function App() {
         // the asset's header row as a blocking bar -- that is the red bar in
         // the agreed layout sketch.
         const blocking = blockedRows.some(
-          (row) => row.scheduleBlockAsset === item.detail && row.scheduleBlockLabel === item.label,
+          (row) => row.conflictingActivityUuid && row.conflictingActivityUuid === item.activityUuid,
         )
 
         return {
@@ -1491,6 +1072,7 @@ export default function App() {
           assetName: item.detail,
           label: item.label,
           detail: item.detail,
+          durationSeconds: null,
           startTime: item.startTime,
           endTime: item.endTime,
           startTimestamp,
@@ -1577,7 +1159,7 @@ export default function App() {
     const mapToTimelineItem = (item) => ({
       ...item,
       startMinutes: (item.startTimestamp - baseTimestamp) / 60000,
-      durationMinutes: Math.max(5, (item.endTimestamp - item.startTimestamp) / 60000),
+      durationMinutes: Math.max(1 / 60, (item.endTimestamp - item.startTimestamp) / 60000),
     })
 
     const layerVisible = (layer) => timelineLayers[layer] !== false
@@ -1653,15 +1235,34 @@ export default function App() {
     const satelliteGroups = satelliteNames.map((name) => buildAssetGroup('satellite', name))
     const groundStationGroups = groundStationNames.map((name) => buildAssetGroup('ground_station', name))
 
-    const ticks = Array.from({ length: Math.floor(totalMinutes / 60) + 2 }, (_, index) => {
-      const offsetMinutes = index * 60
-      const tickDate = new Date(baseDate.getTime() + offsetMinutes * 60000)
-      return {
-        offsetMinutes,
-        date: tickDate,
-        label: formatTimelineHour(tickDate, timeMode),
+    const firstTickDate = new Date(baseDate.getTime())
+    if (timeMode === 'utc') {
+      firstTickDate.setUTCMinutes(0, 0, 0)
+      if (firstTickDate.getTime() < baseDate.getTime()) {
+        firstTickDate.setUTCHours(firstTickDate.getUTCHours() + 1)
       }
-    }).filter((tick) => tick.offsetMinutes <= totalMinutes)
+    } else {
+      firstTickDate.setMinutes(0, 0, 0)
+      if (firstTickDate.getTime() < baseDate.getTime()) {
+        firstTickDate.setHours(firstTickDate.getHours() + 1)
+      }
+    }
+
+    const ticks = []
+    for (
+      let tickDate = new Date(firstTickDate.getTime());
+      tickDate.getTime() <= baseDate.getTime() + totalMinutes * 60000;
+      tickDate = new Date(tickDate.getTime() + 60 * 60000)
+    ) {
+      const offsetMinutes = (tickDate.getTime() - baseDate.getTime()) / 60000
+      if (offsetMinutes >= 0 && offsetMinutes <= totalMinutes) {
+        ticks.push({
+          offsetMinutes,
+          date: tickDate,
+          label: formatTimelineHour(tickDate, timeMode),
+        })
+      }
+    }
 
     return {
       baseDate,
@@ -1721,6 +1322,13 @@ export default function App() {
     setOverviewRows([])
     setShowUnavailableOverviewRows(true)
     setSatelliteTracks({})
+    setOrbitEngineRunId(null)
+    setPropagationResult(null)
+    setPropagationRequestKey(null)
+    setFilterRunId(null)
+    setFilteredLinks([])
+    setSessionId(null)
+    setSessionPlan(null)
     setExtractionStatus('Not started')
     setExtractionProgress(0)
     setExtractionMessages([])
@@ -1729,11 +1337,13 @@ export default function App() {
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption({})
+    setTimelineTradeOffViewId(null)
     setActiveMapAssetId(null)
     setActivePlanningWindow(null)
-    setTimelineNow(Date.now())
-    setTimelinePlayheadTime(Date.now())
-    setTimelineLive(true)
+    const planningWindowStartTimestamp = new Date(planningWindowPreset.startIso).getTime()
+    setTimelinePlayheadTime(planningWindowStartTimestamp)
+    timelinePlayheadTimeRef.current = planningWindowStartTimestamp
+    setTimelineLive(false)
     setTimelinePlaying(false)
     setTimelinePlaybackSpeed(1)
     setTimelineZoomLevel(TIMELINE_DEFAULT_ZOOM_LEVEL)
@@ -1752,20 +1362,27 @@ export default function App() {
       groundStations: true,
       unavailableAssets: false,
       linkFilters: true,
+      bufferConfig: true,
+      tradeOffConfig: true,
       mapView: true,
       overview: true,
       tradeOff: true,
       timeline: true,
-      dataVolume: true,
     })
     setDataStartFillGb(DEFAULT_DATA_START_FILL_GB)
     setDataGenerationMbps(DEFAULT_DATA_GENERATION_MBPS)
     setDataCapacityGb(DEFAULT_DATA_CAPACITY_GB)
+    setDataDownlinkRateMbps(DEFAULT_DOWNLINK_RATE_MBPS)
+    setTradeOffStrategy(DEFAULT_TRADE_OFF_STRATEGY)
+    setScoringAlpha(DEFAULT_SCORING_ALPHA)
+    setScoringExponent(DEFAULT_SCORING_EXPONENT)
     setConfirmingSchedule(false)
     setConfirmationProgress(0)
     setConfirmationStep('')
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
+    setCreatedActivitiesCount(0)
+    setOverridingLinkId(null)
   }
 
   const planningDateAndTimeToIso = (dateValue, timeValue, timeMode = planningTimeMode) =>
@@ -1864,30 +1481,6 @@ export default function App() {
     }
   }
 
-  const makeAbortError = () => {
-    const abortError = new Error('Terminated by user.')
-    abortError.name = 'AbortError'
-    return abortError
-  }
-
-  // Signal-aware: lets handleTerminateScheduler interrupt an in-progress
-  // wait immediately instead of only taking effect on the next fetch (which
-  // could otherwise leave "Terminate" feeling unresponsive for up to the
-  // full poll interval).
-  const wait = (durationMs, signal) =>
-    new Promise((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(makeAbortError())
-        return
-      }
-
-      const timeoutId = window.setTimeout(resolve, durationMs)
-      signal?.addEventListener('abort', () => {
-        window.clearTimeout(timeoutId)
-        reject(makeAbortError())
-      }, { once: true })
-    })
-
   const formatTaskStatusLabel = (status) => {
     switch (status) {
       case 'queued':
@@ -1903,37 +1496,6 @@ export default function App() {
     }
   }
 
-  const pollTaskResult = async (taskId, onStatusUpdate, signal) => {
-    while (true) {
-      if (signal?.aborted) {
-        throw makeAbortError()
-      }
-
-      const statusResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}`, { signal })
-      if (!statusResponse.ok) {
-        throw new Error(`Status polling failed with ${statusResponse.status}`)
-      }
-
-      const taskStatus = await statusResponse.json()
-      onStatusUpdate?.(taskStatus)
-
-      if (taskStatus.status === 'completed') {
-        const resultResponse = await fetch(`${BACKEND_BASE_URL}/tasks/status/${taskId}/result`, { signal })
-        if (!resultResponse.ok) {
-          throw new Error(`Result request failed with ${resultResponse.status}`)
-        }
-
-        return resultResponse.json()
-      }
-
-      if (taskStatus.status === 'failed') {
-        throw new Error(taskStatus.message || 'Overpass extraction failed.')
-      }
-
-      await wait(1200, signal)
-    }
-  }
-
   const fetchAssets = async () => {
     setLoading(true)
     setError(null)
@@ -1941,11 +1503,7 @@ export default function App() {
     setAssetSchedules([])
     resetWorkspaceState()
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/tasks/initialize`)
-      if (!response.ok) {
-        throw new Error(`Server returned status ${response.status}`)
-      }
-      const data = await response.json()
+      const data = await initializeAssets()
       if (data && Array.isArray(data.assets)) {
         setSatosAlive(true)
         setAssets(data.assets)
@@ -1962,42 +1520,34 @@ export default function App() {
     }
   }
 
-  const applyOverviewLinkFilters = (rows) => rows.map((row) => {
-    const filterReasons = []
+  const appendTaskStatus = (taskStatus, stageLabel, progressStart = 0, progressSpan = 100) => {
+    setExtractionStatus(`${stageLabel}: ${formatTaskStatusLabel(taskStatus.status)}`)
+    const taskProgress = Number.isFinite(taskStatus.progress) ? taskStatus.progress : 0
+    setExtractionProgress(Math.round(progressStart + (taskProgress / 100) * progressSpan))
 
-    if (
-      minimumLinkElevationFilterValue !== null
-      && Number.isFinite(row.maxElevationDeg)
-      && row.maxElevationDeg < minimumLinkElevationFilterValue
-    ) {
-      filterReasons.push('Filtered by link elevation threshold.')
+    if (taskStatus.message) {
+      setExtractionMessages((current) => {
+        const text = `${stageLabel}: ${taskStatus.message}`
+        if (current[current.length - 1]?.text === text) {
+          return current
+        }
+        return [
+          ...current,
+          {
+            id: `${stageLabel}-${taskStatus.status}-${taskStatus.progress ?? 0}-${current.length}`,
+            text,
+          },
+        ]
+      })
     }
+  }
 
-    if (
-      minimumPeakElevationFilterValue !== null
-      && Number.isFinite(row.maxElevationDeg)
-      && row.maxElevationDeg < minimumPeakElevationFilterValue
-    ) {
-      filterReasons.push('Filtered by peak elevation threshold.')
-    }
-
-    if (filterReasons.length === 0) {
-      return row
-    }
-
-    if (row.availabilityStatus && row.availabilityStatus !== 'available') {
-      return {
-        ...row,
-        rejectionReason: [row.rejectionReason, ...filterReasons].filter(Boolean).join(' '),
-      }
-    }
-
-    return {
-      ...row,
-      availabilityStatus: 'filtered',
-      rejectionReason: filterReasons.join(' '),
-    }
-  })
+  const formatFilteredRows = (links) => buildRowsFromFilteredLinks(links).map((row) => ({
+    ...row,
+    duration: formatDurationFromSeconds(row.durationSeconds),
+    maxElevation: formatElevation(row.maxElevationDeg),
+    tradeOffColorIndex: null,
+  }))
 
   const handleLaunchScheduler = async () => {
     if (!launchRequirementsMet) return false
@@ -2018,33 +1568,59 @@ export default function App() {
       return false
     }
 
+    const nextPropagationRequestKey = JSON.stringify({
+      satellites: [...selectedSatellites].sort(),
+      groundstations: [...selectedGroundStations].sort(),
+      start_time: planningWindow.startTime,
+      end_time: planningWindow.endTime,
+    })
+    const canReusePropagation = Boolean(
+      orbitEngineRunId
+      && propagationResult
+      && propagationRequestKey === nextPropagationRequestKey
+    )
+    let completedPropagationResult = canReusePropagation ? propagationResult : null
+    let nextOrbitEngineRunId = canReusePropagation ? orbitEngineRunId : null
+    let activeBackendStage = canReusePropagation ? 'Filtering' : 'Propagation'
+
     setLaunchingScheduler(true)
     setError(null)
     setExtractionStatus('Queued')
     setExtractionProgress(0)
     setExtractionMessages([
       {
-        id: `queued-${timelineNow}`,
+        id: `queued-${Date.now()}`,
         text: 'Task queued. Waiting for backend processing to start.',
       },
     ])
     setOverviewRows([])
-    setSatelliteTracks({})
+    if (!canReusePropagation) {
+      setSatelliteTracks({})
+      setOrbitEngineRunId(null)
+      setPropagationResult(null)
+      setPropagationRequestKey(null)
+    }
+    setFilterRunId(null)
+    setFilteredLinks([])
+    setSessionId(null)
+    setSessionPlan(null)
     setSchedulerLaunched(true)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption({})
+    setTimelineTradeOffViewId(null)
     setExpandedTimelineGroups({})
     setExpandedTimelineSections({ satellites: true, groundStations: true })
     setMarkedTimelineLinkId(null)
     setMarkedTradeOffOptionId(null)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
-    const schedulerLaunchTime = timelineNow
-    setTimelineNow(schedulerLaunchTime)
+    setCreatedActivitiesCount(0)
+    const schedulerLaunchTime = new Date(planningWindow.startTime).getTime()
     setTimelinePlayheadTime(schedulerLaunchTime)
-    setTimelineLive(true)
+    timelinePlayheadTimeRef.current = schedulerLaunchTime
+    setTimelineLive(false)
     setTimelinePlaying(false)
     setSidebarCollapsed(true)
 
@@ -2054,58 +1630,53 @@ export default function App() {
     schedulerAbortControllerRef.current = abortController
 
     try {
-      const response = await fetch(`${BACKEND_BASE_URL}/tasks/extract-overpasses`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+      if (!canReusePropagation) {
+        const extractionReceipt = await startOrbitExtraction({
           satellites: selectedSatellites,
           groundstations: selectedGroundStations,
           start_time: planningWindow.startTime,
           end_time: planningWindow.endTime,
-        }),
-        signal: abortController.signal,
-      })
+        }, abortController.signal)
+        const extractionResult = await pollBackendTaskResult(extractionReceipt.task_id, {
+          signal: abortController.signal,
+          onStatusUpdate: (taskStatus) => appendTaskStatus(taskStatus, 'Propagation', 0, 65),
+        })
 
-      if (!response.ok) {
-        throw new Error(`Scheduler launch failed with status ${response.status}`)
+        completedPropagationResult = extractionResult?.payload ?? null
+        nextOrbitEngineRunId = completedPropagationResult?.metadata?.task_id ?? extractionReceipt.task_id
+        setOrbitEngineRunId(nextOrbitEngineRunId)
+        setPropagationResult(completedPropagationResult)
+        setPropagationRequestKey(nextPropagationRequestKey)
+        setSatelliteTracks(completedPropagationResult?.global_tracks ?? {})
+      } else {
+        setExtractionStatus('Filtering: Queued')
+        setExtractionProgress(65)
+        setExtractionMessages([
+          { id: `propagation-reused-${nextOrbitEngineRunId}`, text: 'Propagation: Reusing the current orbit-engine result.' },
+        ])
       }
 
-      const receipt = await response.json()
-      const result = await pollTaskResult(receipt.task_id, (taskStatus) => {
-        setExtractionStatus(formatTaskStatusLabel(taskStatus.status))
-        setExtractionProgress(
-          Number.isFinite(taskStatus.progress) ? taskStatus.progress : 0,
-        )
+      activeBackendStage = 'Filtering'
+      setExtractionMessages((current) => [
+        ...current,
+        { id: `filter-queued-${nextOrbitEngineRunId}`, text: 'Filtering: Task queued.' },
+      ])
 
-        if (taskStatus.message) {
-          setExtractionMessages((current) => {
-            if (current[current.length - 1]?.text === taskStatus.message) {
-              return current
-            }
-
-            return [
-              ...current,
-              {
-                id: `${taskStatus.status}-${taskStatus.progress ?? 0}-${current.length}`,
-                text: taskStatus.message,
-              },
-            ]
-          })
-        }
+      const filterReceipt = await startLinkFiltering({
+        orbit_engine_run_id: nextOrbitEngineRunId,
+        min_aos_los_elevation_deg: minimumLinkElevationFilterValue,
+        min_peak_elevation_deg: minimumPeakElevationFilterValue,
+        default_downlink_rate_mbps: Number(dataDownlinkRateMbps),
       }, abortController.signal)
-      const scheduleItems = buildCurrentScheduleItems(
-        assetSchedules,
-        [...selectedSatellites, ...selectedGroundStations],
-      )
-      const realRows = annotateRowsWithSchedulePriority(
-        applyOverviewLinkFilters(buildOverviewRowsFromOverpasses(result?.payload?.overpass_blocks ?? [])),
-        scheduleItems,
-      )
+      const filterResult = await pollBackendTaskResult(filterReceipt.task_id, {
+        signal: abortController.signal,
+        onStatusUpdate: (taskStatus) => appendTaskStatus(taskStatus, 'Filtering', 65, 35),
+      })
 
-      setSatelliteTracks(result?.payload?.global_tracks ?? {})
-      setOverviewRows(assignAvailableLinkIds(realRows))
+      const nextFilteredLinks = filterResult?.payload?.links ?? []
+      setFilterRunId(filterResult?.payload?.filter_run_id ?? filterReceipt.task_id)
+      setFilteredLinks(nextFilteredLinks)
+      setOverviewRows(formatFilteredRows(nextFilteredLinks))
       setExtractionStatus('Completed')
       setExtractionProgress(100)
       return true
@@ -2115,12 +1686,21 @@ export default function App() {
         console.error(err)
       }
       setOverviewRows([])
-      setSatelliteTracks({})
+      setFilterRunId(null)
+      setFilteredLinks([])
+      setSessionId(null)
+      setSessionPlan(null)
       setActivePlanningWindow(null)
       setSchedulerLaunched(false)
       setSidebarCollapsed(false)
-      setExtractionStatus(wasTerminated ? 'Terminated' : 'Failed')
-      setError(wasTerminated ? null : (err.message || 'Failed to extract overpasses from the backend.'))
+      setExtractionStatus(wasTerminated ? 'Stopped waiting' : 'Failed')
+      if (!completedPropagationResult) {
+        setSatelliteTracks({})
+        setOrbitEngineRunId(null)
+        setPropagationResult(null)
+        setPropagationRequestKey(null)
+      }
+      setError(wasTerminated ? null : (err.message || `${activeBackendStage} failed in the backend.`))
       return false
     } finally {
       schedulerAbortControllerRef.current = null
@@ -2142,83 +1722,142 @@ export default function App() {
     }
   }
 
-  // Repurposes the Launch Communication Scheduler button into a Terminate
-  // button while a launch is in flight (see the JSX below): aborts the
-  // in-progress fetch/poll loop via the shared AbortController, which
-  // throws an AbortError back in handleLaunchScheduler's catch block --
-  // that's what actually resets schedulerLaunched/sidebarCollapsed/etc.,
-  // this just requests the cancellation.
+  // The backend has no task-cancellation endpoint. This only stops the browser
+  // from waiting for the current propagation/filtering task.
   const handleTerminateScheduler = () => {
     schedulerAbortControllerRef.current?.abort()
   }
 
-  const handleCalculateTradeOffs = async () => {
-    if (!schedulerLaunched || overviewRows.length === 0 || !useDemoData) return
+  const applyAuthoritativeSessionPlan = (
+    plan,
+    baseRows = overviewRows,
+    { focusTimeline = true } = {},
+  ) => {
+    const plannedRows = applySessionPlanToRows(baseRows, plan)
+    const rawCards = buildTradeOffCardsFromPlan(plan, plannedRows)
+    const colorByLinkId = new Map(
+      rawCards.flatMap((card) => card.options.map((option) => [option.linkId, card.colorIndex])),
+    )
+    const nonTrivialGroupIds = new Set(rawCards.map((card) => card.id))
+    const nextRows = plannedRows.map((row) => ({
+      ...row,
+      duration: formatDurationFromSeconds(row.durationSeconds),
+      maxElevation: formatElevation(row.maxElevationDeg),
+      tradeOffId: nonTrivialGroupIds.has(row.backendTradeOffId) ? row.backendTradeOffId : '—',
+      tradeOffColorIndex: colorByLinkId.get(row.backendLinkId) ?? null,
+    }))
+    const nextCards = rawCards.map((card) => ({
+      ...card,
+      options: card.options.map((option) => ({
+        ...option,
+        duration: formatDurationFromSeconds(option.durationSeconds),
+        maxElevation: formatElevation(option.maxElevationDeg),
+      })),
+    }))
+    const nextSelectedOptions = buildSelectedOptionsFromPlan(plan)
+    const preservedTimelineTradeOffCard = timelineTradeOffViewId
+      ? nextCards.find((card) => card.id === timelineTradeOffViewId) ?? null
+      : null
 
-    setCalculatingTradeOffs(true)
-
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-
-    let demoInputRows = overviewRows
-    let tradeOffState = buildDemoTradeOffState(demoInputRows)
-
-    if (tradeOffState.groups.length === 0) {
-      demoInputRows = buildDemoTradeOffPreviewRows(
-        overviewRows,
-        activePlanningWindow,
-        selectedSatellites,
-        selectedGroundStations,
-      )
-      tradeOffState = buildDemoTradeOffState(demoInputRows)
-    }
-
-    const { enrichedRows, groups } = tradeOffState
-
-    setOverviewRows(assignAvailableLinkIds(enrichedRows))
-    setTradeOffCards(groups)
-    setActiveTradeOffCardIndex(0)
-    focusTimelineOnTradeOffCard(groups[0])
-    setSelectedTradeOffOption(
-      Object.fromEntries(
-        groups
-          .map((group) => [group.id, group.options.find((option) => option.recommended)?.optionId ?? group.options[0]?.optionId ?? null])
-          .filter(([, optionId]) => optionId !== null)
-      )
+    setSessionPlan(plan)
+    setSessionId(plan.session_id)
+    setFilterRunId(plan.filter_run_id)
+    setOverviewRows(nextRows)
+    setTradeOffCards(nextCards)
+    setSelectedTradeOffOption(nextSelectedOptions)
+    setTimelineTradeOffViewId(preservedTimelineTradeOffCard?.id ?? null)
+    setActiveTradeOffCardIndex(
+      preservedTimelineTradeOffCard
+        ? nextCards.findIndex((card) => card.id === preservedTimelineTradeOffCard.id)
+        : 0,
     )
     setTradeOffsCalculated(true)
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
-    setCalculatingTradeOffs(false)
+    setCreatedActivitiesCount(0)
+    if (focusTimeline && !preservedTimelineTradeOffCard) {
+      focusTimelineOnTradeOffCard(nextCards[0])
+    }
+  }
+
+  const handleCalculateTradeOffs = async () => {
+    if (
+      !schedulerLaunched
+      || !filterRunId
+      || overviewRows.length === 0
+      || !bufferConfigValid
+      || !tradeOffConfigValid
+    ) return
+
+    setCalculatingTradeOffs(true)
+    setError(null)
+
+    try {
+      const receipt = await startTradeOffProcessing({
+        filter_run_id: filterRunId,
+        default_buffer_config: {
+          capacity_mb: dataCapacityValueGb * 1000,
+          initial_level_mb: dataStartFillValueGb * 1000,
+          payload_generation_rate_mbps: dataGenerationRateValue,
+          downlink_rate_mbps: dataDownlinkRateValue,
+        },
+        scoring_config: {
+          name: tradeOffStrategy,
+          parameters: tradeOffStrategy === 'buffer_overflow_avoidance'
+            ? { alpha: scoringAlphaValue, exponent: scoringExponentValue }
+            : {},
+        },
+      })
+      const result = await pollBackendTaskResult(receipt.task_id, {
+        onStatusUpdate: (taskStatus) => appendTaskStatus(taskStatus, 'Scheduling', 0, 100),
+      })
+      const plan = result?.payload
+      if (!plan?.session_id) {
+        throw new Error('The backend returned an invalid scheduling-session result.')
+      }
+      applyAuthoritativeSessionPlan(plan)
+    } catch (err) {
+      console.error(err)
+      setError(err.message || 'Failed to create the backend scheduling session.')
+    } finally {
+      setCalculatingTradeOffs(false)
+    }
   }
 
   const handleConfirmSchedule = async () => {
-    if (!confirmDemoAvailable || confirmingSchedule) {
+    if (!sessionId || finalScheduleRows.length === 0 || confirmingSchedule) {
       return
     }
 
-    const progressStages = [
-      { progress: 12, step: 'Locking workspace and freezing the current schedule selection.' },
-      { progress: 34, step: 'Collecting the final proposed links and preparing activity payloads.' },
-      { progress: 58, step: 'Generating demo SatOS activity objects for the selected planning window.' },
-      { progress: 82, step: 'Simulating SatOS write calls for the final communication schedule.' },
-      { progress: 100, step: 'Communication schedule confirmed.' },
-    ]
-
     setConfirmingSchedule(true)
-    setConfirmationProgress(0)
-    setConfirmationStep('Preparing confirmation workflow...')
+    setConfirmationProgress(20)
+    setConfirmationStep('Committing the backend session to SatOS...')
     setConfirmationSuccess(false)
     setConfirmedScheduleCount(0)
+    setCreatedActivitiesCount(0)
+    setError(null)
 
     try {
-      for (const stage of progressStages) {
-        await wait(700)
-        setConfirmationProgress(stage.progress)
-        setConfirmationStep(stage.step)
-      }
-
+      const result = await commitSession(sessionId)
+      setConfirmationProgress(100)
+      setConfirmationStep('Communication schedule confirmed.')
       setConfirmationSuccess(true)
-      setConfirmedScheduleCount(finalScheduleRows.length)
+      setConfirmedScheduleCount(result.committed_links_count ?? 0)
+      setCreatedActivitiesCount(result.created_activities_count ?? 0)
+
+      try {
+        const initialized = await initializeAssets()
+        if (Array.isArray(initialized?.assets)) {
+          setAssets(initialized.assets)
+          setAssetSchedules(Array.isArray(initialized.schedules) ? initialized.schedules : [])
+        }
+      } catch (refreshError) {
+        console.error(refreshError)
+        setError('The schedule was committed, but the refreshed SatOS baseline could not be loaded.')
+      }
+    } catch (err) {
+      console.error(err)
+      setError(err.message || 'Failed to commit the scheduling session to SatOS.')
     } finally {
       setConfirmingSchedule(false)
     }
@@ -2249,21 +1888,6 @@ export default function App() {
         <div className="app-header-subtitle">Satellite Communication Optimizer and Planning Engine</div>
       </div>
       <div className="app-header-controls">
-        {view !== 'landing' && (
-          <div className="app-header-demo">
-            <span className="app-header-demo-label">Demo</span>
-            <label className="demo-switch">
-              <input
-                type="checkbox"
-                checked={useDemoData}
-                onChange={handleDemoModeToggle}
-              />
-              <span className="demo-switch-track" aria-hidden="true">
-                <span className="demo-switch-thumb"></span>
-              </span>
-            </label>
-          </div>
-        )}
         {showStatus && (
           <div className="app-header-status">
             <div className="app-status-stack">
@@ -2308,6 +1932,41 @@ export default function App() {
   const linkFiltersValid = [minimumLinkElevationFilterValue, minimumPeakElevationFilterValue].every((value) => (
     value === null || (!Number.isNaN(value) && value >= 0 && value <= 90)
   ))
+  const dataCapacityValueGb = Number(dataCapacityGb)
+  const dataStartFillValueGb = Number(dataStartFillGb)
+  const dataGenerationRateValue = Number(dataGenerationMbps)
+  const dataDownlinkRateValue = Number(dataDownlinkRateMbps)
+  const scoringAlphaValue = Number(scoringAlpha)
+  const scoringExponentValue = Number(scoringExponent)
+  const bufferConfigValid = (
+    String(dataCapacityGb).trim() !== ''
+    && Number.isFinite(dataCapacityValueGb)
+    && dataCapacityValueGb > 0
+    && String(dataStartFillGb).trim() !== ''
+    && Number.isFinite(dataStartFillValueGb)
+    && dataStartFillValueGb >= 0
+    && dataStartFillValueGb <= dataCapacityValueGb
+    && String(dataGenerationMbps).trim() !== ''
+    && Number.isFinite(dataGenerationRateValue)
+    && dataGenerationRateValue >= 0
+    && String(dataDownlinkRateMbps).trim() !== ''
+    && Number.isFinite(dataDownlinkRateValue)
+    && dataDownlinkRateValue > 0
+  )
+  const tradeOffConfigValid = (
+    TRADE_OFF_STRATEGIES.some((strategy) => strategy.value === tradeOffStrategy)
+    && (
+      tradeOffStrategy !== 'buffer_overflow_avoidance'
+      || (
+        String(scoringAlpha).trim() !== ''
+        && Number.isFinite(scoringAlphaValue)
+        && scoringAlphaValue >= 0
+        && String(scoringExponent).trim() !== ''
+        && Number.isFinite(scoringExponentValue)
+        && scoringExponentValue > 0
+      )
+    )
+  )
   const planningWindowComplete =
     planningWindowStartDate !== ''
     && planningWindowStartTime !== ''
@@ -2323,6 +1982,8 @@ export default function App() {
     && selectedSatellites.length >= 1
     && selectedGroundStations.length >= 1
     && linkFiltersValid
+    && bufferConfigValid
+    && tradeOffConfigValid
   const loadMissionAssetsDisabled = loading || launchingScheduler || backendAlive !== true
   const loadScopeDisabled =
     loading
@@ -2344,7 +2005,11 @@ export default function App() {
                 ? 'Select at least one ground station.'
                 : !linkFiltersValid
                   ? 'Optional filter values must stay between 0° and 90°.'
-                  : ''
+                  : !bufferConfigValid
+                    ? 'Enter a valid buffer configuration and keep initial fill at or below capacity.'
+                    : !tradeOffConfigValid
+                      ? 'Enter a valid trade-off scoring configuration.'
+                      : ''
   const timeOptions = Array.from({ length: 96 }, (_, index) => {
     const hours = String(Math.floor(index / 4)).padStart(2, '0')
     const minutes = String((index % 4) * 15).padStart(2, '0')
@@ -2380,9 +2045,24 @@ export default function App() {
       Math.min(planningWindowEndTimestamp, timestamp),
     )
   }
-  const timelinePlayheadTimestamp = clampToPlanningWindow(
-    timelineLive ? timelineNow : timelinePlayheadTime,
-  )
+  const timelinePlayheadTimestamp = clampToPlanningWindow(timelinePlayheadTime)
+
+  useEffect(() => {
+    if (
+      !schedulerLaunched
+      || planningWindowStartTimestamp === null
+      || timelinePlaying
+      || timelinePlayheadDraggingRef.current
+    ) {
+      return
+    }
+
+    timelinePlayheadTimeRef.current = planningWindowStartTimestamp
+    setTimelinePlayheadTime((current) => (
+      current === planningWindowStartTimestamp ? current : planningWindowStartTimestamp
+    ))
+    setTimelineLive(false)
+  }, [planningWindowStartTimestamp, schedulerLaunched, timelinePlaying])
 
   const getSatelliteTrackCoordinates = useCallback((assetName) => (
     interpolateTrackPosition(preparedSatelliteTracks[assetName], timelinePlayheadTimestamp)
@@ -2472,6 +2152,25 @@ export default function App() {
   // "nothing selected" state to land on.
   const activeMapAsset = visibleMapAssets.find((asset) => asset.id === activeMapAssetId) ?? null
 
+  const handleSelectMapAsset = useCallback((assetId) => {
+    setActiveMapAssetId(assetId)
+    if (!assetId) {
+      return
+    }
+
+    requestAnimationFrame(() => {
+      const assetCard = [...(visibleMapAssetListRef.current?.querySelectorAll(
+        '.map-asset-card',
+      ) ?? [])].find((card) => card.dataset.mapAssetId === assetId)
+
+      assetCard?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'nearest',
+      })
+    })
+  }, [])
+
   const currentScheduleItems = useMemo(() => buildCurrentScheduleItems(
     assetSchedules,
     [...selectedSatellites, ...selectedGroundStations],
@@ -2484,25 +2183,82 @@ export default function App() {
     || extractionStatus === 'Queued'
     || extractionStatus === 'Running'
   const getOverviewAvailabilityLabel = (row) => {
-    if (row.availabilityStatus === 'filtered') return 'Filtered'
-    if (row.scheduleBlocked || row.availabilityStatus === 'blocked') return 'Blocked'
-    if (row.availabilityStatus === 'unavailable') return 'Unavailable'
-    return null
+    const status = getOverviewRowStatus(row)
+    if (status === 'blocked') return 'Blocked'
+    if (status === 'ineligible') return 'Ineligible'
+    return 'Eligible'
+  }
+
+  const getOverviewControlTooltip = (state) => {
+    if (state === 'auto') {
+      return 'Auto: keep the backend scheduling decision.'
+    }
+
+    if (state === 'pinned') {
+      return 'Pinned: force this link to stay scheduled.'
+    }
+
+    return 'Excluded: force this link to stay unscheduled.'
   }
   const isOverviewRowUnavailable = (row) => isUnavailableOverviewRow(row)
-  const schedulableOverviewRows = overviewRows.filter((row) => !isOverviewRowUnavailable(row))
+  const schedulableOverviewRows = overviewRows.filter((row) => getOverviewRowStatus(row) === 'eligible')
   const visibleOverviewRows = showUnavailableOverviewRows
     ? overviewRows
-    : overviewRows.filter((row) => !isOverviewRowUnavailable(row))
-  const tradeOffDemoAvailable = useDemoData && schedulerLaunched && schedulableOverviewRows.length > 0
-  const finalScheduleRows = useMemo(
-    () => getFinalScheduleRows(overviewRows, tradeOffCards, tradeOffsCalculated),
-    // selectedTradeOffOption is the state captured by getFinalScheduleRows.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [overviewRows, selectedTradeOffOption, tradeOffCards, tradeOffsCalculated],
+    : overviewRows.filter((row) => !shouldHideOverviewRowInAvailableMode(row))
+  const overviewTradeOffBandByOverpassId = useMemo(() => {
+    let bandIndex = 0
+    let previousTradeOffId = null
+    const next = new Map()
+
+    visibleOverviewRows.forEach((row) => {
+      if (!row.tradeOffId || row.tradeOffId === '—') {
+        next.set(row.overpassId, '')
+        previousTradeOffId = null
+        return
+      }
+
+      if (row.tradeOffId !== previousTradeOffId) {
+        bandIndex += 1
+        previousTradeOffId = row.tradeOffId
+      }
+
+      next.set(
+        row.overpassId,
+        bandIndex % 2 === 1
+          ? 'overview-list-row--tradeoff-band-a'
+          : 'overview-list-row--tradeoff-band-b',
+      )
+    })
+
+    return next
+  }, [visibleOverviewRows])
+  const tradeOffAvailable = Boolean(filterRunId)
+    && schedulerLaunched
+    && filteredLinks.some((link) => link.is_eligible)
+    && schedulableOverviewRows.length > 0
+    && bufferConfigValid
+    && tradeOffConfigValid
+  const finalScheduleRows = getScheduledRows(overviewRows)
+  const overviewRowByLinkId = useMemo(
+    () => new Map(overviewRows.map((row) => [row.backendLinkId ?? row.linkId, row])),
+    [overviewRows],
   )
-  const confirmDemoAvailable =
-    useDemoData
+  const bufferLevelBeforeByLinkId = useMemo(() => {
+    const next = new Map()
+    const profiles = sessionPlan?.satellite_buffer_profiles ?? {}
+
+    Object.values(profiles).forEach((profile) => {
+      ;(profile?.profile_points ?? []).forEach((point) => {
+        if (point?.event_type === 'downlink_start' && point?.associated_id) {
+          next.set(point.associated_id, Number(point.level_mb ?? 0))
+        }
+      })
+    })
+
+    return next
+  }, [sessionPlan])
+  const confirmScheduleAvailable =
+    Boolean(sessionId)
     && schedulerLaunched
     && tradeOffsCalculated
     && finalScheduleRows.length > 0
@@ -2527,16 +2283,78 @@ export default function App() {
     tradeOffsCalculated,
   ])
   const timelineZoomMultiplier = timelineCustomZoomMultiplier ?? 1
+  const timelineFitWidthPx = timelineViewportWidthPx > 0
+    ? timelineViewportWidthPx
+    : timelineModel?.widthPx ?? 0
   const timelineWidthPx = timelineModel
-    ? Math.round(timelineModel.widthPx * timelineZoomMultiplier)
+    ? Math.max(1, Math.round(timelineFitWidthPx * timelineZoomMultiplier))
     : 0
+  const timelineIsFit = timelineZoomMultiplier <= TIMELINE_MIN_ZOOM_MULTIPLIER
+  const timelineContentInsetPx = timelineIsFit ? TIMELINE_FIT_EDGE_INSET_PX : 0
+  const timelineDrawableWidthPx = Math.max(1, timelineWidthPx - (timelineContentInsetPx * 2))
+  const visibleTimelineTicks = useMemo(() => {
+    if (!timelineModel || timelineWidthPx <= 0 || timelineModel.totalMinutes <= 0) {
+      return []
+    }
+
+    const minLabelSpacingPx = 64
+    const visibleTicks = []
+
+    timelineModel.ticks.forEach((tick, index) => {
+      const positionPx = timelineContentInsetPx
+        + ((tick.offsetMinutes / timelineModel.totalMinutes) * timelineDrawableWidthPx)
+      const isFirst = index === 0
+      const isLast = index === timelineModel.ticks.length - 1
+
+      if (isFirst) {
+        visibleTicks.push({ ...tick, positionPx })
+        return
+      }
+
+      if (isLast) {
+        const previousTick = visibleTicks[visibleTicks.length - 1]
+        if (previousTick && positionPx - previousTick.positionPx < minLabelSpacingPx) {
+          visibleTicks.pop()
+        }
+        visibleTicks.push({ ...tick, positionPx })
+        return
+      }
+
+      const previousTick = visibleTicks[visibleTicks.length - 1]
+      if (!previousTick || positionPx - previousTick.positionPx >= minLabelSpacingPx) {
+        visibleTicks.push({ ...tick, positionPx })
+      }
+    })
+
+    return visibleTicks.map(({ positionPx, ...tick }) => tick)
+  }, [timelineContentInsetPx, timelineDrawableWidthPx, timelineModel, timelineWidthPx])
+  const activeTimelineTradeOffCard = useMemo(() => {
+    if (!timelineTradeOffViewId) {
+      return null
+    }
+
+    return tradeOffCards.find((card) => card.id === timelineTradeOffViewId) ?? null
+  }, [timelineTradeOffViewId, tradeOffCards])
+  const focusedTimelineTradeOffId = useMemo(() => {
+    if (timelineTradeOffViewId) {
+      return timelineTradeOffViewId
+    }
+
+    if (!markedTimelineLinkId) {
+      return null
+    }
+
+    return tradeOffCards.find((card) => (
+      card.options.some((option) => option.linkId === markedTimelineLinkId)
+    ))?.id ?? null
+  }, [timelineTradeOffViewId, markedTimelineLinkId, tradeOffCards])
   const timelineSections = useMemo(
     () => (timelineModel?.sections ?? []).filter((section) => section.groups.length > 0),
     [timelineModel],
   )
   // A single flat row list drives BOTH the label column and the scrollable
   // canvas, so the two halves of the grid cannot drift apart vertically.
-  const timelineRenderRows = useMemo(() => timelineSections.flatMap((section) => {
+  const baseTimelineRenderRows = useMemo(() => timelineSections.flatMap((section) => {
     const sectionRenderRow = {
       type: 'section',
       key: `section-${section.id}`,
@@ -2565,15 +2383,254 @@ export default function App() {
     ]
   }), [expandedTimelineGroups, expandedTimelineSections, timelineSections])
 
-  // Expanding a group changes the ROW COUNT but nothing about the horizontal
-  // scale, so the scroll-recentering effects below key off "are there rows at
-  // all" rather than how many -- otherwise every expand/collapse would yank
-  // the timeline back to the playhead.
+  // --- Data Volume -----------------------------------------------------
+  // Curves and KPIs are rendered from the authoritative backend session
+  // profiles. The frontend only converts units and positions returned points.
+  const dataVolumeModel = useMemo(() => {
+    if (!timelineModel || !sessionPlan) {
+      return null
+    }
+
+    const startTimestamp = timelineModel.baseDate.getTime()
+    const endTimestamp = timelineModel.endDate.getTime()
+    const satelliteGroups = expandedTimelineSections.satellites
+      ? (timelineModel.sections.find((section) => section.id === 'satellites')?.groups ?? [])
+        .filter((group) => expandedTimelineGroups[group.id])
+      : []
+
+    const series = satelliteGroups.map((group) => {
+      const profile = sessionPlan.satellite_buffer_profiles?.[group.name]
+      if (!profile) {
+        return null
+      }
+
+      const profilePoints = (profile.profile_points ?? []).map((point) => ({
+        timestamp: toTimestamp(point.timestamp),
+        level: Number(point.level_mb ?? 0) / 1000,
+        eventType: point.event_type,
+        associatedId: point.associated_id,
+      })).filter((point) => point.timestamp !== null)
+      const pointsByLinkAndEvent = new Map(
+        profilePoints.map((point) => [`${point.associatedId}:${point.eventType}`, point]),
+      )
+      const payloadWindows = profilePoints
+        .filter((point) => point.eventType === 'payload_start' && point.associatedId)
+        .map((startPoint) => {
+          const endPoint = pointsByLinkAndEvent.get(`${startPoint.associatedId}:payload_end`)
+          if (!endPoint) {
+            return null
+          }
+
+          const visibleStartTimestamp = Math.max(startTimestamp, startPoint.timestamp)
+          const visibleEndTimestamp = Math.min(endTimestamp, endPoint.timestamp)
+          if (visibleEndTimestamp <= visibleStartTimestamp) {
+            return null
+          }
+
+          return {
+            id: startPoint.associatedId,
+            startTimestamp: visibleStartTimestamp,
+            endTimestamp: visibleEndTimestamp,
+          }
+        })
+        .filter(Boolean)
+      const downlinkRateMbps = sessionPlan.satellite_configs?.[group.name]?.downlink_rate_mbps ?? 0
+      const steps = finalScheduleRows
+        .filter((row) => row.satId === group.name)
+        .map((row) => {
+          const startPoint = pointsByLinkAndEvent.get(`${row.backendLinkId}:downlink_start`)
+          const endPoint = pointsByLinkAndEvent.get(`${row.backendLinkId}:downlink_end`)
+          return {
+            id: row.backendLinkId,
+            label: row.overpassId,
+            gsId: row.gsId,
+            maxElevation: row.maxElevation,
+            startTimestamp: toTimestamp(row.startTime),
+            endTimestamp: toTimestamp(row.endTime),
+            downlinkMbps: downlinkRateMbps,
+            transferredGb: Number(row.usefulDataOffloadedMb ?? 0) / 1000,
+            levelBefore: startPoint?.level ?? 0,
+            levelAfter: endPoint?.level ?? 0,
+          }
+        })
+        .filter((step) => step.startTimestamp !== null && step.endTimestamp !== null)
+
+      return {
+        id: group.id,
+        name: group.name,
+        capacityGb: Number(profile.capacity_mb ?? 0) / 1000,
+        points: profilePoints,
+        payloadWindows,
+        steps,
+        overflowed: (profile.overflow_events ?? []).length > 0,
+        totalGeneratedGb: Number(profile.total_generated_mb ?? 0) / 1000,
+        totalDownlinkedGb: Number(profile.total_downlinked_mb ?? 0) / 1000,
+        totalLostGb: Number(profile.total_lost_mb ?? 0) / 1000,
+        finalLevelGb: Number(profile.final_level_mb ?? 0) / 1000,
+        peakLevelGb: Number(profile.peak_level_mb ?? 0) / 1000,
+      }
+    }).filter(Boolean)
+
+    return {
+      startTimestamp,
+      endTimestamp,
+      durationMs: Math.max(1, endTimestamp - startTimestamp),
+      capacityGb: Math.max(1, ...series.map((item) => item.capacityGb)),
+      series,
+      expandedSatelliteCount: satelliteGroups.length,
+    }
+  }, [
+    expandedTimelineGroups,
+    expandedTimelineSections.satellites,
+    finalScheduleRows,
+    sessionPlan,
+    timelineModel,
+  ])
+
+  const dataVolumeSeriesByGroupId = useMemo(
+    () => new Map((dataVolumeModel?.series ?? []).map((series) => [series.id, series])),
+    [dataVolumeModel],
+  )
+
+  // Expanded satellites render their data budget immediately below the main
+  // asset/schedule row and before the counterpart link rows. Ground stations
+  // do not get a synthetic data row because the backend profiles are owned by
+  // satellites.
+  const timelineRenderRows = useMemo(() => baseTimelineRenderRows.flatMap((renderRow) => {
+    if (
+      renderRow.type !== 'group'
+      || renderRow.group.kind !== 'satellite'
+      || !expandedTimelineGroups[renderRow.group.id]
+    ) {
+      return [renderRow]
+    }
+
+    return [
+      renderRow,
+      {
+        type: 'dataVolume',
+        key: `data-volume-${renderRow.group.id}`,
+        group: renderRow.group,
+        series: dataVolumeSeriesByGroupId.get(renderRow.group.id) ?? null,
+      },
+    ]
+  }), [baseTimelineRenderRows, dataVolumeSeriesByGroupId, expandedTimelineGroups])
+
+  // Expanding a group changes the row count but nothing about the horizontal
+  // scale, so scroll recentering keys off whether any rows exist at all.
   const timelineHasRows = timelineRenderRows.length > 0
+
+  useLayoutEffect(() => {
+    const frame = timelineScrollFrameRef.current
+    if (!frame || !expandedSections.timeline || !timelineHasRows) {
+      return undefined
+    }
+
+    const updateViewportWidth = () => {
+      const nextWidth = Math.floor(frame.clientWidth)
+      if (nextWidth > 0) {
+        setTimelineViewportWidthPx((current) => (current === nextWidth ? current : nextWidth))
+      }
+    }
+
+    updateViewportWidth()
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateViewportWidth)
+      return () => window.removeEventListener('resize', updateViewportWidth)
+    }
+
+    const observer = new ResizeObserver(updateViewportWidth)
+    observer.observe(frame)
+    return () => observer.disconnect()
+  }, [expandedSections.timeline, timelineHasRows, view])
+
+  useLayoutEffect(() => {
+    const scrollContainer = timelineScrollRef.current
+    const range = timelineHorizontalRangeRef.current
+    if (!scrollContainer || !range) {
+      return undefined
+    }
+
+    const syncHorizontalRange = () => {
+      const maxScrollLeft = timelineIsFit
+        ? 0
+        : Math.max(0, scrollContainer.scrollWidth - scrollContainer.clientWidth)
+      range.max = String(maxScrollLeft)
+      range.disabled = timelineIsFit || maxScrollLeft <= 0
+      range.value = String(Math.min(maxScrollLeft, scrollContainer.scrollLeft))
+      range.setAttribute('aria-valuemax', String(Math.round(maxScrollLeft)))
+      range.setAttribute('aria-valuenow', String(Math.round(scrollContainer.scrollLeft)))
+    }
+
+    syncHorizontalRange()
+    scrollContainer.addEventListener('scroll', syncHorizontalRange, { passive: true })
+    return () => scrollContainer.removeEventListener('scroll', syncHorizontalRange)
+  }, [
+    expandedSections.timeline,
+    timelineHasRows,
+    timelineHorizontalControl.visible,
+    timelineIsFit,
+    timelineWidthPx,
+  ])
+
+  useLayoutEffect(() => {
+    const panel = timelinePanelRef.current
+    const scrollContainer = panel?.closest('.workspace-main')
+    if (!panel || !scrollContainer || !schedulerLaunched || !expandedSections.timeline || timelineIsFit) {
+      setTimelineHorizontalControl((current) => (
+        current.visible ? { ...current, visible: false } : current
+      ))
+      return undefined
+    }
+
+    const updateHorizontalControl = () => {
+      const panelRect = panel.getBoundingClientRect()
+      const headerBottom = document.querySelector('.app-header')?.getBoundingClientRect().bottom ?? 0
+      const visible = panelRect.bottom > headerBottom && panelRect.top < window.innerHeight
+
+      if (!visible) {
+        setTimelineHorizontalControl((current) => (
+          current.visible ? { ...current, visible: false } : current
+        ))
+        return
+      }
+
+      const labelRect = panel.querySelector('.timeline-label-column')?.getBoundingClientRect()
+      const left = Math.max(panelRect.left + 16, labelRect?.right ?? panelRect.left + 16)
+      const right = Math.min(window.innerWidth - 16, panelRect.right - 16)
+      const width = Math.max(180, right - left)
+
+      setTimelineHorizontalControl((current) => (
+        current.visible && Math.abs(current.left - left) < 0.5 && Math.abs(current.width - width) < 0.5
+          ? current
+          : { visible: true, left, width }
+      ))
+    }
+
+    updateHorizontalControl()
+    scrollContainer.addEventListener('scroll', updateHorizontalControl, { passive: true })
+    window.addEventListener('resize', updateHorizontalControl)
+
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateHorizontalControl)
+    observer?.observe(panel)
+
+    return () => {
+      scrollContainer.removeEventListener('scroll', updateHorizontalControl)
+      window.removeEventListener('resize', updateHorizontalControl)
+      observer?.disconnect()
+    }
+  }, [expandedSections.timeline, schedulerLaunched, timelineHasRows, timelineIsFit, view])
 
   const getTimelineRowHeight = (renderRow) => {
     if (renderRow.type === 'section') {
       return '1.85rem'
+    }
+
+    if (renderRow.type === 'dataVolume') {
+      return '7.2rem'
     }
 
     const laneCount = renderRow.type === 'group'
@@ -2587,185 +2644,69 @@ export default function App() {
     return `${Math.max(3.0, (laneCount ?? 1) * 2.36 + 0.42)}rem`
   }
 
-  // --- Data Volume -----------------------------------------------------
-  // The curve answers "how does the chosen schedule drain this satellite's
-  // buffer", so it is built from the SELECTED links (finalScheduleRows), not
-  // from every extracted window, and it shares the timeline's exact time span
-  // so a step always sits under its link.
-  const getSatelliteAltitudeMeters = useCallback((satelliteName) => {
-    const altitude = computeMeanTrackAltitudeMeters(preparedSatelliteTracks[satelliteName])
-    return Number.isFinite(altitude) && altitude > 0 ? altitude : DEMO_REFERENCE_ALTITUDE_M
-  }, [preparedSatelliteTracks])
+  const dataVolumeYMaxGb = (dataVolumeModel?.capacityGb ?? 1) * 1.06
 
-  const buildSatellitePasses = useCallback((rows, satelliteName) => rows
-    .filter((row) => row.satId === satelliteName && !row.scheduleBlocked)
-    .map((row) => {
-      const startTimestamp = toTimestamp(row.startTime)
-      const endTimestamp = toTimestamp(row.endTime)
-
-      if (
-        startTimestamp === null
-        || endTimestamp === null
-        || endTimestamp <= startTimestamp
-      ) {
-        return null
-      }
-
-      const downlinkMbps = getDemoDownlinkMbps(
-        row.maxElevationDeg,
-        getSatelliteAltitudeMeters(satelliteName),
-      )
-
-      return {
-        id: row.overpassId,
-        label: row.overpassId,
-        gsId: row.gsId,
-        maxElevation: row.maxElevation,
-        tradeOffId: row.tradeOffId && row.tradeOffId !== '—' ? row.tradeOffId : null,
-        startTimestamp,
-        endTimestamp,
-        downlinkMbps,
-        downlinkGbPerMs: downlinkMbps * MBPS_TO_GB_PER_MS,
-      }
-    })
-    .filter(Boolean)
-    .sort((left, right) => left.startTimestamp - right.startTimestamp), [getSatelliteAltitudeMeters])
-
-  // The red comparison curve: the option currently marked in the Trade-Off
-  // panel, swapped in for the one that actually drives the schedule. Only one
-  // at a time, and only when it genuinely differs from the current selection.
-  const markedTradeOffCard = markedTradeOffOptionId
-    ? tradeOffCards.find(
-      (card) => card.options.some((option) => option.optionId === markedTradeOffOptionId),
-    ) ?? null
-    : null
-  const markedTradeOffOption = markedTradeOffCard?.options
-    .find((option) => option.optionId === markedTradeOffOptionId) ?? null
-  const effectiveOptionOfMarkedCard = markedTradeOffCard
-    ? getSelectedTradeOffForGroup(markedTradeOffCard)
-    : null
-  const hasDistinctAlternative = Boolean(
-    markedTradeOffOption
-    && effectiveOptionOfMarkedCard
-    && markedTradeOffOption.optionId !== effectiveOptionOfMarkedCard.optionId,
-  )
-  const dataVolumeCapacityGb = Math.max(1, Number(dataCapacityGb) || 0)
-  const dataVolumeStartLevelGb = Math.max(
-    0,
-    Math.min(dataVolumeCapacityGb, Number(dataStartFillGb) || 0),
-  )
-  const dataVolumeGenerationGbPerMs = Math.max(0, Number(dataGenerationMbps) || 0)
-    * MBPS_TO_GB_PER_MS
-
-  const dataVolumeModel = useMemo(() => {
-    if (!timelineModel) {
-      return null
+  const buildDataVolumePolyline = (points) => {
+    if (!dataVolumeModel || points.length === 0) {
+      return ''
     }
 
-    const startTimestamp = timelineModel.baseDate.getTime()
-    const endTimestamp = timelineModel.endDate.getTime()
-    const alternativeScheduleRows = hasDistinctAlternative
-      ? [
-        ...finalScheduleRows.filter(
-          (row) => row.overpassId !== effectiveOptionOfMarkedCard.overpassId,
-        ),
-        ...overviewRows.filter((row) => row.overpassId === markedTradeOffOption.overpassId),
-      ]
-      : []
-
-    // Q4/Q9: only satellites whose timeline group is expanded, ground station
-    // groups do not count. The auto-expand on trade-off cards therefore pulls
-    // exactly the relevant satellite into this view.
-    // A group hidden behind a collapsed section is not "expanded" as far as
-    // this view is concerned -- otherwise curves would appear for satellites
-    // you cannot see in the timeline.
-    const satelliteGroups = expandedTimelineSections.satellites
-      ? (timelineModel.sections.find((section) => section.id === 'satellites')?.groups ?? [])
-        .filter((group) => expandedTimelineGroups[group.id])
-      : []
-
-    const series = satelliteGroups.map((group) => {
-      const baseSeries = buildDataLevelSeries({
-        startTimestamp,
-        endTimestamp,
-        startLevelGb: dataVolumeStartLevelGb,
-        capacityGb: dataVolumeCapacityGb,
-        generationGbPerMs: dataVolumeGenerationGbPerMs,
-        passes: buildSatellitePasses(finalScheduleRows, group.name),
+    return points
+      .map((point) => {
+        const x = ((point.timestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 1000
+        const y = 100 - ((point.level / dataVolumeYMaxGb) * 100)
+        return `${x.toFixed(2)},${y.toFixed(2)}`
       })
+      .join(' ')
+  }
 
-      const alternative = (hasDistinctAlternative && markedTradeOffOption.satId === group.name)
-        ? buildDataLevelSeries({
-          startTimestamp,
-          endTimestamp,
-          startLevelGb: dataVolumeStartLevelGb,
-          capacityGb: dataVolumeCapacityGb,
-          generationGbPerMs: dataVolumeGenerationGbPerMs,
-          passes: buildSatellitePasses(alternativeScheduleRows, group.name),
-        })
-        : null
-
-      return {
-        id: group.id,
-        name: group.name,
-        ...baseSeries,
-        alternative,
-        alternativeLabel: alternative ? markedTradeOffOption.overpassId : null,
-      }
-    })
-
-    return {
-      startTimestamp,
-      endTimestamp,
-      durationMs: Math.max(1, endTimestamp - startTimestamp),
-      capacityGb: dataVolumeCapacityGb,
-      series,
-      expandedSatelliteCount: satelliteGroups.length,
-    }
-  }, [
-    dataVolumeCapacityGb,
-    dataVolumeGenerationGbPerMs,
-    dataVolumeStartLevelGb,
-    buildSatellitePasses,
-    expandedTimelineGroups,
-    expandedTimelineSections.satellites,
-    effectiveOptionOfMarkedCard,
-    // These schedule rows are treated immutably throughout App.
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization
-    finalScheduleRows,
-    hasDistinctAlternative,
-    markedTradeOffOption,
-    overviewRows,
-    timelineModel,
-  ])
   const timelineBaseTimestamp = timelineModel?.baseDate.getTime() ?? null
   const timelineDurationMs = timelineModel ? timelineModel.totalMinutes * 60000 : 0
   const timelinePlayheadOffsetMinutes = timelineBaseTimestamp !== null
     ? (timelinePlayheadTimestamp - timelineBaseTimestamp) / 60000
     : null
-  const timelinePlayheadWindowRatio = (
-    planningWindowStartTimestamp !== null
-    && planningWindowEndTimestamp !== null
-    && planningWindowEndTimestamp > planningWindowStartTimestamp
+  const timelinePlayheadCanvasRatio = (
+    timelinePlayheadOffsetMinutes !== null
+    && timelineModel?.totalMinutes > 0
   )
-    ? Math.max(0, Math.min(1, (
-      (timelinePlayheadTimestamp - planningWindowStartTimestamp)
-      / (planningWindowEndTimestamp - planningWindowStartTimestamp)
-    )))
+    ? timelinePlayheadOffsetMinutes / timelineModel.totalMinutes
     : null
 
   const refreshTimelinePlaybackDom = () => {
-    const root = splitPanelsRef.current
+    const root = timelinePanelRef.current
     if (!root) {
-      timelinePlaybackDomRef.current = { markers: [], bars: [], thumb: null, label: null }
+      timelinePlaybackDomRef.current = { playhead: null, bars: [], label: null }
       return
     }
 
     timelinePlaybackDomRef.current = {
-      markers: [...root.querySelectorAll('[data-timeline-playhead]')],
+      playhead: root.querySelector('[data-timeline-playhead]'),
       bars: [...root.querySelectorAll('[data-playback-start][data-playback-end]')],
-      thumb: root.querySelector('[data-playback-thumb]'),
       label: root.querySelector('[data-playback-label]'),
+    }
+  }
+
+  const positionTimelinePlayhead = (timestamp) => {
+    const playhead = timelinePlaybackDomRef.current.playhead
+    const scrollContainer = timelineScrollRef.current
+    if (!playhead || !scrollContainer) {
+      return
+    }
+
+    const ratio = (
+      timelineBaseTimestamp !== null
+      && timelineDurationMs > 0
+    )
+      ? (timestamp - timelineBaseTimestamp) / timelineDurationMs
+      : null
+    const visible = ratio !== null && ratio >= 0 && ratio <= 1
+
+    playhead.hidden = !visible
+    if (visible) {
+      // Label, handle and dashed line are one viewport overlay. This is the
+      // only X-coordinate used for rendering and pointer input, so zoom and
+      // horizontal scrolling cannot separate those pieces.
+      playhead.style.left = `${timelineContentInsetPx + (ratio * timelineDrawableWidthPx) - scrollContainer.scrollLeft}px`
     }
   }
 
@@ -2774,34 +2715,9 @@ export default function App() {
       return
     }
 
-    const { markers, bars, thumb, label } = timelinePlaybackDomRef.current
-    const timelineRatio = (
-      timelineBaseTimestamp !== null
-      && timelineDurationMs > 0
-    )
-      ? (timestamp - timelineBaseTimestamp) / timelineDurationMs
-      : null
-    const windowRatio = (
-      planningWindowStartTimestamp !== null
-      && planningWindowEndTimestamp !== null
-      && planningWindowEndTimestamp > planningWindowStartTimestamp
-    )
-      ? (timestamp - planningWindowStartTimestamp)
-        / (planningWindowEndTimestamp - planningWindowStartTimestamp)
-      : null
-
-    markers.forEach((marker) => {
-      const visible = timelineRatio !== null && timelineRatio >= 0 && timelineRatio <= 1
-      marker.hidden = !visible
-      if (visible) {
-        marker.style.left = `${timelineRatio * 100}%`
-      }
-    })
-
-    if (thumb && windowRatio !== null) {
-      thumb.style.left = `${Math.max(0, Math.min(1, windowRatio)) * 100}%`
-      thumb.setAttribute('aria-valuenow', String(Math.round(timestamp)))
-    }
+    const { bars, label } = timelinePlaybackDomRef.current
+    positionTimelinePlayhead(timestamp)
+    timelinePlayheadSliderRef.current?.setAttribute('aria-valuenow', String(Math.round(timestamp)))
 
     bars.forEach((bar) => {
       const startTimestamp = Number(bar.dataset.playbackStart)
@@ -2818,58 +2734,26 @@ export default function App() {
     if (syncText && label) {
       const formatted = formatTimelinePlayheadDateTime(timestamp)
       label.textContent = formatted
-      thumb?.setAttribute('aria-valuetext', formatted)
+      timelinePlayheadSliderRef.current?.setAttribute('aria-valuetext', formatted)
     }
 
     missionMapRef.current?.setPlayheadTime(timestamp)
   }
 
-  // `.timeline-time-canvas` (the scrollable/zoomable element holding the
-  // day bands, ticks, schedule blocks and the playhead marker line) is
-  // deliberately given `padding-inline: 50%` -- half a viewport's width of
-  // blank space on each side -- so the very first/last moments of the
-  // window can still be scrolled into the center of the viewport instead
-  // of being stuck against the hard edge. That padding shifts where a
-  // percentage-based `left` on its children actually lands on screen: a
-  // child at `left: r*100%` renders at
-  //   (canvas's own left edge, post-scroll) + halfViewportWidth + r*timelineWidthPx
-  // The separate playhead slider/thumb above (see the CSS comment on
-  // .timeline-playhead-slider) has no such padding -- it renders at
-  // `frameLeft + r*viewportWidth`. Setting scrollLeft to just
-  // `r*timelineWidthPx` (pinning the target pixel to the viewport's left
-  // edge) ignores that half-viewport padding entirely, so the line and the
-  // thumb would land up to a whole extra half-viewport-width apart. Adding
-  // that same halfViewportWidth term back into scrollLeft, and scaling the
-  // rest by (timelineWidthPx - viewportWidth) so scrollLeft still reaches
-  // exactly its native [0, canvas scroll max] range, is what makes the two
-  // line up at any ratio, zoom level, or viewport size -- not just at the
-  // very start of the window.
-  const getTimelineScrollLeftForRatio = (ratio) => {
-    const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
-    return ratio * Math.max(0, timelineWidthPx - viewportWidthPx)
-  }
-
+  // Maps a timestamp ratio to the scroll position used by playback/live
+  // follow. The canvas has no horizontal padding, so this is also the same
+  // coordinate space used by the playhead overlay.
   const getTimelineScrollLeftForTimestamp = (timestamp) => {
     if (timelineBaseTimestamp === null || timelineDurationMs <= 0 || timelineWidthPx <= 0) {
       return 0
     }
 
+    const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
     const ratio = Math.max(
       0,
       Math.min(1, (timestamp - timelineBaseTimestamp) / timelineDurationMs),
     )
-    return getTimelineScrollLeftForRatio(ratio)
-  }
-
-  const scrollTimelineToTimestamp = (timestamp, behavior = 'auto') => {
-    timelineProgrammaticScrollRef.current = true
-    timelineScrollRef.current?.scrollTo({
-      left: getTimelineScrollLeftForTimestamp(timestamp),
-      behavior,
-    })
-    window.requestAnimationFrame(() => {
-      timelineProgrammaticScrollRef.current = false
-    })
+    return ratio * Math.max(0, timelineWidthPx - viewportWidthPx)
   }
 
   const syncTimelinePlaybackViewport = (timestamp) => {
@@ -2887,13 +2771,8 @@ export default function App() {
     }
   }
 
-  // Punkt 5: moving to a trade-off card opens every asset group involved in
-  // it -- including the ground stations of the options that were NOT chosen,
-  // because that comparison is the whole point of the card -- and scrolls the
-  // timeline to the relevant time. It never auto-collapses (that would hide
-  // bars the user is mid-comparison on) and never touches the zoom, which is
-  // user-owned. Expanding overrides a manual collapse on purpose: the card is
-  // asking you to look at exactly these assets.
+  // Opening a trade-off exposes all involved assets, but does not reposition
+  // the timeline horizontally. The current viewport is user-owned.
   const focusTimelineOnTradeOffCard = (card) => {
     if (!card) {
       return
@@ -2925,25 +2804,103 @@ export default function App() {
 
       return changed ? next : current
     })
-
-    const startTimestamps = card.options
-      .map((option) => toTimestamp(option.startTime))
-      .filter((value) => value !== null)
-
-    if (startTimestamps.length === 0) {
-      return
-    }
-
-    const targetTimestamp = Math.min(...startTimestamps)
-    // The rows above/below only change height after the expansion renders, and
-    // the scroll container has to exist first when this runs straight after
-    // the trade-off calculation.
-    window.requestAnimationFrame(() => scrollTimelineToTimestamp(targetTimestamp, 'smooth'))
   }
 
   const showTradeOffCard = (index) => {
     setActiveTradeOffCardIndex(index)
     focusTimelineOnTradeOffCard(tradeOffCards[index])
+  }
+
+  const openTimelineTradeOffView = (tradeOffId, optionId = null, linkId = null, scrollToPanel = false) => {
+    if (!tradeOffId) {
+      return
+    }
+
+    const cardIndex = tradeOffCards.findIndex((card) => card.id === tradeOffId)
+    if (cardIndex === -1) {
+      return
+    }
+
+    const card = tradeOffCards[cardIndex]
+    setTimelineTradeOffViewId(tradeOffId)
+    setTimelineTradeOffDrawerOffset({ x: 0, y: 0 })
+    setActiveTradeOffCardIndex(cardIndex)
+    if (scrollToPanel) {
+      timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+    focusTimelineOnTradeOffCard(card)
+
+    if (optionId) {
+      setMarkedTradeOffOptionId(optionId)
+    } else {
+      setMarkedTradeOffOptionId(null)
+    }
+
+    if (linkId) {
+      setMarkedTimelineLinkId(linkId)
+    }
+  }
+
+  const closeTimelineTradeOffView = () => {
+    timelineTradeOffDrawerDragCleanupRef.current?.()
+    timelineTradeOffDrawerDragCleanupRef.current = null
+    setTimelineTradeOffViewId(null)
+    setTimelineTradeOffDrawerOffset({ x: 0, y: 0 })
+    setMarkedTradeOffOptionId(null)
+    setMarkedTimelineLinkId(null)
+    hideTimelineTooltip(true)
+  }
+
+  const handleTimelineTradeOffDrawerPointerDown = (event) => {
+    if (
+      event.button !== 0
+      || event.target.closest('button')
+    ) {
+      return
+    }
+
+    const startX = event.clientX
+    const startY = event.clientY
+    const startOffset = { ...timelineTradeOffDrawerOffset }
+
+    const handlePointerMove = (moveEvent) => {
+      setTimelineTradeOffDrawerOffset({
+        x: startOffset.x + (moveEvent.clientX - startX),
+        y: startOffset.y + (moveEvent.clientY - startY),
+      })
+    }
+
+    const stopDragging = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopDragging)
+      window.removeEventListener('pointercancel', stopDragging)
+      timelineTradeOffDrawerDragCleanupRef.current = null
+    }
+
+    timelineTradeOffDrawerDragCleanupRef.current = stopDragging
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopDragging)
+    window.addEventListener('pointercancel', stopDragging)
+  }
+
+  const jumpToTimelineLink = (linkId, optionId = null) => {
+    if (!linkId) {
+      return
+    }
+
+    setMarkedTimelineLinkId(linkId)
+    setMarkedTradeOffOptionId(optionId ?? null)
+    timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+    window.requestAnimationFrame(() => {
+      const node = timelinePanelRef.current?.querySelector(`[data-link-id="${linkId}"]`)
+      node?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'center',
+      })
+    })
   }
 
   // All cards now sit side by side in a horizontal band, so activating one
@@ -2965,73 +2922,10 @@ export default function App() {
     target?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
   }, [markedTradeOffOptionId, activeTradeOffCardIndex])
 
-  // The datetime thumb above used to be positioned as a fraction of the
-  // playhead SLIDER's own (fixed, always-full-window-width) box -- a
-  // completely different physical scale than the marker line inside the
-  // scrollable/zoomable canvas below, which is positioned as a fraction of
-  // the much wider (at any zoom > 1x) canvas, then cropped/panned by the
-  // canvas's own scroll position. Those two only ever lined up right after
-  // something explicitly re-synced the scroll position to match the ratio
-  // (a slider drag, a marker-line drag, or the live-follow effect) -- the
-  // moment a person freely panned/scrolled the canvas by hand (scrollbar,
-  // trackpad) without touching the playhead, the thumb stayed put at its
-  // window-ratio position while the line drifted wherever the pan left it,
-  // which is exactly the "why is it still disconnected" symptom.
-  //
-  // Fixing this properly means the thumb can no longer be positioned purely
-  // from React state/CSS percentages: it has to track the canvas's actual,
-  // possibly-manually-scrolled scrollLeft on every scroll, not just when
-  // the playhead itself changes. So instead this reads the DOM directly and
-  // imperatively sets the thumb's pixel offset -- mirroring the exact
-  // formula the marker line's own on-screen position resolves to (see the
-  // getTimelineScrollLeftForRatio comment above): canvas-relative pixel
-  // position of the playhead, minus however far the canvas is currently
-  // scrolled. Since the slider sits at the same left edge and width as the
-  // scroll frame, that difference is directly usable as the thumb's `left`
-  // in pixels. This guarantees the thumb and the line are always the same
-  // screen X, regardless of *how* the view got there.
-  // The thumb is positioned on exactly the scale its drag handler reads from:
-  // a fraction of the SLIDER's own width across the planning window
-  // (timelinePlayheadWindowRatio), set as a percentage in the JSX below.
-  //
-  // It used to be positioned from the CANVAS instead -- canvas-relative pixels
-  // minus scrollLeft -- which is a different scale entirely, since the canvas
-  // is zoomed and scrolled. Input and output disagreeing is what forced the
-  // drag handlers to scroll the canvas along to paper over the mismatch, and
-  // that is the coupling being removed here.
-
-  // The playhead slider is a separate control from the scrollable timeline
-  // below it: scrolling/panning the timeline (`.timeline-scroll`) never
-  // changes the current time value, and clicking the timeline background no
-  // longer does either. Only grabbing and dragging this slider's thumb (or
-  // using the keyboard while it's focused) moves the current time.
-  const computeTimelineTimestampFromSliderClientX = (clientX) => {
-    const slider = timelinePlayheadSliderRef.current
-    if (
-      !slider
-      || planningWindowStartTimestamp === null
-      || planningWindowEndTimestamp === null
-    ) {
-      return null
-    }
-
-    const rect = slider.getBoundingClientRect()
-    if (rect.width <= 0) {
-      return null
-    }
-
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    return planningWindowStartTimestamp
-      + (ratio * (planningWindowEndTimestamp - planningWindowStartTimestamp))
-  }
-
-  // Playhead and canvas are deliberately independent: moving the playhead
-  // never scrolls the timeline, and scrolling the timeline never moves the
-  // playhead. The slider spans the full planning window while the canvas shows
-  // whatever slice is scrolled into view, so the dashed marker line simply
-  // leaves the viewport when you drag the thumb past the visible range -- that
-  // is the honest depiction of two independent positions, not a glitch. Live
-  // mode is the one exception, and it is an opt-in follow mode.
+  // Pointer drags and playback animate only the playhead/map nodes each frame;
+  // React receives the committed value at the end of a drag. This keeps the
+  // map responsive without allowing an unrelated render to snap the handle
+  // back to an older timestamp.
   const previewTimelinePlayheadTime = (timestamp, syncText = true) => {
     const clampedTimestamp = clampToPlanningWindow(timestamp)
     timelinePlayheadTimeRef.current = clampedTimestamp
@@ -3051,11 +2945,13 @@ export default function App() {
     }
 
     event.preventDefault()
+    event.stopPropagation()
     event.currentTarget.setPointerCapture(event.pointerId)
+    timelinePlayheadDraggingRef.current = true
     setTimelineLive(false)
     setTimelinePlaying(false)
 
-    const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
+    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
     if (nextTimestamp !== null) {
       setTimelinePlayheadTime(previewTimelinePlayheadTime(nextTimestamp))
     }
@@ -3066,25 +2962,23 @@ export default function App() {
       return
     }
 
-    const nextTimestamp = computeTimelineTimestampFromSliderClientX(event.clientX)
+    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
     if (nextTimestamp !== null) {
       previewTimelinePlayheadTime(nextTimestamp)
     }
   }
 
   const handleTimelinePlayheadPointerUp = (event) => {
+    event.stopPropagation()
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    timelinePlayheadDraggingRef.current = false
     commitTimelinePlayheadTime()
   }
 
-  // The playhead marker line(s) and the datetime label live inside
-  // `.timeline-time-canvas` -- the scrollable/zoomable region -- rather than
-  // the fixed, always-full-width playhead slider above it, so a screen X
-  // position has to be translated back through the canvas's own current
-  // scroll offset and its padding-inline:50% buffer (see the big comment
-  // above getTimelineScrollLeftForRatio) to land on the right ratio.
+  // Convert the pointer's screen X through the canvas's current scroll and
+  // zoom. Rendering uses this exact coordinate in reverse.
   const computeTimelineRatioFromCanvasClientX = (clientX) => {
     const scrollContainer = timelineScrollRef.current
     if (!scrollContainer || timelineWidthPx <= 0) {
@@ -3096,7 +2990,8 @@ export default function App() {
       scrollContainer.scrollLeft
       + (clientX - rect.left)
     )
-    return Math.max(0, Math.min(1, canvasPositionPx / timelineWidthPx))
+    const drawablePositionPx = canvasPositionPx - timelineContentInsetPx
+    return Math.max(0, Math.min(1, drawablePositionPx / timelineDrawableWidthPx))
   }
 
   const computeTimelineTimestampFromCanvasClientX = (clientX) => {
@@ -3110,46 +3005,6 @@ export default function App() {
     }
 
     return timelineBaseTimestamp + (ratio * timelineDurationMs)
-  }
-
-  // Lets a person click-and-drag the shared playhead marker line itself to
-  // move the current time, not just the small slider thumb above. Mirrors
-  // handleTimelinePlayheadPointerDown/Move/Up, just reading position from
-  // the scrollable canvas instead of the fixed slider.
-  const handleTimelineMarkerLinePointerDown = (event) => {
-    if (event.button !== undefined && event.button !== 0) {
-      return
-    }
-
-    event.preventDefault()
-    event.stopPropagation()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    setTimelineLive(false)
-    setTimelinePlaying(false)
-
-    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
-    if (nextTimestamp !== null) {
-      setTimelinePlayheadTime(previewTimelinePlayheadTime(nextTimestamp))
-    }
-  }
-
-  const handleTimelineMarkerLinePointerMove = (event) => {
-    if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      return
-    }
-
-    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
-    if (nextTimestamp !== null) {
-      previewTimelinePlayheadTime(nextTimestamp)
-    }
-  }
-
-  const handleTimelineMarkerLinePointerUp = (event) => {
-    event.stopPropagation()
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    commitTimelinePlayheadTime()
   }
 
   // Mirrors the map's Ctrl/⌘ + scroll-to-zoom gesture: a plain wheel event
@@ -3177,10 +3032,7 @@ export default function App() {
     setTimelineCustomZoomMultiplier((current) => {
       const base = current ?? timelineZoomMultiplier
       const next = base + (direction * TIMELINE_WHEEL_ZOOM_STEP)
-      return Math.max(
-        TIMELINE_MIN_ZOOM_MULTIPLIER,
-        Math.min(TIMELINE_MAX_ZOOM_MULTIPLIER, next),
-      )
+      return Math.max(TIMELINE_MIN_ZOOM_MULTIPLIER, next)
     })
   }
 
@@ -3204,48 +3056,6 @@ export default function App() {
     scrollContainer.addEventListener('wheel', onWheel, { passive: false })
     return () => scrollContainer.removeEventListener('wheel', onWheel)
   }, [expandedSections.timeline, view])
-
-  // The Data Volume canvas is the same width, the same 50% inline padding and
-  // the same time span as the timeline canvas, so a mirrored scrollLeft puts
-  // both at the same instant. Zoom needs no mirroring at all -- both read
-  // timelineWidthPx, so zooming either one moves both.
-  useEffect(() => {
-    const timelineContainer = timelineScrollRef.current
-    const dataContainer = dataVolumeScrollRef.current
-
-    if (!timelineContainer || !dataContainer) {
-      return undefined
-    }
-
-    const mirror = (source, target) => () => {
-      if (scrollSyncLockRef.current) {
-        return
-      }
-
-      scrollSyncLockRef.current = true
-      target.scrollLeft = source.scrollLeft
-      window.requestAnimationFrame(() => {
-        scrollSyncLockRef.current = false
-      })
-    }
-
-    const onTimelineScroll = mirror(timelineContainer, dataContainer)
-    const onDataScroll = mirror(dataContainer, timelineContainer)
-
-    timelineContainer.addEventListener('scroll', onTimelineScroll, { passive: true })
-    dataContainer.addEventListener('scroll', onDataScroll, { passive: true })
-    const onWheel = (event) => timelineWheelHandlerRef.current?.(event)
-    dataContainer.addEventListener('wheel', onWheel, { passive: false })
-
-    // Align once on mount/relayout so the two do not start out offset.
-    dataContainer.scrollLeft = timelineContainer.scrollLeft
-
-    return () => {
-      timelineContainer.removeEventListener('scroll', onTimelineScroll)
-      dataContainer.removeEventListener('scroll', onDataScroll)
-      dataContainer.removeEventListener('wheel', onWheel)
-    }
-  }, [expandedSections.dataVolume, expandedSections.timeline, view])
 
   const handleTimelinePlayheadKeyDown = (event) => {
     if (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null) {
@@ -3378,63 +3188,12 @@ export default function App() {
     timelineHasRows,
   ])
 
-  useEffect(() => {
-    const layoutKey = [
-      expandedSections.timeline,
-      timelineWidthPx,
-      timelineHasRows,
-    ].join('|')
-
-    if (layoutKey === timelineLayoutKeyRef.current) {
-      return undefined
-    }
-    timelineLayoutKeyRef.current = layoutKey
-
-    if (
-      !expandedSections.timeline
-      || timelineBaseTimestamp === null
-      || timelineDurationMs <= 0
-      || !timelineHasRows
-    ) {
-      return undefined
-    }
-
-    const animationFrameId = window.requestAnimationFrame(() => {
-      const ratio = Math.max(
-        0,
-        Math.min(
-          1,
-          (timelinePlayheadTimestamp - timelineBaseTimestamp) / timelineDurationMs,
-        ),
-      )
-      timelineProgrammaticScrollRef.current = true
-      const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
-      const scrollableWidthPx = Math.max(0, timelineWidthPx - viewportWidthPx)
-      timelineScrollRef.current?.scrollTo({
-        left: ratio * scrollableWidthPx,
-        behavior: 'auto',
-      })
-      window.requestAnimationFrame(() => {
-        timelineProgrammaticScrollRef.current = false
-      })
-    })
-
-    return () => window.cancelAnimationFrame(animationFrameId)
-  }, [
-    expandedSections.timeline,
-    timelineBaseTimestamp,
-    timelineDurationMs,
-    timelinePlayheadTimestamp,
-    timelineWidthPx,
-    timelineHasRows,
-  ])
-
   // React owns the committed playhead value, while playback and pointer drags
   // update the small set of animated DOM nodes through this ref. Refresh the
   // node cache after commits so an unrelated render cannot leave those nodes
   // displaying the older committed timestamp.
   useLayoutEffect(() => {
-    if (!timelinePlaying) {
+    if (!timelinePlaying && !timelinePlayheadDraggingRef.current) {
       timelinePlayheadTimeRef.current = timelinePlayheadTimestamp
     }
     refreshTimelinePlaybackDom()
@@ -3449,6 +3208,35 @@ export default function App() {
     timelinePlayheadTimestamp,
     timelinePlaying,
     timelineRenderRows,
+    timelineWidthPx,
+  ])
+
+  // Horizontal scrolling changes the playhead's viewport X without changing
+  // its timestamp. Keep the one combined playhead overlay on the same canvas
+  // coordinate whenever the native scrollbar, range control or trackpad pans.
+  useLayoutEffect(() => {
+    const scrollContainer = timelineScrollRef.current
+    if (!scrollContainer) {
+      return undefined
+    }
+
+    const syncPositionAfterScroll = () => {
+      positionTimelinePlayhead(
+        timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp,
+      )
+    }
+
+    syncPositionAfterScroll()
+    scrollContainer.addEventListener('scroll', syncPositionAfterScroll, { passive: true })
+    return () => scrollContainer.removeEventListener('scroll', syncPositionAfterScroll)
+  // Positioning closes over the current canvas bounds and is refreshed when
+  // either of them changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    expandedSections.timeline,
+    timelineHasRows,
+    timelineBaseTimestamp,
+    timelineDurationMs,
     timelineWidthPx,
   ])
 
@@ -3564,7 +3352,10 @@ export default function App() {
     clearTimelineTooltipHideTimeout()
 
     setTimelineTooltip((current) => {
-      if (current.pinned && !pinned && current.item?.id !== item.id) {
+      // Once opened by click, hover/focus events caused by content moving
+      // under the pointer while the workspace scrolls must not turn the
+      // dialog back into a cursor-following tooltip.
+      if (current.pinned && !pinned) {
         return current
       }
 
@@ -3572,6 +3363,7 @@ export default function App() {
         visible: true,
         pinned,
         item,
+        anchorItemId: item.id,
         x: event?.clientX ?? current.x,
         y: event?.clientY ?? current.y,
       }
@@ -3601,6 +3393,7 @@ export default function App() {
               visible: false,
               pinned: false,
               item: null,
+              anchorItemId: null,
               x: current.x,
               y: current.y,
             }
@@ -3621,15 +3414,64 @@ export default function App() {
         return current
       }
 
-      return {
-        visible: false,
-        pinned: false,
-        item: null,
-        x: current.x,
-        y: current.y,
-      }
+          return {
+            visible: false,
+            pinned: false,
+            item: null,
+            anchorItemId: null,
+            x: current.x,
+            y: current.y,
+          }
     })
   }
+
+  useLayoutEffect(() => {
+    if (!timelineTooltip.visible || !timelineTooltip.pinned || !timelineTooltip.anchorItemId) {
+      return undefined
+    }
+
+    const updatePinnedTimelineTooltipPosition = () => {
+      const anchorNode = timelinePanelRef.current?.querySelector(
+        `[data-timeline-item-id="${timelineTooltip.anchorItemId}"]`,
+      )
+
+      if (!anchorNode) {
+        return
+      }
+
+      const rect = anchorNode.getBoundingClientRect()
+      const preferredLeft = rect.right + 12
+      const fallbackLeft = rect.left - 320
+      const nextLeft = preferredLeft <= window.innerWidth - 24
+        ? preferredLeft
+        : Math.max(16, fallbackLeft)
+      const nextTop = Math.max(16, Math.min(rect.top + 6, window.innerHeight - 240))
+
+      setTimelineTooltip((current) => (
+        current.visible && current.pinned && current.anchorItemId === timelineTooltip.anchorItemId
+          ? (
+              Math.abs(current.x - nextLeft) < 0.5 && Math.abs(current.y - nextTop) < 0.5
+                ? current
+                : { ...current, x: nextLeft, y: nextTop }
+            )
+          : current
+      ))
+    }
+
+    updatePinnedTimelineTooltipPosition()
+
+    const timelineScroll = timelineScrollRef.current
+    const workspaceScroll = timelinePanelRef.current?.closest('.workspace-main')
+    timelineScroll?.addEventListener('scroll', updatePinnedTimelineTooltipPosition, { passive: true })
+    workspaceScroll?.addEventListener('scroll', updatePinnedTimelineTooltipPosition, { passive: true })
+    window.addEventListener('resize', updatePinnedTimelineTooltipPosition)
+
+    return () => {
+      timelineScroll?.removeEventListener('scroll', updatePinnedTimelineTooltipPosition)
+      workspaceScroll?.removeEventListener('scroll', updatePinnedTimelineTooltipPosition)
+      window.removeEventListener('resize', updatePinnedTimelineTooltipPosition)
+    }
+  }, [timelineTooltip.anchorItemId, timelineTooltip.pinned, timelineTooltip.visible])
 
   const toggleTimelineTooltipPin = (item, event) => {
     if (!item) {
@@ -3646,6 +3488,7 @@ export default function App() {
           visible: false,
           pinned: false,
           item: null,
+          anchorItemId: null,
           x: current.x,
           y: current.y,
         }
@@ -3655,6 +3498,7 @@ export default function App() {
         visible: true,
         pinned: true,
         item,
+        anchorItemId: item.id,
         x: event?.clientX ?? current.x,
         y: event?.clientY ?? current.y,
       }
@@ -3664,7 +3508,7 @@ export default function App() {
   const renderTimelineTooltipContent = (item, pinned = false) => (
     <>
       <div className="timeline-hover-tooltip-header">
-        <strong>{item.label}</strong>
+        <strong>{item.kind === 'link' ? `Link ID: ${item.linkId}` : item.label}</strong>
         {item.tradeOffId ? (
           <span className="timeline-hover-tooltip-pill">{item.tradeOffId}</span>
         ) : item.kind === 'activity' ? (
@@ -3676,19 +3520,103 @@ export default function App() {
       <span>{item.detail}</span>
       <span>Start: {formatTimelineDateTime(item.startTime)}</span>
       <span>End: {formatTimelineDateTime(item.endTime)}</span>
-      <span>Duration: {formatTimelineDuration(item.startTime, item.endTime)}</span>
-      {item.tradeOffScore && item.tradeOffScore !== '—' && (
-        <span>Score: {item.tradeOffScore}</span>
+      <span>Duration: {formatTimelineItemDuration(item)}</span>
+      {item.recommended && <span>Auto-scheduled by the backend</span>}
+      {item.overrideState && item.overrideState !== 'auto' && <span>Override: {item.overrideState}</span>}
+      {Number.isFinite(getDisplayDataDownlinkMb(item)) && getDisplayDataDownlinkMb(item) > 0 && (
+        <span>Data downlink: {(getDisplayDataDownlinkMb(item) / 1000).toFixed(2)} GB</span>
       )}
-      {item.recommended && <span>Recommended trade-off option</span>}
+      {Number.isFinite(item.score) && <span>Backend score: {item.score.toFixed(2)}</span>}
+      {item.rejectionReason && !item.blockMessage && <span>{item.rejectionReason}</span>}
       {item.blockMessage && <span>{item.blockMessage}</span>}
       {item.kind === 'link' && item.tradeOffId && (
         <span>Trade-Off relation: {item.tradeOffId}</span>
       )}
+      {pinned && item.kind === 'link' && (
+        <div className="timeline-link-popup-actions">
+          {item.tradeOffId && (
+          <button
+            type="button"
+            className="timeline-link-popup-tradeoff-button"
+            onClick={() => {
+              hideTimelineTooltip(true)
+              openTimelineTradeOffView(
+                item.tradeOffId,
+                item.optionId ?? item.linkId,
+                item.linkId,
+                false,
+              )
+            }}
+          >
+            Show Trade-Off
+          </button>
+          )}
+          <div className="timeline-link-popup-status-row">
+            <span>Schedule controls</span>
+          </div>
+          {sessionId && tradeOffsCalculated && item.isSchedulable ? (
+            <div
+              className="timeline-link-popup-controls"
+              role="group"
+              aria-label={`Schedule controls for ${item.linkId}`}
+            >
+              {[
+                { state: 'auto', label: 'A' },
+                { state: 'pinned', label: 'P' },
+                { state: 'excluded', label: 'X' },
+              ].map((control) => (
+                <button
+                  key={control.state}
+                  type="button"
+                  className={`timeline-link-popup-control timeline-link-popup-control--${control.state} ${item.overrideState === control.state ? 'timeline-link-popup-control--active' : ''}`}
+                  onClick={() => handleLinkOverride({
+                    ...item,
+                    optionId: item.optionId ?? item.linkId,
+                    tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
+                  }, control.state)}
+                  disabled={Boolean(overridingLinkId)}
+                  aria-pressed={item.overrideState === control.state}
+                  title={getOverviewControlTooltip(control.state)}
+                >
+                  {control.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className={`timeline-link-popup-control timeline-link-popup-schedule-toggle ${item.isScheduled ? 'timeline-link-popup-schedule-toggle--scheduled' : 'timeline-link-popup-schedule-toggle--unscheduled'}`}
+                onClick={() => handleLinkOverride({
+                  ...item,
+                  optionId: item.optionId ?? item.linkId,
+                  tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
+                }, item.isScheduled ? 'excluded' : 'pinned')}
+                disabled={Boolean(overridingLinkId)}
+                aria-pressed={item.isScheduled}
+                aria-label={item.isScheduled
+                  ? `Scheduled. Click to unschedule ${item.linkId}`
+                  : `Unscheduled. Click to schedule ${item.linkId}`}
+                title={item.isScheduled
+                  ? 'Scheduled: click to force this link to stay unscheduled.'
+                  : 'Unscheduled: click to force this link to stay scheduled.'}
+              >
+                {item.isScheduled ? 'Scheduled' : 'Unscheduled'}
+              </button>
+            </div>
+          ) : (
+            <span className="timeline-link-popup-unavailable">
+              {!item.isSchedulable
+                ? 'This link is blocked or ineligible and cannot be scheduled.'
+                : 'Calculate Trade-Offs to enable schedule controls.'}
+            </span>
+          )}
+          {overridingLinkId === item.linkId && (
+            <span className="timeline-link-popup-saving" role="status">Updating backend schedule…</span>
+          )}
+        </div>
+      )}
       <span className="timeline-hover-tooltip-note">
         {pinned
-          ? 'Pinned. Click the bar again or close this card to release it.'
-          : 'Click the bar if you want to pin these details.'}
+          ? 'Click the bar again or close this popup.'
+          : 'Click the bar to open schedule controls.'}
       </span>
     </>
   )
@@ -3696,6 +3624,8 @@ export default function App() {
   const renderAssetWarning = (message) => (
     <span
       className="asset-warning"
+      title={message}
+      tabIndex={0}
       aria-label={message}
       onMouseEnter={(event) => showWarningTooltip(message, event)}
       onMouseMove={moveWarningTooltip}
@@ -3721,8 +3651,13 @@ export default function App() {
     </span>
   )
 
-  const renderDemoBadge = () => (
-    <span className="demo-badge">Demo</span>
+  const getAssetWarningMessage = (asset) => (
+    asset?.error
+    ?? asset?.reason
+    ?? asset?.message
+    ?? asset?.rejectionReason
+    ?? asset?.ineligibility_reason
+    ?? null
   )
 
   const getTradeOffAccentColor = (colorIndex) =>
@@ -3799,9 +3734,8 @@ export default function App() {
   // exactly from asset count, since the panel is a manual, user-driven
   // resize -- the drag simply has more room to go as far as they need.
   const clampBottomTopHeightPx = (value) => Math.min(2400, Math.max(140, value))
-  const clampBottomMiddleHeightPx = (value) => Math.min(2400, Math.max(140, value))
 
-  const updatePlanningGridRows = (topHeight, middleHeight) => {
+  const updatePlanningGridRows = (topHeight) => {
     const planningRow = splitPanelsRef.current?.querySelector('.planning-views-row')
     if (!planningRow) {
       return
@@ -3809,14 +3743,12 @@ export default function App() {
     planningRow.style.gridTemplateRows = [
       expandedSections[panelSlotAssignment.bottomTop] ? `${topHeight}px` : 'auto',
       '0.9rem',
-      expandedSections[panelSlotAssignment.bottomMiddle] ? `${middleHeight}px` : 'auto',
-      '0.9rem',
       'auto',
     ].join(' ')
 
     const liveMapSlotHeight = panelSlotAssignment.bottomTop === 'mapView'
       ? topHeight
-      : (panelSlotAssignment.bottomMiddle === 'mapView' ? middleHeight : null)
+      : null
     if (liveMapSlotHeight !== null) {
       const liveMapHeight = Math.max(40, liveMapSlotHeight - MAP_PANEL_CHROME_OVERHEAD_PX)
       missionMapRef.current?.setHeight(liveMapHeight)
@@ -3824,49 +3756,6 @@ export default function App() {
       if (mapSidebar) {
         mapSidebar.style.maxHeight = `${liveMapHeight}px`
       }
-    }
-  }
-
-  const handleBottomRowResizeStart = (event) => {
-    event.preventDefault()
-
-    const startClientY = event.clientY
-    const startHeight = bottomMiddleHeightPx
-    let nextHeight = startHeight
-
-    const handlePointerMove = (moveEvent) => {
-      nextHeight = clampBottomMiddleHeightPx(startHeight + (moveEvent.clientY - startClientY))
-      updatePlanningGridRows(bottomTopHeightPx, nextHeight)
-    }
-
-    const stopResize = () => {
-      window.removeEventListener('pointermove', handlePointerMove)
-      window.removeEventListener('pointerup', stopResize)
-      window.removeEventListener('pointercancel', stopResize)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      bottomRowResizeDragCleanupRef.current = null
-      setBottomMiddleHeightPx(nextHeight)
-    }
-
-    bottomRowResizeDragCleanupRef.current = stopResize
-
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', stopResize)
-    window.addEventListener('pointercancel', stopResize)
-    document.body.style.cursor = 'row-resize'
-    document.body.style.userSelect = 'none'
-  }
-
-  const handleBottomRowResizeKeyDown = (event) => {
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setBottomMiddleHeightPx((current) => clampBottomMiddleHeightPx(current - 16))
-    }
-
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      setBottomMiddleHeightPx((current) => clampBottomMiddleHeightPx(current + 16))
     }
   }
 
@@ -3879,7 +3768,7 @@ export default function App() {
 
     const handlePointerMove = (moveEvent) => {
       nextHeight = clampBottomTopHeightPx(startHeight + (moveEvent.clientY - startClientY))
-      updatePlanningGridRows(nextHeight, bottomMiddleHeightPx)
+      updatePlanningGridRows(nextHeight)
     }
 
     const stopResize = () => {
@@ -3962,12 +3851,11 @@ export default function App() {
   // the map canvas itself only gets what's left after that chrome, so it
   // needs to subtract the same overhead the panel heading/padding takes up.
   // Map View defaults to a tall, comfortable height whenever it isn't the
-  // panel occupying the resizable bottomTop slot (e.g. it got dragged into
-  // the top row, or swapped to bottomBottom), since there's no divider
+  // panel occupying the resizable bottomTop slot, since there's no divider
   // controlling its size in those positions.
   const mapViewSlotHeightPx = panelSlotAssignment.bottomTop === 'mapView'
     ? bottomTopHeightPx
-    : (panelSlotAssignment.bottomMiddle === 'mapView' ? bottomMiddleHeightPx : null)
+    : null
   const mapViewHeightPx = mapViewSlotHeightPx !== null
     ? Math.max(40, mapViewSlotHeightPx - MAP_PANEL_CHROME_OVERHEAD_PX)
     : 380
@@ -4066,98 +3954,58 @@ export default function App() {
     onDragEnd: handlePanelDragEnd,
   })
 
-  const renderTradeOffPill = (tradeOffId, colorIndex) => (
-    <span
-      className="tradeoff-id-pill"
-      style={{ '--tradeoff-accent': getTradeOffAccentColor(colorIndex) }}
-    >
+  const renderTradeOffPill = (tradeOffId) => (
+    <span className="tradeoff-id-pill">
       {tradeOffId}
     </span>
   )
 
-  // Selecting is the one action here that actually commits, so it takes you to
-  // where the consequence shows: timeline panel open, the involved asset groups
-  // expanded, scrolled to the link. The chosen overpass stays marked so the
-  // effect of the selection is immediately visible in the timeline.
-  const handleSelectTradeOffOption = (option) => {
-    setSelectedTradeOffOption((current) => ({
-      ...current,
-      [option.tradeOffGroupId]: option.optionId,
-    }))
-    setConfirmationSuccess(false)
-    setConfirmedScheduleCount(0)
-    setMarkedTimelineLinkId(option.overpassId)
+  const handleLinkOverride = async (option, overrideState) => {
+    if (!sessionId || !option?.linkId || overridingLinkId) {
+      return
+    }
+
+    setOverridingLinkId(option.linkId)
+    setError(null)
+
+    try {
+      const updatedPlan = await applySessionOverride(sessionId, {
+        link_id: option.linkId,
+        override_state: overrideState,
+      })
+      applyAuthoritativeSessionPlan(updatedPlan, overviewRows, { focusTimeline: false })
+
+      const updatedStatus = updatedPlan.current_plan?.[option.linkId]
+      if (updatedStatus) {
+        setTimelineTooltip((current) => (
+          current.item?.linkId === option.linkId
+            ? {
+                ...current,
+                item: {
+                  ...current.item,
+                  isScheduled: Boolean(updatedStatus.is_scheduled),
+                  overrideState: updatedStatus.override_state ?? 'auto',
+                  recommended: Boolean(updatedStatus.is_scheduled)
+                    && (updatedStatus.override_state ?? 'auto') === 'auto',
+                  usefulDataOffloadedMb: updatedStatus.useful_data_offloaded_mb
+                    ?? current.item.usefulDataOffloadedMb,
+                  score: updatedStatus.score ?? current.item.score,
+                  rejectionReason: updatedStatus.rejection_reason ?? null,
+                },
+              }
+            : current
+        ))
+      }
+    } catch (err) {
+      console.error(err)
+      setError(err.message || 'Failed to update the scheduling-session override.')
+      return
+    } finally {
+      setOverridingLinkId(null)
+    }
+
+    setMarkedTimelineLinkId(option.linkId)
     setMarkedTradeOffOptionId(option.optionId)
-
-    setExpandedSections((current) => (
-      current.timeline ? current : { ...current, timeline: true }
-    ))
-
-    setExpandedTimelineSections((current) => (
-      (current.satellites && current.groundStations)
-        ? current
-        : { satellites: true, groundStations: true }
-    ))
-
-    setExpandedTimelineGroups((current) => {
-      const next = { ...current }
-
-      if (option.satId) {
-        next[`satellite:${option.satId}`] = true
-      }
-
-      if (option.gsId) {
-        next[`ground_station:${option.gsId}`] = true
-      }
-
-      return next
-    })
-
-    const startTimestamp = toTimestamp(option.startTime)
-
-    // One frame later: the panel and the asset groups have to be expanded
-    // before there is anything to scroll to.
-    window.requestAnimationFrame(() => {
-      timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-
-      if (startTimestamp !== null) {
-        scrollTimelineToTimestamp(startTimestamp, 'smooth')
-      }
-    })
-  }
-
-  // Q1(a): the link's capacity -- what this pass could downlink at its demo
-  // rate for its whole duration, independent of how full the buffer happens to
-  // be at that moment.
-  const getOptionLinkBudget = (option) => {
-    const row = overviewRows.find((entry) => entry.overpassId === option.overpassId) ?? null
-    const startTimestamp = toTimestamp(option.startTime)
-    const endTimestamp = toTimestamp(option.endTime)
-    const durationSeconds = Number.isFinite(option.durationSeconds)
-      ? option.durationSeconds
-      : (Number.isFinite(row?.durationSeconds)
-        ? row.durationSeconds
-        : ((startTimestamp !== null && endTimestamp !== null)
-          ? (endTimestamp - startTimestamp) / 1000
-          : null))
-
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-      return null
-    }
-
-    const maxElevationDeg = Number.isFinite(option.maxElevationDeg)
-      ? option.maxElevationDeg
-      : row?.maxElevationDeg
-    const rateMbps = getDemoDownlinkMbps(
-      maxElevationDeg,
-      getSatelliteAltitudeMeters(option.satId),
-    )
-
-    return {
-      rateMbps,
-      volumeGb: (rateMbps * durationSeconds) / 8000,
-      maxElevation: option.maxElevation ?? row?.maxElevation ?? null,
-    }
   }
 
   const toggleTimelineSection = (sectionId) => {
@@ -4181,11 +4029,8 @@ export default function App() {
     }))
   }
 
-  // Navigation only, shared by the timeline bars and the Overview trade-off
-  // pill: marking a link marks both of its timeline instances, activates the
-  // card holding its option and marks the option there.
-  // selectedTradeOffOption is deliberately NOT touched, so nothing is decided
-  // or un-confirmed by navigating. Marking the same link again is the way back.
+  // Navigation only: marking a link highlights its timeline instances without
+  // auto-scrolling or opening/changing the trade-off drawer.
   const markLinkForNavigation = (linkId, optionId) => {
     if (!linkId) {
       return
@@ -4204,18 +4049,13 @@ export default function App() {
       return
     }
 
-    const cardIndex = tradeOffCards.findIndex(
-      (card) => card.options.some((option) => option.optionId === optionId),
-    )
-
-    if (cardIndex !== -1) {
-      showTradeOffCard(cardIndex)
-    }
-
     setMarkedTradeOffOptionId(optionId)
   }
 
   const handleTimelineItemClick = (item, event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
     if (item.kind === 'link') {
       markLinkForNavigation(item.linkId, item.optionId)
     }
@@ -4223,18 +4063,38 @@ export default function App() {
     toggleTimelineTooltipPin(item, event)
   }
 
-  const getOptionForOverpassId = (overpassId) => tradeOffCards
+  const handleTimelineBackgroundClick = (event) => {
+    if (event.target.closest('button, [role="slider"], .timeline-tradeoff-drawer')) {
+      return
+    }
+
+    setMarkedTimelineLinkId(null)
+    setMarkedTradeOffOptionId(null)
+    hideTimelineTooltip(true)
+  }
+
+  const getOptionForLinkId = (linkId) => tradeOffCards
     .flatMap((card) => card.options)
-    .find((option) => option.overpassId === overpassId) ?? null
+    .find((option) => option.linkId === linkId) ?? null
 
   const handleOverviewTradeOffClick = (row) => {
-    markLinkForNavigation(row.overpassId, getOptionForOverpassId(row.overpassId)?.optionId ?? null)
+    const linkId = row.backendLinkId ?? row.linkId ?? null
+    const option = getOptionForLinkId(linkId)
+
+    if (timelineTradeOffViewId === row.tradeOffId && markedTimelineLinkId === linkId) {
+      closeTimelineTradeOffView()
+      return
+    }
+
+    openTimelineTradeOffView(
+      row.tradeOffId,
+      option?.optionId ?? linkId,
+      linkId,
+      true,
+    )
   }
 
   const renderTimelineBar = (item, rowType = 'link') => {
-    const itemWidthPx = (item.durationMinutes / timelineModel.totalMinutes) * timelineWidthPx
-    const compactBar = itemWidthPx < 112
-    const tinyBar = itemWidthPx < 46
     const isLink = item.kind === 'link'
     const isGroupRow = rowType === 'group'
     const laneStepRem = isGroupRow ? 3.08 : 2.34
@@ -4244,6 +4104,12 @@ export default function App() {
     // carry the same linkId, so marking one visibly marks the other -- that is
     // the "visuelle Verknuepfung" the asset rows exist for.
     const marked = isLink && markedTimelineLinkId !== null && markedTimelineLinkId === item.linkId
+    const outsideFocusedTradeOff = isLink
+      && focusedTimelineTradeOffId !== null
+      && item.tradeOffId !== focusedTimelineTradeOffId
+    const outsideMarkedLink = isLink
+      && markedTimelineLinkId !== null
+      && item.linkId !== markedTimelineLinkId
     const pinned = timelineTooltip.pinned && timelineTooltip.item?.id === item.id
 
     return (
@@ -4253,12 +4119,11 @@ export default function App() {
         className={[
           'timeline-bar',
           `timeline-bar--${item.variant}`,
-          compactBar ? 'timeline-bar--compact' : '',
-          tinyBar ? 'timeline-bar--tiny' : '',
           isTimelineItemAtPlayhead(item) ? 'timeline-bar--playhead-active' : '',
           item.dimmed ? 'timeline-bar--dimmed' : '',
+          outsideFocusedTradeOff || (focusedTimelineTradeOffId === null && outsideMarkedLink) ? 'timeline-bar--context-dimmed' : '',
           marked ? 'timeline-bar--marked' : '',
-          pinned ? 'timeline-bar--pinned' : '',
+          pinned ? 'timeline-bar--tooltip-pinned' : '',
           isGroupRow ? 'timeline-bar--group-row' : 'timeline-bar--link-row',
           isLink ? '' : 'timeline-bar--static',
         ].filter(Boolean).join(' ')}
@@ -4268,8 +4133,14 @@ export default function App() {
           top: `calc(${barTopOffsetRem}rem + ${(item.laneIndex ?? 0) * laneStepRem}rem)`,
           height: `${barHeightRem}rem`,
         }}
+        data-timeline-item-id={item.id}
+        data-link-id={item.linkId ?? undefined}
         data-playback-start={item.startTimestamp}
         data-playback-end={item.endTimestamp}
+        onMouseDown={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+        }}
         onClick={(event) => handleTimelineItemClick(item, event)}
         onMouseEnter={(event) => showTimelineTooltip(item, event)}
         onMouseMove={moveTimelineTooltip}
@@ -4277,26 +4148,11 @@ export default function App() {
         onFocus={(event) => showTimelineTooltip(item, event)}
         onBlur={scheduleTimelineTooltipHide}
         aria-pressed={isLink ? marked : undefined}
-        aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineDuration(item.startTime, item.endTime)}.`}
-      >
-        <span className="timeline-bar-content">
-          {item.recommended && !tinyBar && (
-            <span className="timeline-bar-marker" aria-hidden="true"></span>
-          )}
-          <span className="timeline-bar-title">
-            {tinyBar ? getCompactTimelineLabel(item.label) : item.label}
-          </span>
-        </span>
-      </button>
+        aria-haspopup={isLink ? 'dialog' : undefined}
+        aria-expanded={isLink ? pinned : undefined}
+        aria-label={`${item.label}. ${item.detail}. Start ${formatTimelineDateTime(item.startTime)}. End ${formatTimelineDateTime(item.endTime)}. Duration ${formatTimelineItemDuration(item)}.`}
+      ></button>
     )
-  }
-
-  const getCompactTimelineLabel = (label) => {
-    if (label.length <= 8 || label.startsWith('OP-')) {
-      return label
-    }
-
-    return label.split(' ')[0]
   }
 
   const renderSectionChevron = (expanded) => (
@@ -4630,9 +4486,152 @@ export default function App() {
     </div>
   )
 
+  const renderBufferConfigContent = (disabled = false) => (
+    <div className={`scheduling-config ${disabled ? 'scheduling-config--disabled' : ''}`}>
+      <div className="scheduling-config-grid">
+        <label className="filter-field">
+          <span>Capacity</span>
+          <div className="filter-input-shell">
+            <input
+              type="number"
+              min="0.001"
+              step="10"
+              inputMode="decimal"
+              value={dataCapacityGb}
+              disabled={disabled}
+              aria-invalid={!bufferConfigValid}
+              onChange={(event) => setDataCapacityGb(event.target.value)}
+              className="filter-input"
+            />
+            <span className="filter-input-unit">GB</span>
+          </div>
+        </label>
+        <label className="filter-field">
+          <span>Initial Fill</span>
+          <div className="filter-input-shell">
+            <input
+              type="number"
+              min="0"
+              step="10"
+              inputMode="decimal"
+              value={dataStartFillGb}
+              disabled={disabled}
+              aria-invalid={!bufferConfigValid}
+              onChange={(event) => setDataStartFillGb(event.target.value)}
+              className="filter-input"
+            />
+            <span className="filter-input-unit">GB</span>
+          </div>
+        </label>
+        <label className="filter-field">
+          <span>Payload Generation</span>
+          <div className="filter-input-shell">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              inputMode="decimal"
+              value={dataGenerationMbps}
+              disabled={disabled}
+              aria-invalid={!bufferConfigValid}
+              onChange={(event) => setDataGenerationMbps(event.target.value)}
+              className="filter-input"
+            />
+            <span className="filter-input-unit">MB/s</span>
+          </div>
+        </label>
+        <label className="filter-field">
+          <span>Downlink Rate</span>
+          <div className="filter-input-shell">
+            <input
+              type="number"
+              min="0.001"
+              step="0.1"
+              inputMode="decimal"
+              value={dataDownlinkRateMbps}
+              disabled={disabled}
+              aria-invalid={!bufferConfigValid}
+              onChange={(event) => setDataDownlinkRateMbps(event.target.value)}
+              className="filter-input"
+            />
+            <span className="filter-input-unit">MB/s</span>
+          </div>
+        </label>
+      </div>
+      <p className="scheduling-config-note">
+        Backend defaults for selected satellites. The downlink rate is also used when filtering links.
+      </p>
+      {!bufferConfigValid && (
+        <p className="filter-error">
+          Capacity and downlink rate must be positive; initial fill must be between zero and capacity.
+        </p>
+      )}
+    </div>
+  )
+
+  const renderTradeOffConfigContent = (disabled = false) => (
+    <div className={`scheduling-config ${disabled ? 'scheduling-config--disabled' : ''}`}>
+      <label className="filter-field">
+        <span>Scoring Strategy</span>
+        <select
+          value={tradeOffStrategy}
+          disabled={disabled}
+          onChange={(event) => setTradeOffStrategy(event.target.value)}
+          className="filter-input scheduling-config-select"
+        >
+          {TRADE_OFF_STRATEGIES.map((strategy) => (
+            <option key={strategy.value} value={strategy.value}>{strategy.label}</option>
+          ))}
+        </select>
+      </label>
+      {tradeOffStrategy === 'buffer_overflow_avoidance' && (
+        <div className="scheduling-config-grid scheduling-config-grid--parameters">
+          <label className="filter-field">
+            <span>Urgency Alpha</span>
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              inputMode="decimal"
+              value={scoringAlpha}
+              disabled={disabled}
+              aria-invalid={!tradeOffConfigValid}
+              onChange={(event) => setScoringAlpha(event.target.value)}
+              className="filter-input"
+            />
+          </label>
+          <label className="filter-field">
+            <span>Urgency Exponent</span>
+            <input
+              type="number"
+              min="0.001"
+              step="0.1"
+              inputMode="decimal"
+              value={scoringExponent}
+              disabled={disabled}
+              aria-invalid={!tradeOffConfigValid}
+              onChange={(event) => setScoringExponent(event.target.value)}
+              className="filter-input"
+            />
+          </label>
+        </div>
+      )}
+      <p className="scheduling-config-note">
+        Applied by the backend the next time Calculate Trade-Offs runs.
+      </p>
+      {!tradeOffConfigValid && (
+        <p className="filter-error">Alpha must be zero or greater and exponent must be positive.</p>
+      )}
+    </div>
+  )
+
   const renderSatelliteOptionsContent = (configDisabled = false) => (
     <div className="checkbox-list">
       {satelliteAssets.map((asset) => (
+        (() => {
+          const warningMessage = getAssetWarningMessage(asset)
+
+          return (
         <label
           key={asset.name}
           className={`checkbox-row ${asset.eligible && !configDisabled ? '' : 'checkbox-row--disabled'}`}
@@ -4644,8 +4643,10 @@ export default function App() {
             disabled={!asset.eligible || configDisabled}
           />
           <span className="asset-name">{asset.name}</span>
-          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
+          {!asset.eligible && warningMessage && renderAssetWarning(warningMessage)}
         </label>
+          )
+        })()
       ))}
       {satelliteAssets.length === 0 && (
         !configDisabled ? <p>No satellite assets available.</p> : null
@@ -4656,6 +4657,10 @@ export default function App() {
   const renderGroundStationOptionsContent = (configDisabled = false) => (
     <div className="checkbox-list">
       {groundStationAssets.map((asset) => (
+        (() => {
+          const warningMessage = getAssetWarningMessage(asset)
+
+          return (
         <label
           key={asset.name}
           className={`checkbox-row ${asset.eligible && !configDisabled ? '' : 'checkbox-row--disabled'}`}
@@ -4667,8 +4672,10 @@ export default function App() {
             disabled={!asset.eligible || configDisabled}
           />
           <span className="asset-name">{asset.name}</span>
-          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
+          {!asset.eligible && warningMessage && renderAssetWarning(warningMessage)}
         </label>
+          )
+        })()
       ))}
       {groundStationAssets.length === 0 && (
         !configDisabled ? <p>No ground-station assets available.</p> : null
@@ -4679,13 +4686,19 @@ export default function App() {
   const renderUnavailableAssetsContent = (configDisabled = false) => (
     <div className="checkbox-list">
       {unavailableAssets.map((asset) => (
+        (() => {
+          const warningMessage = getAssetWarningMessage(asset)
+
+          return (
         <div
           key={asset.name}
           className="checkbox-row checkbox-row--disabled checkbox-row--static"
         >
           <span className="asset-name">{asset.name}</span>
-          {asset.error && renderAssetWarning(asset.error)}
+          {warningMessage && renderAssetWarning(warningMessage)}
         </div>
+          )
+        })()
       ))}
       {unavailableAssets.length === 0 && (
         <p>{configDisabled ? 'Unavailable assets will appear here after the mission asset load.' : 'No unclassified assets.'}</p>
@@ -4741,7 +4754,6 @@ export default function App() {
   )
 
   if (view === 'landing') {
-    const filtersDisabled = !missionAssetsLoaded
     const filterTooltip = 'Load SatOS mission data first to enable filtering.'
 
     return (
@@ -4800,6 +4812,26 @@ export default function App() {
                       <span className="landing-panel-tooltip">{filterTooltip}</span>
                     )}
                   </section>
+
+                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
+                    <div className="landing-config-panel-header">
+                      <span className="landing-config-step">Buffer Configuration</span>
+                    </div>
+                    {renderBufferConfigContent(!missionAssetsLoaded)}
+                    {!missionAssetsLoaded && (
+                      <span className="landing-panel-tooltip">{filterTooltip}</span>
+                    )}
+                  </section>
+
+                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
+                    <div className="landing-config-panel-header">
+                      <span className="landing-config-step">Trade-Off Configuration</span>
+                    </div>
+                    {renderTradeOffConfigContent(!missionAssetsLoaded)}
+                    {!missionAssetsLoaded && (
+                      <span className="landing-panel-tooltip">{filterTooltip}</span>
+                    )}
+                  </section>
                 </div>
 
                 {showOverviewProgress && (
@@ -4815,7 +4847,7 @@ export default function App() {
                         className="btn-fetch btn-terminate landing-action-button"
                         onClick={handleTerminateScheduler}
                       >
-                        Terminate
+                          Terminate
                       </button>
                     ) : (
                       <button
@@ -4843,6 +4875,17 @@ export default function App() {
             </div>
           </div>
         </div>
+        {warningTooltip.visible && createPortal((
+          <div
+            className="timeline-hover-tooltip warning-hover-tooltip"
+            style={{
+              left: `${Math.max(12, Math.min(warningTooltip.x + 16, window.innerWidth - 320))}px`,
+              top: `${Math.max(12, Math.min(warningTooltip.y + 18, window.innerHeight - 120))}px`,
+            }}
+          >
+            {warningTooltip.message}
+          </div>
+        ), document.body)}
       </div>
     )
   }
@@ -4865,9 +4908,9 @@ export default function App() {
               <div className="panel-heading-actions">
                 <div className="overview-inline-status">
                   {schedulerLaunched && (
-                    <div className="overview-count-inline">
+                    <div className="overview-count-inline" title={`Orbit run: ${orbitEngineRunId ?? '—'} (${propagationResult?.overpass_blocks?.length ?? 0} propagated) · Filter run: ${filterRunId ?? '—'} (${filteredLinks.length} links) · Session: ${sessionId ?? '—'}`}>
                       <span className="overview-status-label">Overpasses</span>
-                      <span className="overview-count-value">{visibleOverviewRows.length}</span>
+                      <span className="overview-count-value">{overviewRows.length}</span>
                     </div>
                   )}
                   {schedulerLaunched && (
@@ -4920,47 +4963,52 @@ export default function App() {
               ) : (
                 <div className="overview-table-scroll">
                   <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                    <span>Overpass ID</span>
-                    <span>Status</span>
                     <span>Link ID</span>
+                    <span>Status</span>
+                    <span>Overpass ID</span>
                     <span>Sat ID</span>
                     <span>GS ID</span>
                     <span>Start</span>
                     <span>End</span>
                     <span>Duration</span>
                     <span>Max Elev.</span>
+                    {tradeOffsCalculated && <span>Buffer level before</span>}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--tradeoff">
-                        <span>Trade-Off ID</span>
-                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                        <span>Trade-Off<br />ID</span>
                       </span>
                     )}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--score">
                         <span>Score</span>
-                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                      </span>
+                    )}
+                    {tradeOffsCalculated && <span>Data Downlink</span>}
+                    {tradeOffsCalculated && (
+                      <span className="overview-header-cell overview-header-cell--controls">
+                        <span>Controls</span>
                       </span>
                     )}
                     {tradeOffsCalculated && (
-                      <span className="overview-header-cell overview-header-cell--data">
-                        <span>Data</span>
-                        {useDemoData && schedulerLaunched && <span className="overview-header-note">Demo</span>}
+                      <span className="overview-header-cell overview-header-cell--schedule">
+                        <span>Schedule</span>
                       </span>
                     )}
-                    {tradeOffsCalculated && <span>Select</span>}
                   </div>
                   {visibleOverviewRows.length === 0 ? (
                     <>
                       <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                        <span>{showUnavailableOverviewRows ? 'OP-001' : 'No available overpasses'}</span>
-                        <span>—</span>
                         <span>{showUnavailableOverviewRows ? 'L-001' : '—'}</span>
+                        <span>—</span>
+                        <span>{showUnavailableOverviewRows ? 'OP-001' : 'No available overpasses'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
                         <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
+                        {tradeOffsCalculated && <span>—</span>}
+                        {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
                         {tradeOffsCalculated && <span>—</span>}
@@ -4970,54 +5018,65 @@ export default function App() {
                   ) : (
                     <>
                       {visibleOverviewRows.map((row) => {
-                        const rowOption = getOptionForOverpassId(row.overpassId)
+                        const rowOption = getOptionForLinkId(row.backendLinkId ?? row.linkId ?? null)
+                        const rowStatus = getOverviewRowStatus(row)
                         const rowUnavailable = isOverviewRowUnavailable(row)
-                        const rowFiltered = row.availabilityStatus === 'filtered'
                         const rowAvailabilityLabel = getOverviewAvailabilityLabel(row)
                         const rowRejectionReason = row.rejectionReason ?? getScheduleBlockMessage(row)
-                        const isRecommendedRow = tradeOffsCalculated
-                          && row.tradeOffId !== '—'
-                          && row.tradeOffScore !== '—'
-                          && rowOption?.recommended
-                        // The Trade-Off panel used to own this; the Overview is
-                        // the only place it lives now.
+                        const isRecommendedRow = tradeOffsCalculated && row.isScheduled && row.overrideState === 'auto'
                         const isSelectableRow = tradeOffsCalculated
                           && !rowUnavailable
-                          && row.tradeOffId !== '—'
-                          && rowOption !== null
-                        const isSelectedRow = isSelectableRow
-                          && selectedTradeOffOption[rowOption.tradeOffGroupId] === rowOption.optionId
-                        const rowBudget = rowOption ? getOptionLinkBudget(rowOption) : null
+                          && Boolean(sessionId)
+                        const isSelectedRow = isSelectableRow && row.isScheduled
+                        const overrideOption = rowOption ?? {
+                          tradeOffGroupId: row.backendTradeOffId,
+                          optionId: row.backendLinkId,
+                          linkId: row.backendLinkId,
+                          overpassId: row.overpassId,
+                          satId: row.satId,
+                          gsId: row.gsId,
+                          startTime: row.startTime,
+                        }
+                        const rowTradeOffBandClass = overviewTradeOffBandByOverpassId.get(row.overpassId) ?? ''
 
                         return (
                           <div
                             key={row.overpassId}
-                            className={`overview-list-row ${rowUnavailable ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${isSelectedRow ? 'overview-list-row--selected' : ''} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
+                            className={`overview-list-row ${rowUnavailable ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${isSelectedRow ? 'overview-list-row--selected' : ''} ${rowTradeOffBandClass} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
                           >
-                            <span className="overview-overpass-cell">
-                              <span>{row.overpassId}</span>
-                              {rowUnavailable && rowRejectionReason ? renderAssetWarning(rowRejectionReason) : null}
-                            </span>
-                            <span className="overview-status-cell">
+                            <span className="overview-linkid-cell">{getOverviewDisplayLinkId(row)}</span>
+                            <span
+                              className="overview-status-cell"
+                              onMouseEnter={rowRejectionReason ? (event) => showWarningTooltip(rowRejectionReason, event) : undefined}
+                              onMouseMove={rowRejectionReason ? moveWarningTooltip : undefined}
+                              onMouseLeave={rowRejectionReason ? hideWarningTooltip : undefined}
+                              onFocus={rowRejectionReason ? (event) => showWarningTooltip(rowRejectionReason, event) : undefined}
+                              onBlur={rowRejectionReason ? hideWarningTooltip : undefined}
+                            >
                               {isRecommendedRow ? (
                                 <span className="overview-row-note overview-row-note--recommended">
                                   Recommended
                                 </span>
-                              ) : null}
-                              {rowUnavailable && !rowFiltered && rowAvailabilityLabel ? (
+                              ) : rowStatus === 'blocked' || rowStatus === 'ineligible' ? (
                                 <span className="overview-row-note">
                                   {rowAvailabilityLabel}
                                 </span>
-                              ) : null}
-                              {!isRecommendedRow && !rowUnavailable ? <span className="overview-status-empty">—</span> : null}
+                              ) : (
+                                <span className="overview-status-empty">Eligible</span>
+                              )}
                             </span>
-                            <span className="overview-linkid-cell">{row.linkId ?? '—'}</span>
+                            <span className="overview-overpass-cell">
+                              <span>{row.overpassId}</span>
+                            </span>
                             <span>{row.satId}</span>
                             <span>{row.gsId}</span>
                             <span>{formatOverviewStartDateTime(row.startTime)}</span>
                             <span>{formatOverviewEndDateTime(row.startTime, row.endTime)}</span>
                             <span>{row.duration}</span>
                             <span>{row.maxElevation ?? '—'}</span>
+                            {tradeOffsCalculated && (
+                              <span>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(row.backendLinkId ?? row.linkId ?? null))}</span>
+                            )}
                             {tradeOffsCalculated && (
                               rowUnavailable
                                 ? <span className="overview-tradeoff-cell">—</span>
@@ -5026,33 +5085,68 @@ export default function App() {
                                   <span className="overview-tradeoff-cell">
                                     <button
                                       type="button"
-                                      className={`overview-tradeoff-button ${markedTimelineLinkId === row.overpassId ? 'overview-tradeoff-button--marked' : ''}`}
+                                      className={`overview-tradeoff-button ${markedTimelineLinkId === (row.backendLinkId ?? row.linkId) ? 'overview-tradeoff-button--marked' : ''}`}
                                       onClick={() => handleOverviewTradeOffClick(row)}
-                                      aria-pressed={markedTimelineLinkId === row.overpassId}
-                                      title={`Show ${row.tradeOffId} and mark ${row.overpassId}`}
+                                      aria-pressed={markedTimelineLinkId === (row.backendLinkId ?? row.linkId)}
+                                      title={`Show ${row.tradeOffId} and mark link ${row.backendLinkId ?? row.linkId}`}
                                     >
-                                      {renderTradeOffPill(row.tradeOffId, row.tradeOffColorIndex)}
+                                      {renderTradeOffPill(row.tradeOffId)}
                                     </button>
                                   </span>
                                 )
                                 : <span className="overview-tradeoff-cell">—</span>
                             )}
-                            {tradeOffsCalculated && <span className="overview-score-cell">{row.tradeOffScore}</span>}
                             {tradeOffsCalculated && (
-                              <span className="overview-data-cell">
-                                {rowBudget ? formatGb(rowBudget.volumeGb) : '—'}
+                              <span className="overview-score-cell">
+                                {Number.isFinite(row.score) ? row.score.toFixed(2) : '—'}
+                              </span>
+                            )}
+                            {tradeOffsCalculated && (
+                              <span className="overview-offloaded-cell">
+                                {formatDataDownlinkGb(getDisplayDataDownlinkMb(row))}
                               </span>
                             )}
                             {tradeOffsCalculated && (
                               <span className="overview-select-cell">
                                 {isSelectableRow ? (
+                                  <span className="overview-override-controls" role="group" aria-label={`Override ${getOverviewDisplayLinkId(row)}`}>
+                                    {['auto', 'pinned', 'excluded'].map((state) => (
+                                      <button
+                                        key={state}
+                                        type="button"
+                                        className={`overview-override-button ${row.overrideState === state ? 'overview-override-button--active' : ''}`}
+                                        onClick={() => handleLinkOverride(overrideOption, state)}
+                                        disabled={Boolean(overridingLinkId)}
+                                        aria-pressed={row.overrideState === state}
+                                        title={getOverviewControlTooltip(state)}
+                                        onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
+                                        onMouseMove={moveWarningTooltip}
+                                        onMouseLeave={hideWarningTooltip}
+                                        onFocus={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
+                                        onBlur={hideWarningTooltip}
+                                      >
+                                        {state === 'auto' ? 'A' : state === 'pinned' ? 'P' : 'X'}
+                                      </button>
+                                    ))}
+                                  </span>
+                                ) : (
+                                  <span className="overview-select-empty">—</span>
+                                )}
+                              </span>
+                            )}
+                            {tradeOffsCalculated && (
+                              <span className="overview-schedule-state-cell">
+                                {isSelectableRow ? (
                                   <button
                                     type="button"
-                                    className={`overview-select-button ${isSelectedRow ? 'overview-select-button--selected' : ''}`}
-                                    onClick={() => handleSelectTradeOffOption(rowOption)}
-                                    aria-pressed={isSelectedRow}
+                                    className={`overview-select-button ${row.isScheduled ? 'overview-select-button--selected' : ''}`}
+                                    onClick={() => handleLinkOverride(
+                                      overrideOption,
+                                      row.overrideState === 'pinned' ? 'auto' : 'pinned',
+                                    )}
+                                    disabled={Boolean(overridingLinkId)}
                                   >
-                                    {isSelectedRow ? 'Selected' : 'Select'}
+                                    {row.isScheduled ? 'Scheduled' : 'Schedule'}
                                   </button>
                                 ) : (
                                   <span className="overview-select-empty">—</span>
@@ -5071,7 +5165,7 @@ export default function App() {
               <div className="panel-action-wrapper">
                 <button
                   className="panel-action"
-                  disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffDemoAvailable}
+                  disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffAvailable}
                   onClick={handleCalculateTradeOffs}
                 >
                   {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
@@ -5080,13 +5174,15 @@ export default function App() {
                   <span className="panel-action-tooltip">
                     {!schedulerLaunched
                       ? 'Finish loading SCOPE and wait for extraction to complete.'
-                      : !useDemoData
-                        ? 'Trade-off calculation is not connected for real-data mode yet. Enable demo data to preview this workflow.'
-                        : !tradeOffDemoAvailable
-                          ? overviewRows.length > 0
-                            ? 'All extracted overpasses are blocked by existing scheduled activities with higher priority.'
-                            : 'No extracted overpasses are available for the simulated trade-off step.'
-                          : 'Calculate the simulated trade-off groups for the currently visible extracted overpasses.'}
+                      : !tradeOffAvailable
+                        ? !bufferConfigValid
+                          ? 'Enter a valid buffer configuration; initial fill cannot exceed capacity.'
+                          : !tradeOffConfigValid
+                            ? 'Enter a valid trade-off scoring configuration.'
+                          : overviewRows.length > 0
+                          ? 'All backend-filtered links are ineligible.'
+                          : 'No filtered links are available.'
+                        : 'Create a backend scheduling session for the filtered links.'}
                   </span>
                 )}
               </div>
@@ -5108,7 +5204,6 @@ export default function App() {
                 {renderPanelDragHandle('tradeOff')}
               <div className="panel-heading-title">
                 <h2>Trade-Off</h2>
-                {useDemoData && schedulerLaunched && renderDemoBadge()}
               </div>
               </div>
               <button
@@ -5126,8 +5221,8 @@ export default function App() {
             </div>
             {expandedSections.tradeOff && (
               <div id="tradeoff-panel-content" className="panel-collapsible-content">
-                {!tradeOffsCalculated && !useDemoData && (
-                  <p>Enable Demo mode to use Trade-Off view.</p>
+                {!tradeOffsCalculated && (
+                  <p>Calculate trade-offs to create a backend scheduling session.</p>
                 )}
                 {tradeOffsCalculated && tradeOffCards.length === 0 && (
                   <p>No trade-off groups were identified for the current selection.</p>
@@ -5152,13 +5247,13 @@ export default function App() {
                         <p className="tradeoff-card-resource">{card.resourceLabel}</p>
                       </div>
                     </div>
-                    <p className="tradeoff-reason">
-                      <span className="tradeoff-reason-label">Reason:</span> {card.reason}
-                    </p>
-
                     <div className="tradeoff-option-list">
                       {card.options.map((option) => {
-                        const budget = getOptionLinkBudget(option)
+                        const optionRow = overviewRowByLinkId.get(option.linkId)
+                        const effectiveOverrideState = optionRow?.overrideState ?? option.overrideState
+                        const optionScheduled = Boolean(optionRow?.isScheduled ?? option.isScheduled)
+                        const optionRecommended = optionScheduled && effectiveOverrideState === 'auto'
+                        const displayScore = Number(optionRow?.score ?? option.score ?? 0)
 
                         return (
                           <div
@@ -5166,48 +5261,71 @@ export default function App() {
                             data-option-id={option.optionId}
                             className={[
                               'tradeoff-option',
-                              selectedTradeOffOption[option.tradeOffGroupId] === option.optionId ? 'tradeoff-option--selected' : '',
+                              optionScheduled ? 'tradeoff-option--selected' : '',
                               markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
                             ].filter(Boolean).join(' ')}
                             style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
                           >
                             <div className="tradeoff-option-header">
-                              <span className="tradeoff-option-id">{option.overpassId}</span>
+                              <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
                               <div className="tradeoff-meta tradeoff-meta--option">
-                                {markedTradeOffOptionId === option.optionId && (
-                                  <span className="tradeoff-marked-flag">Marked</span>
-                                )}
-                                {option.recommended && <span className="tradeoff-recommended">Recommended</span>}
-                                <span className="tradeoff-score">{option.score}</span>
+                                {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
+                                <span className="tradeoff-score">Score {displayScore.toFixed(2)}</span>
                               </div>
                             </div>
 
                             <dl className="tradeoff-option-facts">
                               <div className="tradeoff-option-fact">
+                                <dt>Satellite</dt>
+                                <dd>{option.satId ?? '—'}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
                                 <dt>Ground Station</dt>
                                 <dd>{option.gsId ?? '—'}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>Start</dt>
+                                <dd>{formatOverviewStartDateTime(option.startTime)}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>End</dt>
+                                <dd>{formatOverviewEndDateTime(option.startTime, option.endTime)}</dd>
                               </div>
                               <div className="tradeoff-option-fact">
                                 <dt>Duration</dt>
                                 <dd>{option.duration ?? '—'}</dd>
                               </div>
                               <div className="tradeoff-option-fact">
-                                <dt>Data</dt>
-                                <dd>{budget ? formatGb(budget.volumeGb) : '—'}</dd>
+                                <dt>Max Elev.</dt>
+                                <dd>{option.maxElevation ?? '—'}</dd>
                               </div>
                               <div className="tradeoff-option-fact">
-                                <dt>Max Elev.</dt>
-                                <dd>{option.maxElevation ?? budget?.maxElevation ?? '—'}</dd>
+                                <dt>Buffer level before</dt>
+                                <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>Data Downlink</dt>
+                                <dd>{formatDataDownlinkGb(getDisplayDataDownlinkMb(option))}</dd>
                               </div>
                             </dl>
 
-                            <button
-                              type="button"
-                              className="tradeoff-select-button"
-                              onClick={() => handleSelectTradeOffOption(option)}
-                            >
-                              {selectedTradeOffOption[option.tradeOffGroupId] === option.optionId ? 'Selected' : 'Select'}
-                            </button>
+                            <div className="tradeoff-option-actions">
+                              <button
+                                type="button"
+                                className="tradeoff-jump-button"
+                                onClick={() => jumpToTimelineLink(option.linkId, option.optionId)}
+                              >
+                                Jump to Timeline
+                              </button>
+                              <button
+                                type="button"
+                                className="tradeoff-select-button"
+                                onClick={() => handleLinkOverride(option, effectiveOverrideState === 'pinned' ? 'auto' : 'pinned')}
+                                disabled={Boolean(overridingLinkId)}
+                              >
+                                {optionScheduled ? 'Scheduled' : 'Schedule'}
+                              </button>
+                            </div>
                           </div>
                         )
                       })}
@@ -5234,7 +5352,6 @@ export default function App() {
                 {renderPanelDragHandle('mapView')}
               <div className="panel-heading-title">
                 <h2>Map View</h2>
-                {useDemoData && renderDemoBadge()}
               </div>
               </div>
               <div className="map-panel-controls">
@@ -5270,7 +5387,7 @@ export default function App() {
                         assets={visibleMapAssets}
                         satelliteTracks={preparedSatelliteTracks}
                         activeAssetId={activeMapAsset?.id ?? null}
-                        onSelectAsset={setActiveMapAssetId}
+                        onSelectAsset={handleSelectMapAsset}
                         timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
                         showGroundStationVisibility={showGroundStationVisibilityCircles}
                         showSatelliteVisibility={showSatelliteVisibilityCircles}
@@ -5298,17 +5415,15 @@ export default function App() {
                             ></span>
                             Ground station visibility circles
                           </span>
-                          <label className="demo-switch">
+                          <label className="toggle-switch">
                             <input
                               type="checkbox"
                               checked={showGroundStationVisibilityCircles}
                               disabled={!schedulerLaunched}
-                              onChange={() =>
-                                setShowGroundStationVisibilityCircles((current) => !current)
-                              }
+                              onChange={() => setShowGroundStationVisibilityCircles((current) => !current)}
                             />
-                            <span className="demo-switch-track" aria-hidden="true">
-                              <span className="demo-switch-thumb"></span>
+                            <span className="toggle-switch-track" aria-hidden="true">
+                              <span className="toggle-switch-thumb"></span>
                             </span>
                           </label>
                         </div>
@@ -5320,17 +5435,15 @@ export default function App() {
                             ></span>
                             Satellite visibility circles
                           </span>
-                          <label className="demo-switch">
+                          <label className="toggle-switch">
                             <input
                               type="checkbox"
                               checked={showSatelliteVisibilityCircles}
                               disabled={!schedulerLaunched}
-                              onChange={() =>
-                                setShowSatelliteVisibilityCircles((current) => !current)
-                              }
+                              onChange={() => setShowSatelliteVisibilityCircles((current) => !current)}
                             />
-                            <span className="demo-switch-track" aria-hidden="true">
-                              <span className="demo-switch-thumb"></span>
+                            <span className="toggle-switch-track" aria-hidden="true">
+                              <span className="toggle-switch-thumb"></span>
                             </span>
                           </label>
                         </div>
@@ -5342,15 +5455,15 @@ export default function App() {
                             ></span>
                             Ground tracks
                           </span>
-                          <label className="demo-switch">
+                          <label className="toggle-switch">
                             <input
                               type="checkbox"
                               checked={showGroundTracks}
                               disabled={!schedulerLaunched}
                               onChange={() => setShowGroundTracks((current) => !current)}
                             />
-                            <span className="demo-switch-track" aria-hidden="true">
-                              <span className="demo-switch-thumb"></span>
+                            <span className="toggle-switch-track" aria-hidden="true">
+                              <span className="toggle-switch-thumb"></span>
                             </span>
                           </label>
                         </div>
@@ -5381,11 +5494,13 @@ export default function App() {
                   <div className="map-sidebar-section">
                     <h3>Visible Assets</h3>
                     {visibleMapAssets.length > 0 ? (
-                      <div className="map-asset-card-list">
+                      <div ref={visibleMapAssetListRef} className="map-asset-card-list">
                         {visibleMapAssets.map((asset) => (
                           <button
                             key={asset.id}
                             type="button"
+                            data-map-asset-id={asset.id}
+                            aria-pressed={activeMapAsset?.id === asset.id}
                             className={`map-asset-card ${
                               activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
                             }`}
@@ -5517,95 +5632,92 @@ export default function App() {
                 <div className="timeline-toolbar">
                   <div className="timeline-toolbar-groups">
                     <div className="timeline-toolbar-row">
-                      <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
-                        {TIMELINE_LAYERS.map((layer) => (
-                          <button
-                            key={layer.id}
-                            type="button"
-                            className={`timeline-toggle ${timelineLayers[layer.id] ? 'timeline-toggle--active' : ''}`}
-                            onClick={() => toggleTimelineLayer(layer.id)}
-                            aria-pressed={Boolean(timelineLayers[layer.id])}
-                          >
-                            {layer.label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="timeline-toggle-group timeline-toggle-group--asset" role="group" aria-label="Timeline assets">
-                        <button
-                          type="button"
-                          className={`timeline-toggle ${timelineAssetVisibility.satellites ? 'timeline-toggle--active' : ''}`}
-                          onClick={() => toggleTimelineAssetVisibility('satellites')}
-                          aria-pressed={timelineAssetVisibility.satellites}
-                        >
-                          Satellites
-                        </button>
-                        <button
-                          type="button"
-                          className={`timeline-toggle ${timelineAssetVisibility.groundStations ? 'timeline-toggle--active' : ''}`}
-                          onClick={() => toggleTimelineAssetVisibility('groundStations')}
-                          aria-pressed={timelineAssetVisibility.groundStations}
-                        >
-                          Ground Stations
-                        </button>
-                      </div>
-                    </div>
-                    <div className="timeline-toolbar-row">
-                      <div className="timeline-toggle-group" role="group" aria-label="Timeline playback">
-                        <button
-                          type="button"
-                          className={`timeline-toggle timeline-play-toggle ${timelinePlaying ? 'timeline-toggle--active' : ''}`}
-                          onClick={handleTimelinePlaybackToggle}
-                          disabled={planningWindowStartTimestamp === null || planningWindowEndTimestamp === null}
-                          aria-pressed={timelinePlaying}
-                        >
-                          <span className="timeline-play-icon" aria-hidden="true">
-                            {timelinePlaying ? '⏸' : '▶'}
-                          </span>
-                          {timelinePlaying ? 'Pause' : 'Play'}
-                        </button>
-                        <div className="timeline-speed-control" role="group" aria-label="Playback speed">
-                          {TIMELINE_PLAYBACK_SPEEDS.map((speed) => (
+                      <div className="timeline-toolbar-side timeline-toolbar-side--left">
+                        <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
+                          {TIMELINE_LAYERS.map((layer) => (
                             <button
-                              key={speed}
+                              key={layer.id}
                               type="button"
-                              className={`timeline-speed-option ${timelinePlaybackSpeed === speed ? 'timeline-speed-option--active' : ''}`}
-                              onClick={() => setTimelinePlaybackSpeed(speed)}
-                              aria-pressed={timelinePlaybackSpeed === speed}
+                              className={`timeline-toggle ${timelineLayers[layer.id] ? 'timeline-toggle--active' : ''}`}
+                              onClick={() => toggleTimelineLayer(layer.id)}
+                              aria-pressed={Boolean(timelineLayers[layer.id])}
                             >
-                              {speed}×
+                              {layer.label}
                             </button>
                           ))}
                         </div>
-                      </div>
-                      <div className="timeline-toolbar-spacer"></div>
-                      <div className="timeline-toggle-group" role="group" aria-label="Timeline zoom">
-                        <div className="timeline-zoom-control">
+                        <div className="timeline-toggle-group timeline-toggle-group--asset" role="group" aria-label="Timeline assets">
                           <button
                             type="button"
-                            className="timeline-zoom-option timeline-zoom-reset"
-                            onClick={handleResetTimelineView}
-                            disabled={
-                              timelineZoomLevel === TIMELINE_DEFAULT_ZOOM_LEVEL
-                              && timelineCustomZoomMultiplier === null
-                            }
+                            className={`timeline-toggle ${timelineAssetVisibility.satellites ? 'timeline-toggle--active' : ''}`}
+                            onClick={() => toggleTimelineAssetVisibility('satellites')}
+                            aria-pressed={timelineAssetVisibility.satellites}
                           >
-                            Reset View
+                            Satellites
                           </button>
+                          <button
+                            type="button"
+                            className={`timeline-toggle ${timelineAssetVisibility.groundStations ? 'timeline-toggle--active' : ''}`}
+                            onClick={() => toggleTimelineAssetVisibility('groundStations')}
+                            aria-pressed={timelineAssetVisibility.groundStations}
+                          >
+                            Ground Stations
+                          </button>
+                        </div>
+                      </div>
+                      <div className="timeline-toolbar-side timeline-toolbar-side--right">
+                        <div className="timeline-toggle-group timeline-toggle-group--playback" role="group" aria-label="Timeline playback">
+                          <button
+                            type="button"
+                            className={`timeline-toggle timeline-play-toggle ${timelinePlaying ? 'timeline-toggle--active' : ''}`}
+                            onClick={handleTimelinePlaybackToggle}
+                            disabled={planningWindowStartTimestamp === null || planningWindowEndTimestamp === null}
+                            aria-pressed={timelinePlaying}
+                          >
+                            <span className="timeline-play-icon" aria-hidden="true">
+                              {timelinePlaying ? '⏸' : '▶'}
+                            </span>
+                            {timelinePlaying ? 'Pause' : 'Play'}
+                          </button>
+                          <div className="timeline-speed-control" role="group" aria-label="Playback speed">
+                            {TIMELINE_PLAYBACK_SPEEDS.map((speed) => (
+                              <button
+                                key={speed}
+                                type="button"
+                                className={`timeline-speed-option ${timelinePlaybackSpeed === speed ? 'timeline-speed-option--active' : ''}`}
+                                onClick={() => setTimelinePlaybackSpeed(speed)}
+                                aria-pressed={timelinePlaybackSpeed === speed}
+                              >
+                                {speed}×
+                              </button>
+                            ))}
+                          </div>
+                          <div className="timeline-zoom-control">
+                            <button
+                              type="button"
+                              className="timeline-zoom-option timeline-zoom-reset"
+                              onClick={handleResetTimelineView}
+                              disabled={
+                                timelineZoomLevel === TIMELINE_DEFAULT_ZOOM_LEVEL
+                                && timelineCustomZoomMultiplier === null
+                              }
+                            >
+                              Reset View
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
-                  {!useDemoData && (
-                    <div className="timeline-toolbar-copy">
-                      Current schedule activities and extracted overpasses use backend timestamps. Proposed scheduling remains empty until the backend trade-off workflow is connected.
-                    </div>
-                  )}
                 </div>
 
                 {timelineRenderRows.length === 0 ? (
                   <p className="timeline-empty-copy">Enable at least one timeline layer and one asset section to display the schedule view.</p>
                 ) : (
-                  <div className="timeline-layout">
+                  <div
+                    className="timeline-layout"
+                    onClick={handleTimelineBackgroundClick}
+                  >
                     <div className="timeline-label-column">
                       <div className="timeline-label-cell timeline-label-cell--day"></div>
                       <div className="timeline-label-cell timeline-label-cell--axis"></div>
@@ -5680,6 +5792,39 @@ export default function App() {
                           )
                         }
 
+                        if (renderRow.type === 'dataVolume') {
+                          const { series } = renderRow
+
+                          return (
+                            <div
+                              key={`${renderRow.key}-label`}
+                              className="timeline-label-cell timeline-label-cell--data-volume"
+                              style={rowStyle}
+                            >
+                              <span className="timeline-data-volume-title">Data Volume</span>
+                              {series ? (
+                                <>
+                                  <span className="data-volume-axis-label">
+                                    {formatGb(series.capacityGb)} capacity · {formatGb(series.totalDownlinkedGb)} downlinked
+                                  </span>
+                                  <span className="data-volume-flags">
+                                    {series.overflowed && (
+                                      <span className="data-volume-flag data-volume-flag--overflow">Buffer full</span>
+                                    )}
+                                    {series.totalLostGb > 0 && (
+                                      <span className="data-volume-flag data-volume-flag--overflow">
+                                        {formatGb(series.totalLostGb)} lost
+                                      </span>
+                                    )}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="data-volume-axis-label">Available after Calculate Trade-Offs</span>
+                              )}
+                            </div>
+                          )
+                        }
+
                         const linkRowMarked = renderRow.row.items.some((item) => item.linkId === markedTimelineLinkId)
                         const linkRowSelected = renderRow.row.items.some((item) => item.variant === 'selected')
 
@@ -5695,6 +5840,7 @@ export default function App() {
                       })}
                     </div>
 
+                    <div className={`timeline-main-stage ${activeTimelineTradeOffCard ? 'timeline-main-stage--with-tradeoff' : ''}`}>
                     <div ref={timelineScrollFrameRef} className="timeline-scroll-frame">
                       <span
                         ref={timelineWheelHintRef}
@@ -5703,42 +5849,37 @@ export default function App() {
                       >
                         Hold Ctrl (⌘ on Mac) + scroll to zoom the timeline
                       </span>
-                      <div
-                        ref={timelinePlayheadSliderRef}
-                        className="timeline-playhead-slider"
-                        aria-hidden={timelinePlayheadWindowRatio === null}
-                      >
-                        {timelinePlayheadWindowRatio !== null && (
-                          <div
-                            className="timeline-playhead-thumb"
-                            data-playback-thumb
-                            style={{ left: `${timelinePlayheadWindowRatio * 100}%` }}
-                            role="slider"
-                            tabIndex="0"
-                            aria-label="Current time shown on the map"
-                            aria-valuemin={planningWindowStartTimestamp ?? undefined}
-                            aria-valuemax={planningWindowEndTimestamp ?? undefined}
-                            aria-valuenow={timelinePlayheadTimestamp}
-                            aria-valuetext={formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
-                            onPointerDown={handleTimelinePlayheadPointerDown}
-                            onPointerMove={handleTimelinePlayheadPointerMove}
-                            onPointerUp={handleTimelinePlayheadPointerUp}
-                            onPointerCancel={handleTimelinePlayheadPointerUp}
-                            onKeyDown={handleTimelinePlayheadKeyDown}
-                          >
-                            <span className="timeline-playhead-handle" aria-hidden="true"></span>
-                            <span className="timeline-playhead-label">
-                              {timelineLive && <span className="timeline-playhead-live">Live</span>}
-                              <span data-playback-label>
-                                {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
-                              </span>
+                      {timelinePlayheadCanvasRatio !== null
+                        && timelinePlayheadCanvasRatio >= 0
+                        && timelinePlayheadCanvasRatio <= 1 && (
+                        <div
+                          ref={timelinePlayheadSliderRef}
+                          className="timeline-playhead-slider"
+                          data-timeline-playhead
+                          role="slider"
+                          tabIndex="0"
+                          aria-label="Current time shown on the map"
+                          aria-valuemin={planningWindowStartTimestamp ?? undefined}
+                          aria-valuemax={planningWindowEndTimestamp ?? undefined}
+                          aria-valuenow={timelinePlayheadTimestamp}
+                          aria-valuetext={formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
+                          onPointerDown={handleTimelinePlayheadPointerDown}
+                          onPointerMove={handleTimelinePlayheadPointerMove}
+                          onPointerUp={handleTimelinePlayheadPointerUp}
+                          onPointerCancel={handleTimelinePlayheadPointerUp}
+                          onKeyDown={handleTimelinePlayheadKeyDown}
+                        >
+                          <span className="timeline-playhead-handle" aria-hidden="true"></span>
+                          <span className="timeline-playhead-label">
+                            <span data-playback-label>
+                              {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
                             </span>
-                          </div>
-                        )}
-                      </div>
+                          </span>
+                        </div>
+                      )}
                       <div
                         ref={timelineScrollRef}
-                        className="timeline-scroll"
+                        className={`timeline-scroll ${timelineIsFit ? 'timeline-scroll--fit' : ''}`}
                         tabIndex="0"
                         role="region"
                         aria-label="Interactive planning timeline"
@@ -5747,7 +5888,7 @@ export default function App() {
                         onKeyDown={handleTimelineKeyDown}
                       >
                         <div
-                          className="timeline-time-canvas"
+                          className={`timeline-time-canvas ${timelineIsFit ? 'timeline-time-canvas--fit' : ''}`}
                           style={{
                             width: `${timelineWidthPx}px`,
                             '--timeline-hour-width': `${(60 / timelineModel.totalMinutes) * 100}%`,
@@ -5756,6 +5897,18 @@ export default function App() {
                         >
                       <div className="timeline-content-plane">
                       <div className="timeline-day-row">
+                        <div
+                          className="timeline-scenario-edge timeline-scenario-edge--start"
+                          style={{ left: 0 }}
+                        >
+                          <span>Scenario Start</span>
+                        </div>
+                        <div
+                          className="timeline-scenario-edge timeline-scenario-edge--end"
+                          style={{ right: 0 }}
+                        >
+                          <span>Scenario End</span>
+                        </div>
                         {timelineModel.dayBands.map((band, index) => (
                           <div
                             key={`${band.label}-${index}`}
@@ -5771,7 +5924,7 @@ export default function App() {
                       </div>
 
                       <div className="timeline-axis-row">
-                        {timelineModel.ticks.map((tick) => (
+                        {visibleTimelineTicks.map((tick) => (
                           <div
                             key={tick.offsetMinutes}
                             className={`timeline-axis-marker ${tick.offsetMinutes % 120 === 0 ? 'timeline-axis-marker--major' : ''}`}
@@ -5799,6 +5952,70 @@ export default function App() {
                           )
                         }
 
+                        if (renderRow.type === 'dataVolume') {
+                          const { series } = renderRow
+
+                          return (
+                            <div
+                              key={`${renderRow.key}-row`}
+                              className="timeline-track-row timeline-track-row--data-volume data-volume-row"
+                              style={rowStyle}
+                            >
+                              {series ? (
+                                <>
+                                  {series.payloadWindows.map((payloadWindow) => (
+                                    <span
+                                      key={`${series.id}-payload-${payloadWindow.id}`}
+                                      className="data-volume-payload-window"
+                                      style={{
+                                        left: `${((payloadWindow.startTimestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
+                                        width: `${((payloadWindow.endTimestamp - payloadWindow.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
+                                      }}
+                                      role="img"
+                                      aria-label={`Payload data generation from ${formatTimelineDateTime(payloadWindow.startTimestamp)} to ${formatTimelineDateTime(payloadWindow.endTimestamp)}.`}
+                                      title={`Payload data generation: ${formatTimelineDateTime(payloadWindow.startTimestamp)} – ${formatTimelineDateTime(payloadWindow.endTimestamp)}`}
+                                    ></span>
+                                  ))}
+                                  <svg
+                                    className="data-volume-chart"
+                                    viewBox="0 0 1000 100"
+                                    preserveAspectRatio="none"
+                                    aria-hidden="true"
+                                  >
+                                    <line
+                                      className="data-volume-capacity-line"
+                                      x1="0"
+                                      x2="1000"
+                                      y1={100 - ((series.capacityGb / dataVolumeYMaxGb) * 100)}
+                                      y2={100 - ((series.capacityGb / dataVolumeYMaxGb) * 100)}
+                                    />
+                                    <polyline
+                                      className="data-volume-curve"
+                                      points={buildDataVolumePolyline(series.points)}
+                                    />
+                                  </svg>
+
+                                  {series.steps.map((step) => (
+                                    <span
+                                      key={`${series.id}-${step.id}`}
+                                      className="data-volume-step"
+                                      style={{
+                                        left: `${((step.startTimestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
+                                        width: `${((step.endTimestamp - step.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
+                                      }}
+                                      aria-hidden="true"
+                                    ></span>
+                                  ))}
+                                </>
+                              ) : (
+                                <span className="data-volume-inline-empty">
+                                  Calculate Trade-Offs to load the backend buffer profile.
+                                </span>
+                              )}
+                            </div>
+                          )
+                        }
+
                         const rowItems = renderRow.type === 'group'
                           ? renderRow.group.items
                           : renderRow.row.items
@@ -5815,23 +6032,122 @@ export default function App() {
                           </div>
                         )
                       })}
-                      {timelinePlayheadOffsetMinutes !== null
-                        && timelinePlayheadOffsetMinutes >= 0
-                        && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
-                        <div
-                          className="timeline-playhead-marker-line timeline-playhead-marker-line--full"
-                          data-timeline-playhead
-                          aria-hidden="true"
-                          style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                          onPointerDown={handleTimelineMarkerLinePointerDown}
-                          onPointerMove={handleTimelineMarkerLinePointerMove}
-                          onPointerUp={handleTimelineMarkerLinePointerUp}
-                          onPointerCancel={handleTimelineMarkerLinePointerUp}
-                        ></div>
-                      )}
                         </div>
                       </div>
                     </div>
+                    </div>
+                    {activeTimelineTradeOffCard && (
+                      <aside
+                        className="timeline-tradeoff-drawer"
+                        style={{
+                          transform: `translate(${timelineTradeOffDrawerOffset.x}px, ${timelineTradeOffDrawerOffset.y}px)`,
+                        }}
+                      >
+                        <div
+                          className="timeline-tradeoff-drawer-header"
+                          onPointerDown={handleTimelineTradeOffDrawerPointerDown}
+                        >
+                          <div className="timeline-tradeoff-drawer-titleblock">
+                            <span className="timeline-tradeoff-drawer-eyebrow">Trade-Off</span>
+                            <h3>{renderTradeOffPill(activeTimelineTradeOffCard.title)}</h3>
+                            <p className="timeline-tradeoff-drawer-resource">
+                              {activeTimelineTradeOffCard.resourceLabel}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            className="timeline-tradeoff-drawer-close"
+                            onClick={closeTimelineTradeOffView}
+                            aria-label="Close trade-off details"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div className="tradeoff-option-list">
+                          {activeTimelineTradeOffCard.options.map((option) => {
+                            const optionRow = overviewRowByLinkId.get(option.linkId)
+                            const effectiveOverrideState = optionRow?.overrideState ?? option.overrideState
+                            const optionScheduled = Boolean(optionRow?.isScheduled ?? option.isScheduled)
+                            const optionRecommended = optionScheduled && effectiveOverrideState === 'auto'
+                            const displayScore = Number(optionRow?.score ?? option.score ?? 0)
+
+                            return (
+                              <div
+                                key={option.optionId}
+                                data-option-id={option.optionId}
+                                className={[
+                                  'tradeoff-option',
+                                  optionScheduled ? 'tradeoff-option--selected' : '',
+                                  markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
+                                  'tradeoff-option--timeline-drawer',
+                                ].filter(Boolean).join(' ')}
+                              >
+                                <div className="tradeoff-option-header">
+                                  <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
+                                  <div className="tradeoff-meta tradeoff-meta--option">
+                                    {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
+                                    <span className="tradeoff-score">Score {displayScore.toFixed(2)}</span>
+                                  </div>
+                                </div>
+
+                                <dl className="tradeoff-option-facts">
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Satellite</dt>
+                                    <dd>{option.satId ?? '—'}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Ground Station</dt>
+                                    <dd>{option.gsId ?? '—'}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Start</dt>
+                                    <dd>{formatOverviewStartDateTime(option.startTime)}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>End</dt>
+                                    <dd>{formatOverviewEndDateTime(option.startTime, option.endTime)}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Duration</dt>
+                                    <dd>{option.duration ?? '—'}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Max Elev.</dt>
+                                    <dd>{option.maxElevation ?? '—'}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Buffer level before</dt>
+                                    <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Data Downlink</dt>
+                                    <dd>{formatDataDownlinkGb(getDisplayDataDownlinkMb(option))}</dd>
+                                  </div>
+                                </dl>
+
+                                <div className="tradeoff-option-actions">
+                                  <button
+                                    type="button"
+                                    className="tradeoff-jump-button"
+                                    onClick={() => jumpToTimelineLink(option.linkId, option.optionId)}
+                                  >
+                                    Jump to Timeline
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="tradeoff-select-button"
+                                    onClick={() => handleLinkOverride(option, effectiveOverrideState === 'pinned' ? 'auto' : 'pinned')}
+                                    disabled={Boolean(overridingLinkId)}
+                                  >
+                                    {optionScheduled ? 'Scheduled' : 'Schedule'}
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </aside>
+                    )}
                   </div>
                   </div>
                 )}
@@ -5840,34 +6156,29 @@ export default function App() {
                   <div className="timeline-confirmation-copy">
                     <div className="timeline-confirmation-heading">
                       <span className="timeline-confirmation-title">Confirm Communication Schedule</span>
-                      {useDemoData && renderDemoBadge()}
                     </div>
                     <span className="timeline-confirmation-text">
-                      {useDemoData
-                        ? 'Demo mode simulates activity generation, SatOS write calls and the final confirmation state.'
-                        : 'Confirmation remains unavailable until the backend write workflow is connected.'}
+                      Commit the backend session's currently scheduled links to SatOS.
                     </span>
                   </div>
                   <div className="timeline-confirmation-actions">
                     <button
                       type="button"
                       className="btn-fetch timeline-confirm-button"
-                      disabled={!confirmDemoAvailable || confirmingSchedule}
+                      disabled={!confirmScheduleAvailable || confirmingSchedule}
                       onClick={handleConfirmSchedule}
                     >
                       {confirmingSchedule ? 'Confirming...' : 'Confirm Communication Schedule'}
                     </button>
-                    {!confirmingSchedule && !confirmDemoAvailable && (
+                    {!confirmingSchedule && !confirmScheduleAvailable && (
                       <span className="timeline-confirmation-tooltip">
-                        {!useDemoData
-                          ? 'Enable Demo to preview the confirmation workflow.'
-                          : !schedulerLaunched
-                            ? 'Launch Communication Scheduler first.'
-                            : !tradeOffsCalculated
-                              ? 'Calculate Trade-Offs first so a final schedule exists.'
-                              : finalScheduleRows.length === 0
-                                ? 'No schedulable links remain for confirmation.'
-                                : 'The final schedule is not ready yet.'}
+                        {!schedulerLaunched
+                          ? 'Launch Communication Scheduler first.'
+                          : !tradeOffsCalculated
+                            ? 'Calculate Trade-Offs first so a backend session exists.'
+                            : finalScheduleRows.length === 0
+                              ? 'The backend session currently contains no scheduled links.'
+                              : 'The final schedule is not ready yet.'}
                       </span>
                     )}
                   </div>
@@ -5879,7 +6190,7 @@ export default function App() {
                     <div className="confirmation-success-copy">
                       <strong>Success</strong>
                       <span>
-                        {confirmedScheduleCount} schedule entr{confirmedScheduleCount === 1 ? 'y was' : 'ies were'} confirmed in the demo workflow.
+                        {confirmedScheduleCount} link{confirmedScheduleCount === 1 ? '' : 's'} committed as {createdActivitiesCount} SatOS activit{createdActivitiesCount === 1 ? 'y' : 'ies'}.
                       </span>
                     </div>
                   </div>
@@ -5891,255 +6202,11 @@ export default function App() {
           </section>
   )
 
-  // Same time span, same canvas width, same 50% inline padding as the timeline
-  // canvas -- that is what lets a single scrollLeft value be mirrored between
-  // the two panels and keeps every step directly under its link.
-  const dataVolumeYMaxGb = dataVolumeCapacityGb * 1.06
-
-  const buildDataVolumePolyline = (points) => {
-    if (!dataVolumeModel || points.length === 0) {
-      return ''
-    }
-
-    return points
-      .map((point) => {
-        const x = ((point.timestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 1000
-        const y = 100 - ((point.level / dataVolumeYMaxGb) * 100)
-        return `${x.toFixed(2)},${y.toFixed(2)}`
-      })
-      .join(' ')
-  }
-
-  const dataVolumePanelNode = (
-          <section
-            className={`panel data-volume-panel ${expandedSections.dataVolume ? '' : 'panel--collapsed'}${getPanelDragClassName('dataVolume')}`}
-            {...getPanelDropZoneProps('dataVolume')}
-          >
-            <div
-              className={`panel-heading panel-heading--data-volume ${expandedSections.dataVolume ? '' : 'panel-heading--collapsed'}`}
-              {...getPanelHeadingDragProps('dataVolume')}
-            >
-              <div className="panel-heading-lead">
-                {renderPanelDragHandle('dataVolume')}
-                <div className="panel-heading-title">
-                  <h2>Data Volume</h2>
-                </div>
-              </div>
-              <div className="panel-heading-actions">
-                <button
-                  type="button"
-                  className="panel-collapse-toggle"
-                  onClick={() => toggleSection('dataVolume')}
-                  aria-expanded={expandedSections.dataVolume}
-                  aria-controls="data-volume-panel-content"
-                  aria-label={expandedSections.dataVolume ? 'Collapse data volume view' : 'Expand data volume view'}
-                >
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.dataVolume)}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {expandedSections.dataVolume && (
-              <div id="data-volume-panel-content" className="panel-collapsible-content">
-                <div className="data-volume-toolbar">
-                  <label className="data-volume-field">
-                    <span>Initial fill</span>
-                    <span className="data-volume-input-wrap">
-                      <input
-                        type="number"
-                        min="0"
-                        step="10"
-                        value={dataStartFillGb}
-                        onChange={(event) => setDataStartFillGb(event.target.value)}
-                      />
-                      <span className="data-volume-unit">GB</span>
-                    </span>
-                  </label>
-                  <label className="data-volume-field">
-                    <span>Generation</span>
-                    <span className="data-volume-input-wrap">
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        value={dataGenerationMbps}
-                        onChange={(event) => setDataGenerationMbps(event.target.value)}
-                      />
-                      <span className="data-volume-unit">Mbit/s</span>
-                    </span>
-                  </label>
-                  <label className="data-volume-field">
-                    <span>Capacity</span>
-                    <span className="data-volume-input-wrap">
-                      <input
-                        type="number"
-                        min="1"
-                        step="10"
-                        value={dataCapacityGb}
-                        onChange={(event) => setDataCapacityGb(event.target.value)}
-                      />
-                      <span className="data-volume-unit">GB</span>
-                    </span>
-                  </label>
-                  <span className="data-volume-toolbar-copy">
-                    Demo model: downlink rate scales with 1/range² from each pass's maximum elevation and the satellite's mean orbit altitude.
-                  </span>
-                </div>
-
-                {!schedulerLaunched && (
-                  <p className="timeline-empty-copy">
-                    Launch Communication Scheduler to initialize the data budget view.
-                  </p>
-                )}
-
-                {schedulerLaunched && !dataVolumeModel && (
-                  <p className="timeline-empty-copy">No planning window is active yet.</p>
-                )}
-
-                {schedulerLaunched && dataVolumeModel && dataVolumeModel.series.length === 0 && (
-                  <p className="timeline-empty-copy">
-                    Expand a satellite group in the timeline to show its on-board data budget here.
-                  </p>
-                )}
-
-                {schedulerLaunched && dataVolumeModel && dataVolumeModel.series.length > 0 && (
-                  <div className="timeline-layout">
-                    <div className="timeline-label-column">
-                      <div className="timeline-label-cell timeline-label-cell--axis"></div>
-                      {dataVolumeModel.series.map((series) => (
-                        <div
-                          key={`${series.id}-label`}
-                          className="timeline-label-cell data-volume-label-cell"
-                        >
-                          <span className="timeline-link-name">{series.name}</span>
-                          <span className="data-volume-axis-label">
-                            {formatGb(dataVolumeModel.capacityGb)} capacity
-                          </span>
-                          <span className="data-volume-flags">
-                            {series.overflowed && (
-                              <span className="data-volume-flag data-volume-flag--overflow">Buffer full</span>
-                            )}
-                            {series.starved && (
-                              <span className="data-volume-flag data-volume-flag--starved">Link idle</span>
-                            )}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="timeline-scroll-frame data-volume-scroll-frame">
-                      <div
-                        ref={dataVolumeScrollRef}
-                        className="timeline-scroll"
-                        tabIndex="0"
-                        role="region"
-                        aria-label="On-board data volume over the planning window"
-                      >
-                        <div
-                          className="timeline-time-canvas"
-                          style={{
-                            width: `${timelineWidthPx}px`,
-                            '--timeline-hour-width': `${(60 / timelineModel.totalMinutes) * 100}%`,
-                            '--timeline-major-width': `${(120 / timelineModel.totalMinutes) * 100}%`,
-                          }}
-                        >
-                          <div className="timeline-content-plane">
-                          <div className="timeline-axis-row">
-                            {timelineModel.ticks.map((tick) => (
-                              <div
-                                key={`data-tick-${tick.offsetMinutes}`}
-                                className={`timeline-axis-marker ${tick.offsetMinutes % 120 === 0 ? 'timeline-axis-marker--major' : ''}`}
-                                style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                              >
-                                <span>{tick.label}</span>
-                              </div>
-                            ))}
-                          </div>
-
-                          <div className="timeline-grid-backdrop timeline-grid-backdrop--data" aria-hidden="true"></div>
-
-                          {dataVolumeModel.series.map((series) => (
-                            <div key={`${series.id}-row`} className="data-volume-row">
-                              <svg
-                                className="data-volume-chart"
-                                viewBox="0 0 1000 100"
-                                preserveAspectRatio="none"
-                                aria-hidden="true"
-                              >
-                                <line
-                                  className="data-volume-capacity-line"
-                                  x1="0"
-                                  x2="1000"
-                                  y1={100 - ((dataVolumeModel.capacityGb / dataVolumeYMaxGb) * 100)}
-                                  y2={100 - ((dataVolumeModel.capacityGb / dataVolumeYMaxGb) * 100)}
-                                />
-                                {series.alternative && (
-                                  <polyline
-                                    className="data-volume-curve data-volume-curve--alternative"
-                                    points={buildDataVolumePolyline(series.alternative.points)}
-                                  />
-                                )}
-                                <polyline
-                                  className="data-volume-curve"
-                                  points={buildDataVolumePolyline(series.points)}
-                                />
-                              </svg>
-
-                              {series.steps.map((step) => (
-                                <button
-                                  key={`${series.id}-${step.id}`}
-                                  type="button"
-                                  className="data-volume-step"
-                                  style={{
-                                    left: `${((step.startTimestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
-                                    width: `${((step.endTimestamp - step.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
-                                  }}
-                                  aria-label={`${step.label}: ${Math.round(step.downlinkMbps)} megabit per second, ${formatGb(step.transferredGb)} downlinked.`}
-                                >
-                                  <span className="timeline-bar-tooltip" role="tooltip">
-                                    <span className="timeline-bar-tooltip-inner">
-                                      <strong>{step.label}</strong>
-                                      <span>{series.name} → {step.gsId}</span>
-                                      <span>Rate: {Math.round(step.downlinkMbps)} Mbit/s</span>
-                                      <span>Downlinked: {formatGb(step.transferredGb)}</span>
-                                      <span>Buffer: {formatGb(step.levelBefore)} → {formatGb(step.levelAfter)}</span>
-                                      {step.maxElevation && <span>Max elevation: {step.maxElevation}</span>}
-                                    </span>
-                                  </span>
-                                </button>
-                              ))}
-
-                            </div>
-                          ))}
-                          {timelinePlayheadOffsetMinutes !== null
-                            && timelinePlayheadOffsetMinutes >= 0
-                            && timelinePlayheadOffsetMinutes <= timelineModel.totalMinutes && (
-                            <div
-                              className="timeline-playhead-marker-line timeline-playhead-marker-line--full"
-                              data-timeline-playhead
-                              aria-hidden="true"
-                              style={{ left: `${(timelinePlayheadOffsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                            ></div>
-                          )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-  )
-
   const panelNodesById = {
     overview: overviewPanelNode,
     tradeOff: tradeOffPanelNode,
     mapView: mapViewPanelNode,
     timeline: timelinePanelNode,
-    dataVolume: dataVolumePanelNode,
   }
 
   const pageContent = (
@@ -6313,6 +6380,34 @@ export default function App() {
                   </button>
                   {expandedSections.linkFilters && renderLinkFiltersContent()}
                 </div>
+
+                <div className="sidebar-block">
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    onClick={() => toggleSection('bufferConfig')}
+                  >
+                    <span>Buffer Configuration</span>
+                    <span className="section-toggle-icon" aria-hidden="true">
+                      {renderSectionChevron(expandedSections.bufferConfig)}
+                    </span>
+                  </button>
+                  {expandedSections.bufferConfig && renderBufferConfigContent()}
+                </div>
+
+                <div className="sidebar-block">
+                  <button
+                    type="button"
+                    className="section-toggle"
+                    onClick={() => toggleSection('tradeOffConfig')}
+                  >
+                    <span>Trade-Off Configuration</span>
+                    <span className="section-toggle-icon" aria-hidden="true">
+                      {renderSectionChevron(expandedSections.tradeOffConfig)}
+                    </span>
+                  </button>
+                  {expandedSections.tradeOffConfig && renderTradeOffConfigContent()}
+                </div>
               </div>
 
               <div className="sidebar-action-wrapper">
@@ -6401,8 +6496,6 @@ export default function App() {
               gridTemplateRows: [
                 expandedSections[panelSlotAssignment.bottomTop] ? `${bottomTopHeightPx}px` : 'auto',
                 '0.9rem',
-                expandedSections[panelSlotAssignment.bottomMiddle] ? `${bottomMiddleHeightPx}px` : 'auto',
-                '0.9rem',
                 'auto',
               ].join(' '),
             }}
@@ -6423,21 +6516,6 @@ export default function App() {
           </div>
 
           {panelNodesById[panelSlotAssignment.bottomMiddle]}
-
-          <div
-            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.bottomMiddle] && !expandedSections[panelSlotAssignment.bottomBottom] ? 'panel-resizer--collapsed' : ''}`}
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label={`Resize the ${PANEL_LABELS[panelSlotAssignment.bottomMiddle]} panel`}
-            tabIndex={0}
-            onPointerDown={handleBottomRowResizeStart}
-            onKeyDown={handleBottomRowResizeKeyDown}
-          >
-            <span className="panel-resizer-line panel-resizer-line--horizontal" aria-hidden="true"></span>
-            <span className="panel-resizer-grip panel-resizer-grip--horizontal" aria-hidden="true"></span>
-          </div>
-
-          {panelNodesById[panelSlotAssignment.bottomBottom]}
           </div>
         </main>
       </div>
@@ -6463,12 +6541,20 @@ export default function App() {
         </div>
       )}
 
-      {timelineTooltip.visible && timelineTooltip.item && (
+      {timelineTooltip.visible && timelineTooltip.item && createPortal((
         <div
           className={`timeline-hover-tooltip ${timelineTooltip.pinned ? 'timeline-hover-tooltip--pinned' : ''}`}
+          role={timelineTooltip.pinned ? 'dialog' : 'tooltip'}
+          aria-label={timelineTooltip.pinned
+            ? `${timelineTooltip.item.kind === 'link' ? `Schedule controls for ${timelineTooltip.item.linkId}` : timelineTooltip.item.label}`
+            : undefined}
           style={{
-            left: `${Math.max(16, Math.min(timelineTooltip.x + 18, window.innerWidth - 360))}px`,
-            top: `${Math.max(16, Math.min(timelineTooltip.y + 22, window.innerHeight - 220))}px`,
+            left: `${timelineTooltip.pinned
+              ? Math.max(16, Math.min(timelineTooltip.x, window.innerWidth - 392))
+              : Math.max(16, Math.min(timelineTooltip.x + 18, window.innerWidth - 392))}px`,
+            top: `${timelineTooltip.pinned
+              ? Math.max(16, Math.min(timelineTooltip.y, window.innerHeight - 380))
+              : Math.max(16, Math.min(timelineTooltip.y + 22, window.innerHeight - 380))}px`,
           }}
           onMouseEnter={clearTimelineTooltipHideTimeout}
           onMouseLeave={() => {
@@ -6483,14 +6569,43 @@ export default function App() {
               type="button"
               className="timeline-hover-tooltip-dismiss"
               onClick={() => hideTimelineTooltip(true)}
-              aria-label="Close pinned timeline details"
+              aria-label="Close timeline popup"
             >
               ×
             </button>
           )}
           {renderTimelineTooltipContent(timelineTooltip.item, timelineTooltip.pinned)}
         </div>
-      )}
+      ), document.body)}
+
+      {timelineHorizontalControl.visible && createPortal((
+        <label
+          className="timeline-horizontal-scroll-control timeline-horizontal-scroll-control--floating"
+          style={{
+            left: `${timelineHorizontalControl.left}px`,
+            width: `${timelineHorizontalControl.width}px`,
+          }}
+        >
+          <span>Horizontal position</span>
+          <input
+            ref={timelineHorizontalRangeRef}
+            type="range"
+            min="0"
+            max={timelineIsFit ? 0 : Math.max(0, timelineWidthPx - timelineViewportWidthPx)}
+            step="1"
+            defaultValue="0"
+            disabled={timelineIsFit}
+            aria-label="Horizontal timeline position"
+            onInput={(event) => {
+              const scrollLeft = Number(event.currentTarget.value)
+              if (timelineScrollRef.current && Number.isFinite(scrollLeft)) {
+                setTimelineLive(false)
+                timelineScrollRef.current.scrollLeft = scrollLeft
+              }
+            }}
+          />
+        </label>
+      ), document.body)}
 
       {confirmingSchedule && (
         <div className="workspace-lock-overlay" role="status" aria-live="polite">

@@ -6,6 +6,7 @@ from unittest.mock import patch
 from core.models.scheduling import (
     LinkBlock,
     OverrideState,
+    SatelliteBufferConfig,
 )
 from core.models.propagation import (
     PropagationResult,
@@ -45,13 +46,18 @@ def test_session_manager_lifecycle():
     l1 = LinkBlock(link_id="L1", overpass_id="op1", satellite_name="Sat-1", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
     l2 = LinkBlock(link_id="L2", overpass_id="op2", satellite_name="Sat-2", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
 
-    LinkRepository.save_links(filter_id, [l1, l2])
+    LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
 
     # 2. Create Session
     session = SchedulingSessionManager.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
-        initial_buffer_levels_mb={"Sat-1": 100.0, "Sat-2": 500.0},
+        scenario_start=t_start,
+        scenario_end=t_end,
+        satellite_configs={
+            "Sat-1": SatelliteBufferConfig(satellite_name="Sat-1", capacity_mb=2000.0, initial_level_mb=100.0, payload_generation_rate_mbps=15.0, downlink_rate_mbps=25.0),
+            "Sat-2": SatelliteBufferConfig(satellite_name="Sat-2", capacity_mb=2000.0, initial_level_mb=500.0, payload_generation_rate_mbps=15.0, downlink_rate_mbps=25.0),
+        },
         scoring_strategy="buffer_overflow_avoidance",
         scoring_parameters={"alpha": 2.0},
         session_id="session_01",
@@ -80,12 +86,16 @@ def test_schedule_router_endpoints():
     t_end = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
 
     l1 = LinkBlock(link_id="link_01", overpass_id="op1", satellite_name="Sat-A", groundstation_name="GS-A", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=45.0)
-    LinkRepository.save_links(filter_id, [l1])
+    LinkRepository.save_links(filter_id, [l1], start_time=t_start, end_time=t_end)
 
     session = SchedulingSessionManager.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1],
-        initial_buffer_levels_mb={"Sat-A": 200.0},
+        scenario_start=t_start,
+        scenario_end=t_end,
+        satellite_configs={
+            "Sat-A": SatelliteBufferConfig(satellite_name="Sat-A", capacity_mb=2000.0, initial_level_mb=200.0, payload_generation_rate_mbps=15.0, downlink_rate_mbps=25.0),
+        },
         session_id="sess_router_test",
     )
 
@@ -167,7 +177,7 @@ def test_session_manager_custom_buffer_configs():
     l1 = LinkBlock(link_id="L1", overpass_id="op1", satellite_name="Sat-Alpha", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
     l2 = LinkBlock(link_id="L2", overpass_id="op2", satellite_name="Sat-Beta", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
 
-    LinkRepository.save_links(filter_id, [l1, l2])
+    LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
 
     # 1. Custom configs via explicit SatelliteBufferConfig
     custom_cfg = {
@@ -177,17 +187,22 @@ def test_session_manager_custom_buffer_configs():
             initial_level_mb=1200.0,
             payload_generation_rate_mbps=30.0,
             downlink_rate_mbps=60.0,
-        )
+        ),
+        "Sat-Beta": SatelliteBufferConfig(
+            satellite_name="Sat-Beta",
+            capacity_mb=3500.0,
+            initial_level_mb=400.0,
+            payload_generation_rate_mbps=10.0,
+            downlink_rate_mbps=40.0,
+        ),
     }
 
     session = SchedulingSessionManager.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
+        scenario_start=t_start,
+        scenario_end=t_end,
         satellite_configs=custom_cfg,
-        buffer_capacities_mb={"Sat-Beta": 3500.0},
-        initial_buffer_levels_mb={"Sat-Beta": 400.0},
-        payload_generation_rates_mbps={"Sat-Beta": 10.0},
-        downlink_rates_mbps={"Sat-Beta": 40.0},
         default_capacity_mb=2000.0,
     )
 
@@ -213,7 +228,7 @@ def test_trade_off_request_with_buffer_configs_dto():
     t_end = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
 
     l1 = LinkBlock(link_id="L_DTO_1", overpass_id="op1", satellite_name="Sat-X", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
-    LinkRepository.save_links(filter_id, [l1])
+    LinkRepository.save_links(filter_id, [l1], start_time=t_start, end_time=t_end)
 
     req = TradeOffRequest(
         filter_run_id=filter_id,
@@ -238,7 +253,6 @@ def test_trade_off_request_with_buffer_configs_dto():
     run_process_trade_offs_task(
         task_id=task_id,
         filter_run_id=req.filter_run_id,
-        initial_buffer_levels_mb=req.initial_buffer_levels_mb,
         satellite_buffer_configs=req.satellite_buffer_configs,
         default_buffer_config=req.default_buffer_config,
         scoring_config=req.scoring_config,
@@ -252,6 +266,29 @@ def test_trade_off_request_with_buffer_configs_dto():
     assert plan_payload.satellite_configs["Sat-X"].initial_level_mb == 800.0
     assert plan_payload.satellite_configs["Sat-X"].payload_generation_rate_mbps == 20.0
     assert plan_payload.satellite_configs["Sat-X"].downlink_rate_mbps == 50.0
+
+
+def test_trade_off_processing_fails_hard_without_metadata():
+    from app.services.task_orchestrator import run_process_trade_offs_task
+    from app.services import state_manager
+
+    filter_id = "test_no_meta"
+    t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+    t_end = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
+
+    l1 = LinkBlock(link_id="L_NO_META", overpass_id="op1", satellite_name="Sat-X", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+    # Save links WITHOUT metadata
+    LinkRepository.save_links(filter_id, [l1])
+
+    task_id = state_manager.create_task_entry()
+    run_process_trade_offs_task(
+        task_id=task_id,
+        filter_run_id=filter_id,
+    )
+
+    task_state = state_manager.get_task(task_id)
+    assert task_state["status"] == "failed"
+    assert "Scenario time window" in task_state["message"]
 
 
 def test_filter_pipeline_custom_downlink_rate():
@@ -268,7 +305,8 @@ def test_filter_pipeline_custom_downlink_rate():
         global_tracks=[],
         overpass_blocks=[
             OverpassBlock(
-                overpass_id="op_sat1",
+                overpass_id="OP_0001",
+                overpass_name="pass__Sat-1__GS-1__001",
                 satellite_name="Sat-1",
                 groundstation_name="GS-1",
                 start_time=datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc),
@@ -278,7 +316,8 @@ def test_filter_pipeline_custom_downlink_rate():
                 high_res_trajectory=[],
             ),
             OverpassBlock(
-                overpass_id="op_sat2",
+                overpass_id="OP_0002",
+                overpass_name="pass__Sat-2__GS-1__001",
                 satellite_name="Sat-2",
                 groundstation_name="GS-1",
                 start_time=datetime(2026, 8, 18, 11, 0, 0, tzinfo=timezone.utc),
@@ -301,4 +340,62 @@ def test_filter_pipeline_custom_downlink_rate():
 
     assert link1.estimated_data_capacity_mb == 600.0 * 10.0   # 6000 MB
     assert link2.estimated_data_capacity_mb == 600.0 * 50.0   # 30000 MB
+
+
+def test_apply_override_auto_unpin_conflicts():
+    """
+    Tests that pinning a link automatically unpins any conflicting links that were
+    previously pinned, reverting them to AUTO.
+    """
+    filter_id = "test_filt_auto_unpin"
+    t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+    t_end = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
+
+    # L1 and L2 compete for the same groundstation GS-1 at the exact same time
+    l1 = LinkBlock(link_id="L1", overpass_id="op1", satellite_name="Sat-1", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+    l2 = LinkBlock(link_id="L2", overpass_id="op2", satellite_name="Sat-2", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+
+    LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
+
+    session = SchedulingSessionManager.create_session(
+        filter_run_id=filter_id,
+        candidate_links=[l1, l2],
+        scenario_start=t_start,
+        scenario_end=t_end,
+        satellite_configs={
+            "Sat-1": SatelliteBufferConfig(satellite_name="Sat-1", capacity_mb=2000.0, initial_level_mb=500.0),
+            "Sat-2": SatelliteBufferConfig(satellite_name="Sat-2", capacity_mb=2000.0, initial_level_mb=100.0),
+        },
+        session_id="sess_auto_unpin_test",
+    )
+
+    # 1. Initially Sat-1 has higher buffer -> L1 is scheduled in AUTO
+    assert session.current_plan["L1"].is_scheduled is True
+    assert session.current_plan["L2"].is_scheduled is False
+
+    # 2. Pin L2 (even though Sat-2 has lower buffer)
+    session_after_pin_l2 = SchedulingSessionManager.apply_override(
+        session_id="sess_auto_unpin_test",
+        link_id="L2",
+        override_state=OverrideState.PINNED,
+    )
+    assert session_after_pin_l2.user_overrides == {"L2": OverrideState.PINNED}
+    assert session_after_pin_l2.current_plan["L2"].is_scheduled is True
+    assert session_after_pin_l2.current_plan["L1"].is_scheduled is False
+
+    # 3. Now Pin conflicting L1 -> L2 should be automatically unpinned (reverted to AUTO)
+    session_after_pin_l1 = SchedulingSessionManager.apply_override(
+        session_id="sess_auto_unpin_test",
+        link_id="L1",
+        override_state=OverrideState.PINNED,
+    )
+    assert "L2" not in session_after_pin_l1.user_overrides
+    assert session_after_pin_l1.user_overrides == {"L1": OverrideState.PINNED}
+    assert session_after_pin_l1.current_plan["L1"].is_scheduled is True
+    assert session_after_pin_l1.current_plan["L1"].override_state == OverrideState.PINNED
+    assert session_after_pin_l1.current_plan["L2"].is_scheduled is False
+    assert session_after_pin_l1.current_plan["L2"].override_state == OverrideState.AUTO
+    assert "pinned" in session_after_pin_l1.current_plan["L2"].rejection_reason.lower()
+
+
 

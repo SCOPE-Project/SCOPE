@@ -102,9 +102,9 @@ def derive_and_filter_links(
     sat_downlink_rates = satellite_downlink_rates_mbps or {}
     derived_links: List[LinkBlock] = []
 
-    for idx, overpass in enumerate(propagation_result.overpass_blocks, start=1):
-        link_id = f"link_{overpass.satellite_name}_{overpass.groundstation_name}_{idx:04d}_{filter_run_id[:8]}"
+    link_counter = 0
 
+    for overpass in propagation_result.overpass_blocks:
         # 1. Apply Trimming & Peak Elevation Filters
         trimmed_start, trimmed_end, trimmed_trajectory, is_elevation_valid = trim_overpass_by_elevation(
             overpass=overpass,
@@ -119,22 +119,30 @@ def derive_and_filter_links(
                 else f"No trajectory points meet min AOS/LOS elevation {min_aos_los_elevation_deg}°"
             )
             link = LinkBlock(
-                link_id=link_id,
+                link_id="",
+                link_name="",
+                overpass_id=overpass.overpass_id,
+                overpass_name=overpass.overpass_name,
                 satellite_name=overpass.satellite_name,
                 groundstation_name=overpass.groundstation_name,
                 start_time=trimmed_start,
                 end_time=trimmed_end,
                 duration_seconds=0.0,
                 max_elevation_deg=overpass.max_elevation_deg,
-                overpass_id=overpass.overpass_id,
                 estimated_data_capacity_mb=0.0,
                 high_res_trajectory=trimmed_trajectory,
                 is_eligible=False,
+                is_available=False,
                 eligibility_status=LinkEligibilityStatus.EXCLUDED_BY_PEAK_ELEVATION,
                 ineligibility_reason=reason,
             )
             derived_links.append(link)
             continue
+
+        # Eligible potential link -> assign next contiguous link_id
+        link_counter += 1
+        link_id = f"L_{link_counter:04d}"
+        link_name = f"link__{overpass.satellite_name}__{overpass.groundstation_name}__filter_{filter_run_id[:8]}__{link_counter:04d}"
 
         dl_rate = sat_downlink_rates.get(overpass.satellite_name, default_downlink_rate_mbps)
         duration_sec = max(0.0, (trimmed_end - trimmed_start).total_seconds())
@@ -167,16 +175,19 @@ def derive_and_filter_links(
             act_name = colliding_activity.name or f"Activity-{colliding_activity.uuid}"
             link = LinkBlock(
                 link_id=link_id,
+                link_name=link_name,
+                overpass_id=overpass.overpass_id,
+                overpass_name=overpass.overpass_name,
                 satellite_name=overpass.satellite_name,
                 groundstation_name=overpass.groundstation_name,
                 start_time=trimmed_start,
                 end_time=trimmed_end,
                 duration_seconds=duration_sec,
                 max_elevation_deg=overpass.max_elevation_deg,
-                overpass_id=overpass.overpass_id,
                 estimated_data_capacity_mb=estimated_capacity_mb,
                 high_res_trajectory=trimmed_trajectory,
-                is_eligible=False,
+                is_eligible=True,
+                is_available=False,
                 eligibility_status=LinkEligibilityStatus.BLOCKED_BY_BASELINE_ACTIVITY,
                 ineligibility_reason=f"Collides with immutable SatOS activity '{act_name}' on {colliding_asset}",
                 conflicting_activity_uuid=str(colliding_activity.uuid),
@@ -184,16 +195,19 @@ def derive_and_filter_links(
         else:
             link = LinkBlock(
                 link_id=link_id,
+                link_name=link_name,
+                overpass_id=overpass.overpass_id,
+                overpass_name=overpass.overpass_name,
                 satellite_name=overpass.satellite_name,
                 groundstation_name=overpass.groundstation_name,
                 start_time=trimmed_start,
                 end_time=trimmed_end,
                 duration_seconds=duration_sec,
                 max_elevation_deg=overpass.max_elevation_deg,
-                overpass_id=overpass.overpass_id,
                 estimated_data_capacity_mb=estimated_capacity_mb,
                 high_res_trajectory=trimmed_trajectory,
                 is_eligible=True,
+                is_available=True,
                 eligibility_status=LinkEligibilityStatus.ELIGIBLE,
                 ineligibility_reason=None,
                 conflicting_activity_uuid=None,

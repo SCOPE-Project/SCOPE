@@ -29,6 +29,9 @@ const SVG_NAMESPACE = 'http://www.w3.org/2000/svg'
 const WHEEL_ZOOM_STEP = 0.55
 const BUTTON_ZOOM_STEP = 1
 const EASE_DURATION_MS = 450
+const SATELLITE_VISIBILITY_REDRAW_MS = 100
+const GROUND_TRACK_REDRAW_MS = 250
+const SATELLITE_VISIBILITY_POINT_COUNT = 64
 
 // Equirectangular (Plate Carree) projection: longitude and latitude share the
 // same constant pixels-per-degree scale, so the whole world from pole to
@@ -206,21 +209,24 @@ const renderMapOverlay = (
   showSatelliteVisibility,
   showGroundTracks,
   groundTrackWindowHours,
-  {
-    renderGrid = true,
-    renderStatic = true,
-    renderDynamic = true,
-  } = {},
+  renderOptions = {},
 ) => {
   if (!overlayGroup || width <= 0 || height <= 0) {
     return
   }
 
+  const {
+    renderGrid = true,
+    renderStatic = true,
+    renderSatelliteFootprints = true,
+    renderGroundTrackPaths = true,
+  } = renderOptions
   const projectPoint = (coordinate) => project(coordinate[0], coordinate[1], view, width, height)
   const toWorldPoint = (coordinate) => ({ x: coordinate[0], y: -coordinate[1] })
   const gridFragment = document.createDocumentFragment()
   const staticFragment = document.createDocumentFragment()
-  const dynamicFragment = document.createDocumentFragment()
+  const satelliteVisibilityFragment = document.createDocumentFragment()
+  const groundTrackFragment = document.createDocumentFragment()
   const {
     minimumLongitude,
     maximumLongitude,
@@ -269,11 +275,13 @@ const renderMapOverlay = (
   const selectedSatelliteAssets = allSatelliteAssets.filter((asset) => (
     Number.isFinite(asset.altitude)
   ))
-  const referenceSatellite = (
-    selectedSatelliteAssets.find((asset) => asset.id === activeAssetId)
-    ?? selectedSatelliteAssets[0]
-    ?? null
-  )
+  const referenceSatellite = showGroundStationVisibility
+    ? (
+      selectedSatelliteAssets.find((asset) => asset.id === activeAssetId)
+      ?? selectedSatelliteAssets[0]
+      ?? null
+    )
+    : null
   // Stationary reference altitude for the visibility footprint: the orbit's
   // mean altitude across its whole propagated track, not the live altitude
   // at the current playhead time. Using the live value made the footprint
@@ -281,7 +289,7 @@ const renderMapOverlay = (
   // pulse); the track's mean altitude is a stable stand-in for "the orbit
   // height" instead. Falls back to the live altitude if no track is
   // available yet.
-  const referenceOrbitAltitudeMeters = referenceSatellite
+  const referenceOrbitAltitudeMeters = showGroundStationVisibility && referenceSatellite
     ? (
       computeMeanTrackAltitudeMeters(satelliteTracks[referenceSatellite.name])
       ?? referenceSatellite.altitude
@@ -336,7 +344,7 @@ const renderMapOverlay = (
   // than the live interpolated altitude, for the same reason ground-station
   // footprints do: it keeps the circle a stable size instead of pulsing on
   // every timeline tick for eccentric orbits.
-  if (renderDynamic && showSatelliteVisibility) {
+  if (renderSatelliteFootprints && showSatelliteVisibility) {
     selectedSatelliteAssets.forEach((satellite) => {
       const satelliteAltitudeMeters = (
         computeMeanTrackAltitudeMeters(satelliteTracks[satellite.name])
@@ -356,6 +364,7 @@ const renderMapOverlay = (
         satellite.latitude,
         satellite.longitude,
         footprintAngle,
+        SATELLITE_VISIBILITY_POINT_COUNT,
       )
 
       const isActiveSatellite = satellite.id === activeAssetId
@@ -367,7 +376,7 @@ const renderMapOverlay = (
         ))
         .forEach((segment) => {
           appendPath(
-            dynamicFragment,
+            satelliteVisibilityFragment,
             isActiveSatellite
               ? 'mission-map-satellite-footprint mission-map-satellite-footprint--active'
               : 'mission-map-satellite-footprint',
@@ -377,7 +386,7 @@ const renderMapOverlay = (
     })
   }
 
-  if (renderDynamic && showGroundTracks) {
+  if (renderGroundTrackPaths && showGroundTracks) {
     allSatelliteAssets.forEach((satellite) => {
       // Center the windowed track on this satellite's own live (interpolated)
       // position timestamp, so each satellite's "current pass" window tracks
@@ -397,7 +406,7 @@ const renderMapOverlay = (
 
       segments.forEach((segment) => {
         appendPath(
-          dynamicFragment,
+          groundTrackFragment,
           isActiveSatellite
             ? 'mission-map-track-path mission-map-orbit-path mission-map-orbit-path--active'
             : 'mission-map-track-path mission-map-orbit-path',
@@ -418,18 +427,23 @@ const renderMapOverlay = (
 
   const gridLayer = ensureLayer('mission-map-overlay-grid')
   const staticLayer = ensureLayer('mission-map-overlay-static')
-  const dynamicLayer = ensureLayer('mission-map-overlay-dynamic')
+  const satelliteVisibilityLayer = ensureLayer('mission-map-overlay-dynamic')
+  const groundTrackLayer = ensureLayer('mission-map-overlay-ground-tracks')
   const overlayTransform = worldGroupTransform(view, width, height)
   staticLayer.setAttribute('transform', overlayTransform)
-  dynamicLayer.setAttribute('transform', overlayTransform)
+  satelliteVisibilityLayer.setAttribute('transform', overlayTransform)
+  groundTrackLayer.setAttribute('transform', overlayTransform)
   if (renderGrid) {
     gridLayer.replaceChildren(gridFragment)
   }
   if (renderStatic) {
     staticLayer.replaceChildren(staticFragment)
   }
-  if (renderDynamic) {
-    dynamicLayer.replaceChildren(dynamicFragment)
+  if (renderSatelliteFootprints) {
+    satelliteVisibilityLayer.replaceChildren(satelliteVisibilityFragment)
+  }
+  if (renderGroundTrackPaths) {
+    groundTrackLayer.replaceChildren(groundTrackFragment)
   }
 }
 
@@ -627,6 +641,10 @@ const syncAssetMarkers = (
       'mission-map-marker--active',
       activeAssetId === asset.id,
     )
+    markerRecord.element.setAttribute(
+      'aria-pressed',
+      activeAssetId === asset.id ? 'true' : 'false',
+    )
     if (markerRecord.popup.isOpen) {
       syncAssetPopupContent(markerRecord.popupContent, asset, timeMode)
     }
@@ -665,7 +683,8 @@ const MissionMap = memo(forwardRef(function MissionMap({
   const mapReadyRef = useRef(false)
   const overlayInteractionSnapshotRef = useRef(null)
   const renderFrameRef = useRef(null)
-  const lastDynamicOverlayRenderRef = useRef(0)
+  const lastSatelliteVisibilityRenderRef = useRef(0)
+  const lastGroundTrackRenderRef = useRef(0)
   const markersRef = useRef(new Map())
   const assetsRef = useRef(assets)
   const satelliteTracksRef = useRef(satelliteTracks)
@@ -705,13 +724,24 @@ const MissionMap = memo(forwardRef(function MissionMap({
       })
       assetsRef.current = nextAssets
       const now = (typeof performance !== 'undefined' ? performance : Date).now()
-      const redrawDynamicOverlay = now - lastDynamicOverlayRenderRef.current >= 80
-      if (redrawDynamicOverlay) {
-        lastDynamicOverlayRenderRef.current = now
+      const redrawSatelliteVisibility = (
+        showSatelliteVisibilityRef.current
+        && now - lastSatelliteVisibilityRenderRef.current >= SATELLITE_VISIBILITY_REDRAW_MS
+      )
+      const redrawGroundTracks = (
+        showGroundTracksRef.current
+        && now - lastGroundTrackRenderRef.current >= GROUND_TRACK_REDRAW_MS
+      )
+      if (redrawSatelliteVisibility) {
+        lastSatelliteVisibilityRenderRef.current = now
+      }
+      if (redrawGroundTracks) {
+        lastGroundTrackRenderRef.current = now
       }
       renderFrameRef.current?.({
-        dynamicOnly: redrawDynamicOverlay,
-        markersOnly: !redrawDynamicOverlay,
+        renderSatelliteFootprints: redrawSatelliteVisibility,
+        renderGroundTrackPaths: redrawGroundTracks,
+        markersOnly: !redrawSatelliteVisibility && !redrawGroundTracks,
       })
     },
   }), [])
@@ -797,7 +827,12 @@ const MissionMap = memo(forwardRef(function MissionMap({
       height: container.clientHeight,
     })
 
-    const renderFrame = ({ dynamicOnly = false, markersOnly = false, viewOnly = false } = {}) => {
+    const renderFrame = ({
+      markersOnly = false,
+      viewOnly = false,
+      renderSatelliteFootprints,
+      renderGroundTrackPaths,
+    } = {}) => {
       const { width, height } = getSize()
       if (width <= 0 || height <= 0) {
         return
@@ -814,6 +849,9 @@ const MissionMap = memo(forwardRef(function MissionMap({
         ?.setAttribute('transform', overlayTransform)
       overlayGroupRef.current
         ?.querySelector(':scope > .mission-map-overlay-dynamic')
+        ?.setAttribute('transform', overlayTransform)
+      overlayGroupRef.current
+        ?.querySelector(':scope > .mission-map-overlay-ground-tracks')
         ?.setAttribute('transform', overlayTransform)
 
       const overlayData = overlayInteractionSnapshotRef.current ?? {
@@ -835,9 +873,19 @@ const MissionMap = memo(forwardRef(function MissionMap({
           showGroundTracksRef.current,
           groundTrackWindowHoursRef.current,
           viewOnly
-            ? { renderGrid: true, renderStatic: false, renderDynamic: false }
-            : dynamicOnly
-              ? { renderGrid: false, renderStatic: false, renderDynamic: true }
+            ? {
+              renderGrid: true,
+              renderStatic: false,
+              renderSatelliteFootprints: false,
+              renderGroundTrackPaths: false,
+            }
+            : renderSatelliteFootprints !== undefined || renderGroundTrackPaths !== undefined
+              ? {
+                renderGrid: false,
+                renderStatic: false,
+                renderSatelliteFootprints: Boolean(renderSatelliteFootprints),
+                renderGroundTrackPaths: Boolean(renderGroundTrackPaths),
+              }
               : undefined,
         )
       }
@@ -967,6 +1015,15 @@ const MissionMap = memo(forwardRef(function MissionMap({
 
     const handlePointerDown = (event) => {
       if (event.pointerType === 'mouse' && event.button !== 0) {
+        return
+      }
+
+      // Marker buttons own their pointer interaction. Capturing their
+      // pointer here for map panning can retarget pointerup/click to the map
+      // container, so the marker's native button click never fires. Letting
+      // the button complete its click also keeps mouse, touch, and keyboard
+      // selection behavior consistent.
+      if (event.target?.closest?.('.mission-map-marker')) {
         return
       }
 

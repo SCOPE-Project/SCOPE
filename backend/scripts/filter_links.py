@@ -124,27 +124,42 @@ def main() -> None:
         satellite_downlink_rates_mbps=sat_dl_rates,
     )
 
-    # 4. Save to LinkRepository
-    LinkRepository.save_links(filter_run_id, links)
+    # 4. Save to LinkRepository with propagation metadata
+    LinkRepository.save_links(
+        filter_run_id=filter_run_id,
+        links=links,
+        orbit_engine_run_id=args.propagation_run_id,
+        start_time=prop_result.metadata.start_time,
+        end_time=prop_result.metadata.end_time,
+    )
 
     eligible_count = sum(1 for l in links if l.is_eligible)
+    available_count = sum(1 for l in links if l.is_eligible and l.is_available)
+    blocked_count = sum(1 for l in links if l.is_eligible and not l.is_available)
     ineligible_count = len(links) - eligible_count
 
     print(f"\n=======================================================")
     print(f"  Filtering Results (Filter Run ID: {filter_run_id})")
     print("=======================================================")
-    print(f"Total Candidate Links: {len(links)}")
-    print(f"  - Eligible:   {eligible_count}")
-    print(f"  - Ineligible: {ineligible_count}")
+    print(f"Total Overpasses Processed: {len(links)}")
+    print(f"  - Eligible Potential Links: {eligible_count} ({available_count} Available, {blocked_count} SatOS Blocked)")
+    print(f"  - Elevation Ineligible:     {ineligible_count}")
     print("-------------------------------------------------------")
 
     for idx, l in enumerate(links, 1):
-        status_str = "[ELIGIBLE]" if l.is_eligible else f"[INELIGIBLE: {l.eligibility_status.value}]"
+        if l.is_eligible and l.is_available:
+            status_str = "[ELIGIBLE - AVAILABLE]"
+        elif l.is_eligible and not l.is_available:
+            status_str = "[ELIGIBLE - BLOCKED BY SATOS]"
+        else:
+            status_str = f"[INELIGIBLE: {l.eligibility_status.value}]"
+
+        lid_str = f"[{l.link_id}] " if l.link_id else "[--] "
         duration_min = l.duration_seconds / 60.0
         st_str = l.start_time.isoformat() if hasattr(l.start_time, "isoformat") else str(l.start_time)
         et_str = l.end_time.isoformat() if hasattr(l.end_time, "isoformat") else str(l.end_time)
-        print(f"{idx:02d}. {l.satellite_name} <-> {l.groundstation_name} | {st_str} -> {et_str} ({duration_min:.1f} min, Peak {l.max_elevation_deg:.1f}°) {status_str}")
-        if not l.is_eligible and l.ineligibility_reason:
+        print(f"{idx:02d}. {lid_str}{l.satellite_name} <-> {l.groundstation_name} | {st_str} -> {et_str} ({duration_min:.1f} min, Peak {l.max_elevation_deg:.1f}°) {status_str}")
+        if l.ineligibility_reason:
             print(f"    Reason: {l.ineligibility_reason}")
 
     print(f"\n[SUCCESS] Link derivation and filtering completed. Saved to LinkRepository (Filter Run ID: {filter_run_id}).")

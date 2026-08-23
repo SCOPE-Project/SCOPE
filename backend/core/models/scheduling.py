@@ -24,16 +24,19 @@ class OverrideState(str, Enum):
 @dataclass
 class LinkBlock:
     link_id: str
-    satellite_name: str
-    groundstation_name: str
-    start_time: datetime
-    end_time: datetime
-    duration_seconds: float
-    max_elevation_deg: float
+    link_name: str = ""
     overpass_id: str = ""
+    overpass_name: str = ""
+    satellite_name: str = ""
+    groundstation_name: str = ""
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    duration_seconds: float = 0.0
+    max_elevation_deg: float = 0.0
     estimated_data_capacity_mb: float = 0.0
     high_res_trajectory: List[OverpassProfilePoint] = field(default_factory=list)
     is_eligible: bool = True
+    is_available: bool = True
     eligibility_status: LinkEligibilityStatus = LinkEligibilityStatus.ELIGIBLE
     ineligibility_reason: Optional[str] = None
     conflicting_activity_uuid: Optional[str] = None
@@ -45,6 +48,7 @@ class ScheduledLinkStatus:
     is_scheduled: bool
     override_state: OverrideState
     tradeoff_id: Optional[str] = None
+    score: float = 0.0
     useful_data_offloaded_mb: float = 0.0
     rejection_reason: Optional[str] = None
 
@@ -128,7 +132,10 @@ class SchedulingSession:
     satellite_configs: Dict[str, SatelliteBufferConfig]
     conflict_structure: ConflictStructure
     active_scoring_strategy: str
+    scenario_start: datetime
+    scenario_end: datetime
     current_plan: Dict[str, ScheduledLinkStatus] = field(default_factory=dict)
     satellite_buffer_profiles: Dict[str, SatelliteBufferProfile] = field(default_factory=dict)
     asset_schedules: Dict[str, List[Activity]] = field(default_factory=dict)
     scoring_parameters: Dict[str, Any] = field(default_factory=dict)
+
