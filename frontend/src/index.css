@@ -377,12 +377,41 @@ body {
 
 .landing-config-footer {
   display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
-  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
   margin-top: 1.1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.landing-clear-scope-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.landing-clear-scope-option:hover {
+  color: var(--color-primary-dark, #0b4e8c);
+}
+
+.landing-clear-scope-option input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  cursor: pointer;
+  accent-color: var(--color-primary, #0066cc);
+}
+
+.landing-clear-scope-option input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .landing-progress-shell {
@@ -3789,6 +3818,276 @@ body {
 .confirmation-success-copy span {
   font-size: 0.8rem;
   color: #397045;
+}
+
+/* Staged Schedule Review & SatOS Commit Panel */
+.schedule-staging-review-panel {
+  margin-top: 1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  background: var(--bg-panel-strong);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  animation: fadeInReview 0.25s ease-out;
+}
+
+@keyframes fadeInReview {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.staging-review-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.staging-review-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+}
+
+.staging-review-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.staging-review-description {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.staging-metrics-banner {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.staging-metric-card {
+  padding: 0.8rem 0.95rem;
+  border-radius: 0.22rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.staging-metric-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.staging-metric-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+}
+
+.staging-metric-subtext {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.staging-asset-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.staging-section-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.staging-asset-cards-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.staging-asset-card {
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.02);
+}
+
+.staging-asset-header {
+  padding: 0.65rem 0.85rem;
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--line-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.staging-asset-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.staging-asset-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+}
+
+.staging-asset-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.staging-chip {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.15rem;
+  background: #e6edf4;
+  color: #2c4a6f;
+}
+
+.staging-chip strong {
+  color: var(--text-primary);
+}
+
+.staging-chip--warn {
+  background: #fde8e8;
+  color: #9b1c1c;
+}
+
+.staging-chip--warn strong {
+  color: #9b1c1c;
+}
+
+.staging-links-table-container {
+  overflow-x: auto;
+}
+
+.staging-links-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.staging-links-table th {
+  text-align: left;
+  padding: 0.5rem 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: #fafbfc;
+  border-bottom: 1px solid var(--line-soft);
+  white-space: nowrap;
+}
+
+.staging-links-table td {
+  padding: 0.5rem 0.85rem;
+  border-bottom: 1px solid #f0f3f6;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.staging-links-table tr:last-child td {
+  border-bottom: none;
+}
+
+.staging-table-subtext {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.staging-code-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.74rem;
+  background: #f1f5f9;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.15rem;
+  color: #1e293b;
+  border: 1px solid #e2e8f0;
+}
+
+.staging-initiator-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.15rem;
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.staging-commit-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.btn-modify-overrides {
+  padding: 0.55rem 0.95rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border-radius: var(--radius-btn);
+  background: #ffffff;
+  color: var(--text-secondary);
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-modify-overrides:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.btn-modify-overrides:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-commit-satos {
+  background: linear-gradient(135deg, #003975 0%, #0d4b8f 100%) !important;
+  color: #ffffff !important;
+  border-color: #002852 !important;
+  padding: 0.6rem 1.25rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em;
+  box-shadow: 0 2px 8px rgba(0, 57, 117, 0.2);
+}
+
+.btn-commit-satos:hover:not(:disabled) {
+  background: linear-gradient(135deg, #002852 0%, #093769 100%) !important;
+  box-shadow: 0 4px 12px rgba(0, 57, 117, 0.35);
+  transform: translateY(-1px);
 }
 
 .timeline-scroll {

@@ -12,8 +12,8 @@ The development framework maps directly to the following five operational planni
     The user clicks a button "Calculate Trade-Offs", starting a slow process where conflicts between the potential links are identified, scoring etc. is done. Continual progress reports shall be presented in text form in the trade-off section. When the math is done, the Overview UI table shall be updated with new trade-off information, and the Trade-Off UI section shall be populated with individual trade-off cards. The proposed system communication schedule based on highest scoring links in the trade-off is written into the Timeline UI section.
 - **Phase 4: User Interaction**
     The user might click on a different link within a trade-off card. This triggers a background recalculation of the global scheduling timeline. _Correction: Because updating cascade constraints across the full scheduling horizon requires executing iterative dependency rules, this interaction is classified as a slow background process rather than an instantaneous turnaround._
-- **Phase 5: Confirmation**
-    The user clicks a button "Confirm Communication Schedule". The UI is instantly locked, and a progress begins that takes the final schedule, generates all activity data objects, and makes the SatOS API calls to write the activities in the SatOS system schedule. After confirmation, a green "Success" UI element appears.
+- **Phase 5: Confirmation & SatOS Commit**
+    The user clicks "Confirm Communication Schedule" to stage the schedule. The UI presents an aggregated review of all scheduled links per satellite and ground station, along with comprehensive data volume and buffer metrics. The operator then clicks "Commit SCOPE Communication Activities to SatOS" to initiate the actual push: the UI locks with an animated progress card, activities are generated and sent to SatOS in batch, the SatOS baseline is refreshed, and a green "Success" element displays the committed activity count.
 
 ## 2. Chronological Event Sequence Walkthrough & Visualizations
 
@@ -103,35 +103,47 @@ Plaintext
 - **The Polling Loop:** React sets an interval to query `GET http://localhost:8000/tasks/schedule-recalculate/recalc_001` every few seconds to safely evaluate the progress of downstream policy checks.
 - **UI Update:** Once the background recalculation completes, the backend transmits the newly revised conflict state and schedule arrays back to React, updating the timeline graph and conflict visualizations across the system within the context of the user choice.
 
-### Phase 5: Confirmation
+### Phase 5: Confirmation & SatOS Commit
 
-The operator reviews the finalized planning timeline and approves the production template by clicking "Confirm Communication Schedule".
+The operator reviews the finalized planning timeline, stages the schedule, reviews the aggregated schedule and data volume summary, and approves the SatOS push.
 
 Plaintext
 
 ```
-[ Operator clicks "Confirm Communication Schedule" ]
+[ 1. Operator clicks "Confirm Communication Schedule" ]
              │
-             └──> Line 1 (Instant): POST /schedule/confirm ──> UI Locks ──> Formats & Executes SatOS Activity Pushes
+             └──> React Stages Schedule: Displays KPI Summary, Per-Asset Link Tables & Buffer Profiles
+                         │
+[ 2. Operator clicks "Commit SCOPE Communication Activities to SatOS" ]
+                         │
+                         └──> POST /schedule/session/{session_id}/commit ──> UI Locks ──> Pushes Activities in Batch to SatOS
+                                             │
+                                             └──> GET /tasks/initialize ──> Refreshes SatOS Baseline ──> Green Success Banner
 ```
 
-- **React Frontend Action:** Instantly freezes all application interactive fields, locks scheduling screens, and shows a transmission status indicator to protect data integrity.
-- **FastAPI Backend Request:** `POST http://localhost:8000/schedule/confirm`
-- **Internal Python Action:** The server processes the approved scheduling matrix, loops through individual selections to construct strict SatOS-compliant activity data objects, and utilizes the operator's local configuration file credentials to push injections over the secure VPN tunnel.
-- **UI Update:** Upon receiving a standard `200 OK` transaction confirmation code back from the server network loop, React safely releases the workspace and highlights a green "Success" notice component. The new schedule is now fully operational and natively visible within the remote `SatOS.plan` application window.
+- **Step 1 (Staging & Review):**
+    - **React Frontend Action:** Operator clicks "Confirm Communication Schedule".
+    - **UI Update:** Opens the staged review panel displaying aggregated KPIs (total offloaded data volume, contact time), per-satellite tables with buffer profiles (peak/final levels, generated/downlinked data), and per-ground-station contact schedules.
+- **Step 2 (Push to SatOS):**
+    - **React Frontend Action:** Operator clicks "Commit SCOPE Communication Activities to SatOS".
+    - **FastAPI Backend Request:** `POST http://localhost:8000/schedule/session/{session_id}/commit`
+    - **Internal Python Action:** The server processes the approved scheduling matrix, converts scheduled links into SatOS `Activity` and `ScheduleEvent` models, and pushes them in batch to SatOS.
+    - **UI Update:** React locks the workspace with a progress bar, calls `GET /tasks/initialize` to reload the updated SatOS ground truth, and displays a green "Success" banner confirming the committed links and created SatOS activities.
 
 ## 4. Master API Mapping Table
 
 The interface layout below defines the contract and processing behavior across all application components:
 
-| **Phase**   | **Frontend Action / Element**  | **FastAPI Endpoint**                        | **Execution Pattern** | **Downstream SatOS Interaction**                                |
-| ----------- | ------------------------------ | ------------------------------------------- | --------------------- | --------------------------------------------------------------- |
-| **Phase 1** | App Mount / Initial Form       | `GET /satos/available-assets`               | Synchronous REST      | Queries active fleet assets via `SatIOSession` SDK.             |
-| **Phase 2** | Click "Launch Scheduler"       | `GET /satos/current-schedule`               | Synchronous REST      | Pulls baseline tracking schedules from remote system.           |
-| **Phase 2** | Parallel Background Thread     | `POST /tasks/orbit-processing`              | Asynchronous Fork     | Triggers background loop for TLE propagation.                   |
-| **Phase 2** | `setInterval` Progress Polling | `GET /tasks/orbit-processing/{task_id}`     | Polling Loop          | Reads live status fields from Python memory.                    |
-| **Phase 3** | Click "Calculate Trade-Offs"   | `POST /tasks/tradeoff-processing`           | Asynchronous Fork     | Spawns background worker loop for conflict analysis.            |
-| **Phase 3** | `setInterval` Progress Polling | `GET /tasks/tradeoff-processing/{task_id}`  | Polling Loop          | Reads status strings from local dictionary.                     |
-| **Phase 4** | Click Conflict Card Option     | `POST /tasks/schedule-recalculate`          | Asynchronous Fork     | Initiates background cascade rule calculations across timeline. |
-| **Phase 4** | `setInterval` Progress Polling | `GET /tasks/schedule-recalculate/{task_id}` | Polling Loop          | Reads dynamic recalculation progress from memory state.         |
-| **Phase 5** | Click "Confirm Schedule"       | `POST /schedule/confirm`                    | Synchronous REST      | Formats array items and executes direct script pushes.          |
+| **Phase**   | **Frontend Action / Element**     | **FastAPI Endpoint**                             | **Execution Pattern** | **Downstream SatOS Interaction**                                |
+| ----------- | --------------------------------- | ------------------------------------------------ | --------------------- | --------------------------------------------------------------- |
+| **Phase 1** | App Mount / Initial Form          | `GET /satos/available-assets`                    | Synchronous REST      | Queries active fleet assets via `SatIOSession` SDK.             |
+| **Phase 2** | Click "Launch Scheduler"          | `GET /satos/current-schedule`                    | Synchronous REST      | Pulls baseline tracking schedules from remote system.           |
+| **Phase 2** | Parallel Background Thread        | `POST /tasks/orbit-processing`                   | Asynchronous Fork     | Triggers background loop for TLE propagation.                   |
+| **Phase 2** | `setInterval` Progress Polling    | `GET /tasks/orbit-processing/{task_id}`          | Polling Loop          | Reads live status fields from Python memory.                    |
+| **Phase 3** | Click "Calculate Trade-Offs"      | `POST /tasks/tradeoff-processing`                | Asynchronous Fork     | Spawns background worker loop for conflict analysis.            |
+| **Phase 3** | `setInterval` Progress Polling    | `GET /tasks/tradeoff-processing/{task_id}`       | Polling Loop          | Reads status strings from local dictionary.                     |
+| **Phase 4** | Click Conflict Card Option        | `POST /tasks/schedule-recalculate`               | Asynchronous Fork     | Initiates background cascade rule calculations across timeline. |
+| **Phase 4** | `setInterval` Progress Polling    | `GET /tasks/schedule-recalculate/{task_id}`      | Polling Loop          | Reads dynamic recalculation progress from memory state.         |
+| **Phase 5** | Click "Confirm Schedule"          | *(Client-side state transition)*                 | Local Staging         | Renders KPI metrics, per-asset tables & buffer profiles.        |
+| **Phase 5** | Click "Commit Activities to SatOS"| `POST /schedule/session/{session_id}/commit`     | Synchronous REST      | Converts links to SatOS Activity models and pushes in batch.    |
+| **Phase 5** | Baseline Synchronization          | `GET /tasks/initialize`                          | Synchronous REST      | Refreshes SatOS ground-truth asset schedules.                   |

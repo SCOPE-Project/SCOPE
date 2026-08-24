@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   applySessionPlanToRows,
+  buildCommitSummary,
   buildRowsFromFilteredLinks,
   buildSelectedOptionsFromPlan,
   buildTradeOffCardsFromPlan,
@@ -53,6 +54,17 @@ const plan = {
     },
   },
   conflict_reasons: { 'L1:L2': 'Ground station contention' },
+  satellite_buffer_profiles: {
+    'Sat-1': {
+      satellite_name: 'Sat-1',
+      capacity_mb: 50000,
+      peak_level_mb: 25000,
+      final_level_mb: 12000,
+      total_generated_mb: 30000,
+      total_downlinked_mb: 500,
+      total_lost_mb: 0,
+    },
+  },
 }
 
 describe('scheduling view-model adapters', () => {
@@ -70,5 +82,34 @@ describe('scheduling view-model adapters', () => {
     expect(cards[0].options[0]).toMatchObject({ linkId: 'L1', recommended: true, score: 81.25 })
     expect(rows[1]).toMatchObject({ score: 42.5, rejectionReason: 'Lost trade-off' })
     expect(buildSelectedOptionsFromPlan(plan)).toEqual({ 'TOG-0001': 'L1' })
+  })
+
+  it('builds commit summary with asset grouping and buffer profile metrics', () => {
+    const rows = applySessionPlanToRows(buildRowsFromFilteredLinks(links), plan)
+    const scheduledRows = getScheduledRows(rows)
+    const summary = buildCommitSummary(scheduledRows, plan)
+
+    expect(summary.totalScheduledLinks).toBe(1)
+    expect(summary.totalOffloadedMb).toBe(500)
+    expect(summary.totalOffloadedGb).toBe('0.50')
+    expect(summary.totalDurationSeconds).toBe(600)
+    expect(summary.totalDurationMinutes).toBe(10)
+
+    expect(summary.satellites).toHaveLength(1)
+    expect(summary.satellites[0]).toMatchObject({
+      satId: 'Sat-1',
+      totalOffloadedMb: 500,
+      capacityMb: 50000,
+      peakBufferMb: 25000,
+      finalBufferMb: 12000,
+    })
+    expect(summary.satellites[0].links).toHaveLength(1)
+
+    expect(summary.groundStations).toHaveLength(1)
+    expect(summary.groundStations[0]).toMatchObject({
+      gsId: 'GS-1',
+      totalOffloadedMb: 500,
+      totalDurationSeconds: 600,
+    })
   })
 })

@@ -316,6 +316,18 @@ class ForwardSimulationScheduler(BaseScheduler):
                         )
 
         # 6. Assemble Satellite Profiles
+        # Record scenario end points
+        for sat, config in satellite_configs.items():
+            final_pct = (current_buffer[sat] / config.capacity_mb * 100.0) if config.capacity_mb > 0 else 0.0
+            profile_points[sat].append(
+                BufferProfilePoint(
+                    timestamp=scenario_end,
+                    level_mb=round(current_buffer[sat], 2),
+                    percentage=round(final_pct, 2),
+                    event_type=BufferEventType.SCENARIO_END,
+                )
+            )
+
         satellite_buffer_profiles: Dict[str, SatelliteBufferProfile] = {}
         for sat, config in satellite_configs.items():
             pts = sorted(profile_points[sat], key=lambda p: p.timestamp)

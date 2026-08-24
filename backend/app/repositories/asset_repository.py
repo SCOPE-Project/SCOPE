@@ -18,6 +18,7 @@ from app.services.satos_connector import (
     push_activities_to_SatOS,
     satos_delete_activities,
     satos_clear_schedules,
+    satos_clear_scope_activities,
 )
 
 
@@ -371,7 +372,8 @@ class AssetRepository:
         )
 
         # 3. Create Satellite Activity
-        act_name = f"Pass {link.satellite_name} - {link.groundstation_name} at {start_time.isoformat()}"
+        act_name = f"DOWNLINK_{link.link_id}_{link.satellite_name}-{link.groundstation_name}"
+        act_description = f"Downlink from {link.satellite_name} to {link.groundstation_name} from {start_time.isoformat()} to {end_time.isoformat()}"
         sat_activity = Activity(
             uuid=uuid.uuid4(),
             schedule_name=link.satellite_name,
@@ -379,7 +381,7 @@ class AssetRepository:
             start_event=aos_event,
             end_event=los_event,
             name=act_name,
-            description=act_name,
+            description=act_description,
             priority=1,
             initiator="SCOPE_Scheduler",
             executor=link.satellite_name,
@@ -393,7 +395,7 @@ class AssetRepository:
             start_event=aos_event,
             end_event=los_event,
             name=act_name,
-            description=act_name,
+            description=act_description,
             priority=1,
             initiator="SCOPE_Scheduler",
             executor=link.groundstation_name,
@@ -573,5 +575,45 @@ class AssetRepository:
             existing_sched = next((s for s in cls._schedules if s.name == sched_name), None)
             if existing_sched:
                 existing_sched.activities = []
+
+        return cleared_summary
+
+    @classmethod
+    def clear_scope_activities_in_satos(
+        cls,
+        schedule_names: Sequence[str],
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> dict[str, list[str]]:
+        """
+        Clears all SCOPE-generated activities (initiator == "SCOPE_Scheduler") for the specified
+        schedules in SatOS, with optional time window filtering, and synchronizes local caches.
+
+        :param schedule_names: sequence of schedule names to clear
+        :param start_time: optional start of time window filter (inclusive)
+        :param end_time: optional end of time window filter (inclusive)
+        :return: dictionary mapping each schedule_name to list of deleted activity UUID strings
+        """
+        if not schedule_names:
+            return {}
+
+        cleared_summary = satos_clear_scope_activities(schedule_names, start_time, end_time)
+
+        all_deleted_uuids = set()
+        for deleted_list in cleared_summary.values():
+            for u in deleted_list:
+                all_deleted_uuids.add(str(u))
+
+        # Synchronize _schedules cache
+        for sched in cls._schedules:
+            if sched.name in cleared_summary:
+                sched.activities = [a for a in sched.activities if str(a.uuid) not in all_deleted_uuids]
+
+        # Synchronize _raw_schedules cache
+        for sched_name in schedule_names:
+            if sched_name in cls._raw_schedules:
+                cls._raw_schedules[sched_name] = [
+                    a for a in cls._raw_schedules[sched_name] if str(a.uuid) not in all_deleted_uuids
+                ]
 
         return cleared_summary

@@ -7,6 +7,7 @@ from core.models.scheduling import (
     OverrideState,
     SatelliteBufferConfig,
     ConflictStructure,
+    BufferEventType,
 )
 from core.scheduling.conflict_builder import build_conflict_structure
 from core.scheduling.forward_simulator import run_forward_simulation, ForwardSimulationScheduler
@@ -77,6 +78,11 @@ def test_forward_simulator_payload_inflow_and_downlink():
     assert profile.total_downlinked_mb == 400.0
     assert profile.final_level_mb == 0.0
     assert profile.total_lost_mb == 0.0
+    assert profile.profile_points[0].event_type == BufferEventType.SCENARIO_START
+    assert profile.profile_points[0].timestamp == t0
+    assert profile.profile_points[-1].event_type == BufferEventType.SCENARIO_END
+    assert profile.profile_points[-1].timestamp == t3
+    assert profile.profile_points[-1].level_mb == 0.0
 
 
 def test_forward_simulator_clamping_out_of_window_activities():
@@ -139,6 +145,11 @@ def test_forward_simulator_clamping_out_of_window_activities():
     # Buffer start point must be exactly at t_scenario_s with initial_level_mb (0.0)
     assert prof.profile_points[0].timestamp == t_scenario_s
     assert prof.profile_points[0].level_mb == 0.0
+    assert prof.profile_points[0].event_type == BufferEventType.SCENARIO_START
+    # Buffer end point must be exactly at t_scenario_e with final_level_mb (0.0)
+    assert prof.profile_points[-1].timestamp == t_scenario_e
+    assert prof.profile_points[-1].level_mb == 0.0
+    assert prof.profile_points[-1].event_type == BufferEventType.SCENARIO_END
 
 
 def test_forward_simulator_fails_hard_without_scenario_bounds():
@@ -278,4 +289,55 @@ def test_forward_simulator_user_overrides():
     assert plan_pinned["L1"].is_scheduled is True
     assert plan_pinned["L2"].is_scheduled is False
     assert "pinned" in plan_pinned["L2"].rejection_reason.lower()
+
+
+def test_forward_simulator_profile_has_scenario_start_and_end_points():
+    """
+    Verifies that each satellite's buffer profile includes both the first point
+    at scenario_start (SCENARIO_START) and the final point at scenario_end (SCENARIO_END).
+    """
+    t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+    t_end = datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc)
+
+    sat_configs = {
+        "Sat-A": SatelliteBufferConfig(
+            satellite_name="Sat-A",
+            capacity_mb=1000.0,
+            initial_level_mb=250.0,
+            payload_generation_rate_mbps=1.0,
+            downlink_rate_mbps=1.0,
+        ),
+        "Sat-B": SatelliteBufferConfig(
+            satellite_name="Sat-B",
+            capacity_mb=2000.0,
+            initial_level_mb=500.0,
+            payload_generation_rate_mbps=2.0,
+            downlink_rate_mbps=2.0,
+        ),
+    }
+
+    plan, profiles = run_forward_simulation(
+        candidate_links={},
+        user_overrides={},
+        satellite_configs=sat_configs,
+        conflict_structure=ConflictStructure(),
+        asset_schedules={},
+        scenario_start=t_start,
+        scenario_end=t_end,
+    )
+
+    for sat_name, prof in profiles.items():
+        assert len(prof.profile_points) >= 2
+        # First point at scenario_start
+        first_pt = prof.profile_points[0]
+        assert first_pt.event_type == BufferEventType.SCENARIO_START
+        assert first_pt.timestamp == t_start
+        assert first_pt.level_mb == sat_configs[sat_name].initial_level_mb
+
+        # Last point at scenario_end
+        last_pt = prof.profile_points[-1]
+        assert last_pt.event_type == BufferEventType.SCENARIO_END
+        assert last_pt.timestamp == t_end
+        assert last_pt.level_mb == prof.final_level_mb
+
 
