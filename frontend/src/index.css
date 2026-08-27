@@ -1935,6 +1935,21 @@ body {
   flex-direction: column;
 }
 
+.overview-countdown-cell {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.overview-countdown-cell--active {
+  font-weight: 600;
+  color: var(--accent-success);
+}
+
+.overview-countdown-cell--past,
+.overview-countdown-cell--unknown {
+  color: var(--text-muted);
+}
+
 .overview-list-empty {
   margin: 0;
   padding: 1.1rem 0.9rem;
@@ -2072,11 +2087,12 @@ body {
     minmax(6.4rem, 6.4fr)
     minmax(6.1rem, 6.1fr)
     minmax(6.1rem, 6.1fr)
+    minmax(5.4rem, 5.4fr)
     minmax(4.6rem, 4.6fr)
     minmax(5rem, 5fr);
   column-gap: 0.02rem;
   row-gap: 0;
-  width: max(100%, 52.3rem);
+  width: max(100%, 57.7rem);
   min-width: 0;
 }
 
@@ -2089,6 +2105,7 @@ body {
     minmax(6.2rem, 6.2fr)
     minmax(5.5rem, 5.5fr)
     minmax(4.3rem, 4.3fr)
+    minmax(5.1rem, 5.1fr)
     minmax(4.6rem, 4.6fr)
     minmax(4.8rem, 4.8fr)
     minmax(6.3rem, 6.3fr)
@@ -5813,11 +5830,11 @@ body {
   }
 
   .overview-list-grid--with-tradeoffs {
-    min-width: 1040px;
+    min-width: 1120px;
   }
 
   .overview-list-grid {
-    min-width: 920px;
+    min-width: 1000px;
   }
 
   .map-layout {
@@ -5956,11 +5973,11 @@ body {
   }
 
   .overview-list-grid {
-    min-width: 860px;
+    min-width: 940px;
   }
 
   .overview-list-grid--with-tradeoffs {
-    min-width: 1040px;
+    min-width: 1120px;
   }
 
   .mission-map-shell {

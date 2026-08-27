@@ -1,5 +1,7 @@
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { getCountdownNow, subscribeCountdownClock } from './components/countdownClock.js'
+import { formatOverpassCountdown } from './components/overpassCountdown.js'
 import {
   interpolateTrackPosition,
   prepareTrackPoints,
@@ -176,6 +178,31 @@ const resolvePlanningResetDate = (presetIso, timeMode, target) => {
 }
 
 const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
+
+// Subscribes to the shared ticker instead of lifting a per-second clock into
+// App state: a tick then re-renders only the countdown cells, leaving the
+// timeline, map and the rest of the table untouched.
+const useCountdownNow = () => {
+  const [nowMs, setNowMs] = useState(getCountdownNow)
+
+  useEffect(() => subscribeCountdownClock(setNowMs), [])
+
+  return nowMs
+}
+
+function OverpassCountdownCell({ startTime, endTime }) {
+  const nowMs = useCountdownNow()
+  const { label, state } = formatOverpassCountdown(startTime, endTime, nowMs)
+
+  return (
+    <span
+      className={`overview-countdown-cell overview-countdown-cell--${state}`}
+      title={state === 'future' ? `Time until AOS at ${startTime}` : undefined}
+    >
+      {label}
+    </span>
+  )
+}
 
 export default function App() {
   const splitPanelsRef = useRef(null)
@@ -2406,6 +2433,18 @@ export default function App() {
     return 'Eligible'
   }
 
+  // Override state a Schedule/Scheduled toggle must send. It keys off whether
+  // the link is currently in the plan, never off its override state: an
+  // auto-scheduled link sits at 'auto', so the old toggle sent 'pinned', the
+  // link stayed scheduled and the button looked dead. 'excluded' is the only
+  // state that removes a link from the plan - 'auto' would just let the solver
+  // pick it straight back up.
+  const getScheduleToggleState = (isScheduled) => (isScheduled ? 'excluded' : 'pinned')
+
+  const getScheduleToggleTitle = (isScheduled) => (isScheduled
+    ? 'Scheduled: click to force this link to stay unscheduled.'
+    : 'Unscheduled: click to force this link to stay scheduled.')
+
   const getOverviewControlTooltip = (state) => {
     if (state === 'auto') {
       return 'Auto: keep the backend scheduling decision.'
@@ -3809,15 +3848,13 @@ export default function App() {
                   ...item,
                   optionId: item.optionId ?? item.linkId,
                   tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
-                }, item.isScheduled ? 'excluded' : 'pinned')}
+                }, getScheduleToggleState(item.isScheduled))}
                 disabled={Boolean(overridingLinkId)}
                 aria-pressed={item.isScheduled}
                 aria-label={item.isScheduled
                   ? `Scheduled. Click to unschedule ${item.linkId}`
                   : `Unscheduled. Click to schedule ${item.linkId}`}
-                title={item.isScheduled
-                  ? 'Scheduled: click to force this link to stay unscheduled.'
-                  : 'Unscheduled: click to force this link to stay scheduled.'}
+                title={getScheduleToggleTitle(item.isScheduled)}
               >
                 {item.isScheduled ? 'Scheduled' : 'Unscheduled'}
               </button>
@@ -5252,6 +5289,7 @@ export default function App() {
                     <span>GS ID</span>
                     <span>Start</span>
                     <span>End</span>
+                    <span title="Time until the overpass starts (T-minus)">T-</span>
                     <span>Duration</span>
                     <span>Max Elev.</span>
                     {tradeOffsCalculated && <span>Buffer level before</span>}
@@ -5344,6 +5382,7 @@ export default function App() {
                             <span>{row.gsId}</span>
                             <span>{formatOverviewStartDateTime(row.startTime)}</span>
                             <span>{formatOverviewEndDateTime(row.startTime, row.endTime)}</span>
+                            <OverpassCountdownCell startTime={row.startTime} endTime={row.endTime} />
                             <span>{row.duration}</span>
                             <span>{row.maxElevation ?? '—'}</span>
                             {tradeOffsCalculated && (
@@ -5416,9 +5455,14 @@ export default function App() {
                                     className={`overview-select-button ${row.isScheduled ? 'overview-select-button--selected' : ''}`}
                                     onClick={() => handleLinkOverride(
                                       overrideOption,
-                                      row.overrideState === 'pinned' ? 'auto' : 'pinned',
+                                      getScheduleToggleState(row.isScheduled),
                                     )}
                                     disabled={Boolean(overridingLinkId)}
+                                    aria-pressed={row.isScheduled}
+                                    aria-label={row.isScheduled
+                                      ? `Scheduled. Click to unschedule ${getOverviewDisplayLinkId(row)}`
+                                      : `Unscheduled. Click to schedule ${getOverviewDisplayLinkId(row)}`}
+                                    title={getScheduleToggleTitle(row.isScheduled)}
                                   >
                                     {row.isScheduled ? 'Scheduled' : 'Schedule'}
                                   </button>
@@ -5602,8 +5646,10 @@ export default function App() {
                               <button
                                 type="button"
                                 className="tradeoff-select-button"
-                                onClick={() => handleLinkOverride(option, effectiveOverrideState === 'pinned' ? 'auto' : 'pinned')}
+                                onClick={() => handleLinkOverride(option, getScheduleToggleState(optionScheduled))}
                                 disabled={Boolean(overridingLinkId)}
+                                aria-pressed={optionScheduled}
+                                title={getScheduleToggleTitle(optionScheduled)}
                               >
                                 {optionScheduled ? 'Scheduled' : 'Schedule'}
                               </button>
@@ -6426,8 +6472,10 @@ export default function App() {
                                   <button
                                     type="button"
                                     className="tradeoff-select-button"
-                                    onClick={() => handleLinkOverride(option, effectiveOverrideState === 'pinned' ? 'auto' : 'pinned')}
+                                    onClick={() => handleLinkOverride(option, getScheduleToggleState(optionScheduled))}
                                     disabled={Boolean(overridingLinkId)}
+                                    aria-pressed={optionScheduled}
+                                    title={getScheduleToggleTitle(optionScheduled)}
                                   >
                                     {optionScheduled ? 'Scheduled' : 'Schedule'}
                                   </button>
