@@ -478,6 +478,72 @@ body {
   min-width: 14rem;
 }
 
+/* Mission assets load automatically; this strip reports that load and is the
+   only place the operator can trigger a manual reload or retry. */
+.landing-assets-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  min-height: 2.2rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-card);
+  background: var(--bg-panel-strong);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.landing-assets-status-text {
+  font-weight: 500;
+}
+
+.landing-assets-status--busy {
+  border-color: var(--line-strong);
+  color: var(--text-secondary);
+}
+
+.landing-assets-status--ready {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.landing-assets-status--error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.landing-assets-status-action {
+  border: 1px solid currentColor;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.6rem;
+}
+
+.landing-assets-status-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.landing-assets-status-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.loading-spinner--inline {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
 .filter-grid {
   display: flex;
   flex-direction: column;

@@ -1539,6 +1539,35 @@ export default function App() {
     }
   }
 
+  // Mission assets are loaded automatically as soon as the backend answers its
+  // health check, so the operator never has to trigger the first fetch by hand.
+  // The ref stops a successful load from repeating (fetchAssets resets the
+  // workspace); a failed attempt is retried when the backend comes back, or
+  // manually from the status strip on the landing page.
+  const assetAutoLoadAttemptedRef = useRef(false)
+  const fetchAssetsRef = useRef(fetchAssets)
+
+  // Kept in an effect rather than assigned during render, so the auto-load
+  // effect below can call the latest fetchAssets without taking a dependency
+  // on its identity (which changes on every render).
+  useEffect(() => {
+    fetchAssetsRef.current = fetchAssets
+  })
+
+  useEffect(() => {
+    if (backendAlive !== true) {
+      if (backendAlive === false) {
+        assetAutoLoadAttemptedRef.current = false
+      }
+      return
+    }
+    if (assetAutoLoadAttemptedRef.current || loading || assets.length > 0) {
+      return
+    }
+    assetAutoLoadAttemptedRef.current = true
+    fetchAssetsRef.current()
+  }, [backendAlive, loading, assets.length])
+
   const appendTaskStatus = (taskStatus, stageLabel, progressStart = 0, progressSpan = 100) => {
     setExtractionStatus(`${stageLabel}: ${formatTaskStatusLabel(taskStatus.status)}`)
     const taskProgress = Number.isFinite(taskStatus.progress) ? taskStatus.progress : 0
@@ -2067,7 +2096,40 @@ export default function App() {
     && linkFiltersValid
     && bufferConfigValid
     && tradeOffConfigValid
-  const loadMissionAssetsDisabled = loading || launchingScheduler || backendAlive !== true
+  const missionAssetsStatus = loading
+    ? {
+      tone: 'busy',
+      label: 'Loading mission assets from SatOS\u2026',
+      busy: true,
+      retryLabel: null,
+    }
+    : backendAlive === null
+      ? {
+        tone: 'busy',
+        label: 'Connecting to the SCOPE backend\u2026',
+        busy: true,
+        retryLabel: null,
+      }
+      : backendAlive === false
+        ? {
+          tone: 'error',
+          label: 'Backend offline \u2014 start the SCOPE backend to load mission assets.',
+          busy: false,
+          retryLabel: null,
+        }
+        : missionAssetsLoaded
+          ? {
+            tone: 'ready',
+            label: `Mission assets loaded \u2014 ${assets.length} asset${assets.length === 1 ? '' : 's'} from SatOS`,
+            busy: false,
+            retryLabel: 'Reload',
+          }
+          : {
+            tone: 'error',
+            label: error || 'Mission assets could not be loaded from SatOS.',
+            busy: false,
+            retryLabel: 'Retry',
+          }
   const loadScopeDisabled =
     loading
     || launchingScheduler
@@ -2079,7 +2141,7 @@ export default function App() {
       : launchingScheduler
         ? 'SCOPE is currently starting.'
         : !missionAssetsLoaded
-          ? 'Load SatOS mission data first to enable filtering.'
+          ? 'Waiting for SatOS mission data to finish loading.'
           : !planningWindowValid
             ? 'Enter a valid planning window with an end time after the start time.'
             : selectedSatellites.length < 1
@@ -4841,7 +4903,7 @@ export default function App() {
   )
 
   if (view === 'landing') {
-    const filterTooltip = 'Load SatOS mission data first to enable filtering.'
+    const filterTooltip = 'Waiting for SatOS mission data\u2026'
 
     return (
       <div className="app-shell">
@@ -4851,20 +4913,26 @@ export default function App() {
             <div className="landing-content">
               <div className={`landing-config-shell ${missionAssetsLoaded ? '' : 'landing-config-shell--disabled'}`}>
                 <div className="landing-config-header landing-config-header--primary">
-                  <button
-                    className="btn-fetch landing-action-button"
-                    onClick={fetchAssets}
-                    disabled={loadMissionAssetsDisabled}
+                  <div
+                    className={`landing-assets-status landing-assets-status--${missionAssetsStatus.tone}`}
+                    role="status"
+                    aria-live="polite"
                   >
-                    {loading ? (
-                      <>
-                        <span className="loading-spinner"></span>
-                        Fetching...
-                      </>
-                    ) : (
-                      'Load Mission Assets'
+                    {missionAssetsStatus.busy && (
+                      <span className="loading-spinner loading-spinner--inline" aria-hidden="true"></span>
                     )}
-                  </button>
+                    <span className="landing-assets-status-text">{missionAssetsStatus.label}</span>
+                    {missionAssetsStatus.retryLabel && (
+                      <button
+                        type="button"
+                        className="landing-assets-status-action"
+                        onClick={fetchAssets}
+                        disabled={launchingScheduler}
+                      >
+                        {missionAssetsStatus.retryLabel}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="landing-config-divider"></div>
