@@ -791,22 +791,21 @@ export default function App() {
     return formatGb(valueMb / 1000)
   }
 
-  const getDisplayDataDownlinkMb = (item) => {
+  // The volume the backend scheduler actually offloads over this link
+  // (ScheduledLinkStatus.useful_data_offloaded_mb). It is authoritative and is
+  // never substituted with a locally derived estimate: the backend reports 0.0
+  // for every link it did not schedule, and presenting the theoretical pass
+  // capacity instead made unscheduled links look like they carried data.
+  const getBackendDataDownlinkMb = (item) => {
     const usefulDataOffloadedMb = Number(item?.usefulDataOffloadedMb)
+    return Number.isFinite(usefulDataOffloadedMb) ? usefulDataOffloadedMb : Number.NaN
+  }
+
+  // What the link could carry if it were scheduled and the buffer were full
+  // (LinkBlock.estimated_data_capacity_mb, produced by the filter pipeline).
+  // A separate quantity from the offloaded volume - never conflate the two.
+  const getPassCapacityMb = (item) => {
     const estimatedDataCapacityMb = Number(item?.estimatedDataCapacityMb)
-
-    if (Number.isFinite(usefulDataOffloadedMb) && usefulDataOffloadedMb > 0) {
-      return usefulDataOffloadedMb
-    }
-
-    if (Number.isFinite(estimatedDataCapacityMb) && estimatedDataCapacityMb > 0) {
-      return estimatedDataCapacityMb
-    }
-
-    if (Number.isFinite(usefulDataOffloadedMb)) {
-      return usefulDataOffloadedMb
-    }
-
     return Number.isFinite(estimatedDataCapacityMb) ? estimatedDataCapacityMb : Number.NaN
   }
 
@@ -3745,8 +3744,8 @@ export default function App() {
       <span>Duration: {formatTimelineItemDuration(item)}</span>
       {item.recommended && <span>Auto-scheduled by the backend</span>}
       {item.overrideState && item.overrideState !== 'auto' && <span>Override: {item.overrideState}</span>}
-      {Number.isFinite(getDisplayDataDownlinkMb(item)) && getDisplayDataDownlinkMb(item) > 0 && (
-        <span>Data downlink: {(getDisplayDataDownlinkMb(item) / 1000).toFixed(2)} GB</span>
+      {Number.isFinite(getBackendDataDownlinkMb(item)) && getBackendDataDownlinkMb(item) > 0 && (
+        <span>Data downlink: {(getBackendDataDownlinkMb(item) / 1000).toFixed(2)} GB</span>
       )}
       {Number.isFinite(item.score) && <span>Backend score: {item.score.toFixed(2)}</span>}
       {item.rejectionReason && !item.blockMessage && <span>{item.rejectionReason}</span>}
@@ -5280,23 +5279,13 @@ export default function App() {
                   </div>
                   {visibleOverviewRows.length === 0 ? (
                     <>
-                      <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                        <span>{showUnavailableOverviewRows ? 'L-001' : '—'}</span>
-                        <span>—</span>
-                        <span>{showUnavailableOverviewRows ? 'OP-001' : 'No available overpasses'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                      </div>
+                      {/* No fabricated sample row here: the table only ever
+                          renders links the backend actually returned. */}
+                      <p className="overview-list-empty">
+                        {overviewRows.length === 0
+                          ? 'No candidate links yet. Run the scheduler to propagate orbits and extract overpasses.'
+                          : 'No links match the current visibility filter.'}
+                      </p>
                     </>
                   ) : (
                     <>
@@ -5386,7 +5375,9 @@ export default function App() {
                             )}
                             {tradeOffsCalculated && (
                               <span className="overview-offloaded-cell">
-                                {formatDataDownlinkGb(getDisplayDataDownlinkMb(row))}
+                                {row.isScheduled
+                                  ? formatDataDownlinkGb(getBackendDataDownlinkMb(row))
+                                  : '—'}
                               </span>
                             )}
                             {tradeOffsCalculated && (
@@ -5587,8 +5578,16 @@ export default function App() {
                                 <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
                               </div>
                               <div className="tradeoff-option-fact">
+                                <dt>Pass capacity</dt>
+                                <dd>{formatDataDownlinkGb(getPassCapacityMb(option))}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
                                 <dt>Data Downlink</dt>
-                                <dd>{formatDataDownlinkGb(getDisplayDataDownlinkMb(option))}</dd>
+                                <dd>
+                                  {option.isScheduled
+                                    ? formatDataDownlinkGb(getBackendDataDownlinkMb(option))
+                                    : '—'}
+                                </dd>
                               </div>
                             </dl>
 
@@ -6403,8 +6402,16 @@ export default function App() {
                                     <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
                                   </div>
                                   <div className="tradeoff-option-fact">
+                                    <dt>Pass capacity</dt>
+                                    <dd>{formatDataDownlinkGb(getPassCapacityMb(option))}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
                                     <dt>Data Downlink</dt>
-                                    <dd>{formatDataDownlinkGb(getDisplayDataDownlinkMb(option))}</dd>
+                                    <dd>
+                                      {option.isScheduled
+                                        ? formatDataDownlinkGb(getBackendDataDownlinkMb(option))
+                                        : '—'}
+                                    </dd>
                                   </div>
                                 </dl>
 

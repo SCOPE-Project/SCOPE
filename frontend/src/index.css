@@ -1935,6 +1935,15 @@ body {
   flex-direction: column;
 }
 
+.overview-list-empty {
+  margin: 0;
+  padding: 1.1rem 0.9rem;
+  font-size: 0.84rem;
+  font-style: italic;
+  color: var(--text-muted);
+  text-align: center;
+}
+
 .overview-table-scroll {
   position: relative;
   overflow-x: auto;
@@ -2268,10 +2277,6 @@ body {
   border-color: #b8d5bf;
   background: #edf6ef;
   color: #1f5f31;
-}
-
-.overview-list-row--placeholder {
-  color: var(--text-secondary);
 }
 
 .overview-schedule-state-cell {
