@@ -1365,6 +1365,13 @@ body {
   z-index: 50;
 }
 
+.time-window-select-empty {
+  padding: 0.5rem 0.6rem;
+  font-size: 0.76rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
 .time-window-select-option {
   width: 100%;
   padding: 0.48rem 0.65rem;

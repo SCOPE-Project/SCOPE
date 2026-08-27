@@ -121,9 +121,24 @@ const parsePlanningDateFields = (dateValue, timeValue, timeMode) => {
   return Number.isFinite(parsed.getTime()) ? parsed : null
 }
 
+// The planning window may never begin in the past. A small tolerance keeps a
+// window the operator just chose from turning invalid because the wall clock
+// advanced a few seconds while they were still typing.
+const PLANNING_PAST_TOLERANCE_MS = 60 * 1000
+
+// Smallest hour boundary strictly after `date`. Adding milliseconds (rather
+// than incrementing the hour field) keeps this correct across DST changes.
+const roundUpToNextHour = (date) => {
+  const rounded = new Date(date)
+  rounded.setMinutes(0, 0, 0)
+  while (rounded.getTime() <= date.getTime()) {
+    rounded.setTime(rounded.getTime() + 60 * 60000)
+  }
+  return rounded
+}
+
 const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start = new Date()) => {
-  const roundedStart = new Date(start)
-  roundedStart.setMinutes(0, 0, 0)
+  const roundedStart = roundUpToNextHour(start)
   const end = new Date(roundedStart.getTime() + 60 * 60000)
   const startFields = formatPlanningDateFields(roundedStart, timeMode)
   const endFields = formatPlanningDateFields(end, timeMode)
@@ -136,6 +151,28 @@ const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start 
     startIso: roundedStart.toISOString(),
     endIso: end.toISOString(),
   }
+}
+
+// Never lets a chosen instant fall before the live clock. Defined at module
+// scope so reading the clock is not treated as work done during render; both
+// helpers are only ever reached from event handlers.
+const clampDateToNow = (date) => {
+  const nowMs = Date.now()
+  return date.getTime() < nowMs ? new Date(nowMs) : date
+}
+
+// The stored reset preset was built when the workspace was reset and may have
+// aged into the past. Fall back to a freshly rounded window so Reset always
+// lands on a clean future hour instead of clamping to a ragged "now".
+const resolvePlanningResetDate = (presetIso, timeMode, target) => {
+  const presetDate = new Date(presetIso)
+
+  if (presetDate.getTime() >= Date.now()) {
+    return presetDate
+  }
+
+  const freshPreset = buildPlanningWindowPreset(timeMode)
+  return new Date(target === 'start' ? freshPreset.startIso : freshPreset.endIso)
 }
 
 const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
@@ -184,6 +221,10 @@ export default function App() {
     startIso: DEFAULT_PLANNING_WINDOW_PRESET.startIso,
     endIso: DEFAULT_PLANNING_WINDOW_PRESET.endIso,
   })
+  // Re-read the wall clock periodically so the earliest selectable date, the
+  // time dropdown and the validation message stay correct while the landing
+  // page sits open.
+  const [planningNowMs, setPlanningNowMs] = useState(() => Date.now())
   const [activeTimeMenu, setActiveTimeMenu] = useState(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [launchingScheduler, setLaunchingScheduler] = useState(false)
@@ -450,6 +491,11 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [view])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setPlanningNowMs(Date.now()), 30000)
+    return () => window.clearInterval(intervalId)
+  }, [])
 
   useEffect(() => () => {
     if (timelineTooltipHideTimeoutRef.current !== null) {
@@ -1407,14 +1453,20 @@ export default function App() {
   const planningDateAndTimeToIso = (dateValue, timeValue, timeMode = planningTimeMode) =>
     parsePlanningDateFields(dateValue, timeValue, timeMode)?.toISOString() ?? null
 
+  // Earliest date the operator may pick, expressed in the active time mode.
+  const planningMinDateValue = formatPlanningDateFields(
+    new Date(planningNowMs),
+    planningTimeMode,
+  ).date
+
   const setPlanningStartFromDate = (date) => {
-    const fields = formatPlanningDateFields(date, planningTimeMode)
+    const fields = formatPlanningDateFields(clampDateToNow(date), planningTimeMode)
     setPlanningWindowStartDate(fields.date)
     setPlanningWindowStartTime(fields.time)
   }
 
   const setPlanningEndFromDate = (date) => {
-    const fields = formatPlanningDateFields(date, planningTimeMode)
+    const fields = formatPlanningDateFields(clampDateToNow(date), planningTimeMode)
     setPlanningWindowEndDate(fields.date)
     setPlanningWindowEndTime(fields.time)
   }
@@ -1491,7 +1543,7 @@ export default function App() {
     const presetValue = target === 'start'
       ? planningWindowResetPreset.startIso
       : planningWindowResetPreset.endIso
-    const presetDate = new Date(presetValue)
+    const presetDate = resolvePlanningResetDate(presetValue, planningTimeMode, target)
 
     if (target === 'start') {
       setPlanningStartFromDate(presetDate)
@@ -2084,11 +2136,30 @@ export default function App() {
     && planningWindowStartTime !== ''
     && planningWindowEndDate !== ''
     && planningWindowEndTime !== ''
-  const planningWindowValid =
+  const planningWindowStartInstant = parsePlanningDateFields(
+    planningWindowStartDate,
+    planningWindowStartTime,
+    planningTimeMode,
+  )
+  const planningWindowEndInstant = parsePlanningDateFields(
+    planningWindowEndDate,
+    planningWindowEndTime,
+    planningTimeMode,
+  )
+  const planningEarliestAllowedMs = planningNowMs - PLANNING_PAST_TOLERANCE_MS
+  const planningWindowInPast = (
+    (planningWindowStartInstant !== null
+      && planningWindowStartInstant.getTime() < planningEarliestAllowedMs)
+    || (planningWindowEndInstant !== null
+      && planningWindowEndInstant.getTime() < planningEarliestAllowedMs)
+  )
+  const planningWindowValid = Boolean(
     planningWindowComplete
-    && planningDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime)
-    && planningDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)
-    && new Date(planningDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)) > new Date(planningDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime))
+    && planningWindowStartInstant
+    && planningWindowEndInstant
+    && planningWindowEndInstant > planningWindowStartInstant
+    && !planningWindowInPast,
+  )
   const launchRequirementsMet =
     planningWindowValid
     && selectedSatellites.length >= 1
@@ -2142,8 +2213,10 @@ export default function App() {
         ? 'SCOPE is currently starting.'
         : !missionAssetsLoaded
           ? 'Waiting for SatOS mission data to finish loading.'
-          : !planningWindowValid
-            ? 'Enter a valid planning window with an end time after the start time.'
+          : planningWindowInPast
+            ? 'The planning window must start now or in the future.'
+            : !planningWindowValid
+              ? 'Enter a valid planning window with an end time after the start time.'
             : selectedSatellites.length < 1
               ? 'Select at least one satellite.'
               : selectedGroundStations.length < 1
@@ -4344,6 +4417,21 @@ export default function App() {
     return `${digitsOnly.slice(0, 2)}:${digitsOnly.slice(2)}`
   }
 
+  // Times that already lie in the past are dropped from the suggestion list,
+  // but only for the current date - any later date keeps the full 24 h grid.
+  const getSelectableTimeOptions = (menuKey) => {
+    const dateValue = menuKey === 'start' ? planningWindowStartDate : planningWindowEndDate
+
+    if (!dateValue || dateValue !== planningMinDateValue) {
+      return timeOptions
+    }
+
+    return timeOptions.filter((option) => {
+      const candidate = parsePlanningDateFields(dateValue, option, planningTimeMode)
+      return candidate === null || candidate.getTime() >= planningNowMs - PLANNING_PAST_TOLERANCE_MS
+    })
+  }
+
   const renderTimeInput = (menuKey, value, setValue, disabled = false) => (
     <div
       className={`time-window-dropdown ${activeTimeMenu === menuKey ? 'time-window-dropdown--open' : ''}`}
@@ -4388,7 +4476,12 @@ export default function App() {
       </div>
       {activeTimeMenu === menuKey && !disabled && (
         <div className="time-window-select-menu" role="listbox" aria-label={`${menuKey} time`}>
-          {timeOptions.map((timeValue) => (
+          {getSelectableTimeOptions(menuKey).length === 0 && (
+            <p className="time-window-select-empty">
+              No times left today - pick a later date.
+            </p>
+          )}
+          {getSelectableTimeOptions(menuKey).map((timeValue) => (
             <button
               key={`${menuKey}-${timeValue}`}
               type="button"
@@ -4411,6 +4504,18 @@ export default function App() {
 
   const renderPlanningTimeActions = (target, disabled = false) => {
     const targetLabel = target === 'start' ? 'Start' : 'End'
+    const currentInstant = target === 'start'
+      ? planningWindowStartInstant
+      : planningWindowEndInstant
+    // A backwards step is offered only while it still lands at or after now,
+    // so the steppers can never walk the window into the past.
+    const canShiftBy = (offsetMinutes) => (
+      currentInstant === null
+      || currentInstant.getTime() + offsetMinutes * 60000
+        >= planningNowMs - PLANNING_PAST_TOLERANCE_MS
+    )
+    const backwardHourBlocked = !canShiftBy(-60)
+    const backwardDayBlocked = !canShiftBy(-24 * 60)
 
     return (
       <div className="time-window-quick-actions" role="group" aria-label={`${targetLabel} time presets`}>
@@ -4438,7 +4543,8 @@ export default function App() {
             <button
               type="button"
               className="time-window-quick-button"
-              disabled={disabled}
+              disabled={disabled || backwardHourBlocked}
+              title={backwardHourBlocked ? 'The planning window cannot start in the past.' : undefined}
               onClick={() => handleShiftPlanningTime(target, -60)}
             >
               -1h
@@ -4459,7 +4565,8 @@ export default function App() {
             <button
               type="button"
               className="time-window-quick-button"
-              disabled={disabled}
+              disabled={disabled || backwardDayBlocked}
+              title={backwardDayBlocked ? 'The planning window cannot start in the past.' : undefined}
               onClick={() => handleShiftPlanningTime(target, -24 * 60)}
             >
               -1 day
@@ -4547,9 +4654,15 @@ export default function App() {
           <input
             type="date"
             value={planningWindowStartDate}
+            min={planningMinDateValue}
             disabled={disabled}
             onChange={(event) => {
-              setPlanningWindowStartDate(event.target.value)
+              const nextDate = event.target.value
+              // ISO date strings compare correctly as plain strings. The min
+              // attribute alone is not enough: typed input bypasses it.
+              setPlanningWindowStartDate(
+                nextDate && nextDate < planningMinDateValue ? planningMinDateValue : nextDate,
+              )
               event.target.blur()
             }}
             className="time-window-input"
@@ -4567,9 +4680,13 @@ export default function App() {
           <input
             type="date"
             value={planningWindowEndDate}
+            min={planningMinDateValue}
             disabled={disabled}
             onChange={(event) => {
-              setPlanningWindowEndDate(event.target.value)
+              const nextDate = event.target.value
+              setPlanningWindowEndDate(
+                nextDate && nextDate < planningMinDateValue ? planningMinDateValue : nextDate,
+              )
               event.target.blur()
             }}
             className="time-window-input"
@@ -4583,7 +4700,9 @@ export default function App() {
       {renderPlanningTimeActions('end', disabled)}
       {planningWindowComplete && !planningWindowValid && (
         <p className="time-window-error">
-          Enter a valid time window with an end time after the start time.
+          {planningWindowInPast
+            ? 'The planning window must start now or in the future - past times cannot be scheduled.'
+            : 'Enter a valid time window with an end time after the start time.'}
         </p>
       )}
     </div>
