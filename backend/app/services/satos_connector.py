@@ -139,7 +139,7 @@ def satos_get_schedule_events(schedule_name: str) -> list[ScheduleEventModel]:
             return get_schedule_events(session, schedule_name)
 
 # DELETE /satos/schedule_events/{schedule_event_uuid}
-def satos_delete_schedule_event(schedule_event_uuid: UUID4 | UUID7 | uuid.UUID | str) -> Response:
+def satos_delete_schedule_event(schedule_event_uuid: UUID4 | UUID7 | uuid.UUID) -> Response:
     """
     Delete a schedule event from the SatOS API.
     SatOS Connector to DELETE .../schedule_events/{schedule_event_uuid}
@@ -159,7 +159,7 @@ def satos_delete_schedule_event(schedule_event_uuid: UUID4 | UUID7 | uuid.UUID |
             return resp
 
 # DELETE /satos/activities/{activity_uuid}
-def satos_delete_activity(activity_uuid: UUID4 | UUID7 | uuid.UUID | str) -> Response:
+def satos_delete_activity(activity_uuid: UUID4 | UUID7 | uuid.UUID) -> Response:
     """
     Delete an activity and its anchored start/end schedule events from the SatOS API.
     SatOS Connector to DELETE .../activities/{activity_uuid}
@@ -204,7 +204,7 @@ def satos_delete_activity(activity_uuid: UUID4 | UUID7 | uuid.UUID | str) -> Res
 
 
 def satos_delete_activities(
-    activity_uuids: Sequence[UUID4 | UUID7 | uuid.UUID | str]
+    activity_uuids: Sequence[UUID4 | UUID7 | uuid.UUID]
 ) -> ActivityDeleteSummary:
     """
     Delete multiple activities and their anchored start/end schedule events by their UUIDs from SatOS,
@@ -520,11 +520,11 @@ def push_activities_to_SatOS(activities: list[Activity]) -> None:
             startEvent=ScheduleEventRelationModel(
                 eventUuid=activity.start_event.uuid,
                 relativeTime=0,
-            ),
+            ) if activity.start_event else None,
             endEvent=ScheduleEventRelationModel(
                 eventUuid=activity.end_event.uuid,
                 relativeTime=0,
-            )
+            ) if activity.end_event else None,
         )
         SatOS_activities.append(SatOS_activity)
 

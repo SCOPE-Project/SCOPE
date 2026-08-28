@@ -12,8 +12,8 @@ class Activity:
     uuid: UUID4 | UUID7
     schedule_name: str
     status: int
-    start_event: ScheduleEventModel
-    end_event: ScheduleEventModel
+    start_event: Optional[ScheduleEventModel] = None
+    end_event: Optional[ScheduleEventModel] = None
     name: str = ""
     description: str = ""
     priority: int = 0

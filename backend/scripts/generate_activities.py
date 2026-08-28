@@ -24,10 +24,7 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-try:
-    from app.models.satos import ActivityDTO
-except ImportError:
-    ActivityDTO = None  # type: ignore
+from app.models.satos import ActivityDTO
 
 
 class DurationDistribution(str, Enum):
@@ -332,7 +329,7 @@ class ActivityFactory:
                 raise ValueError("Satellite distribution dictionary cannot be empty.")
             # Check if values are absolute counts that already sum to total_activities
             if all(isinstance(v, int) for v in sat_dist.values()) and sum(sat_dist.values()) == total_activities:
-                return dict(sat_dist)
+                return {k: int(v) for k, v in sat_dist.items()}
             total_w = sum(sat_dist.values())
             if total_w <= 0:
                 raise ValueError("Sum of satellite distribution weights must be positive.")

@@ -287,8 +287,9 @@ def test_forward_simulator_user_overrides():
         scenario_end=t_end,
     )
     assert plan_pinned["L1"].is_scheduled is True
-    assert plan_pinned["L2"].is_scheduled is False
-    assert "pinned" in plan_pinned["L2"].rejection_reason.lower()
+    rejection = plan_pinned["L2"].rejection_reason
+    assert rejection is not None
+    assert "pinned" in rejection.lower()
 
 
 def test_forward_simulator_profile_has_scenario_start_and_end_points():

@@ -3,6 +3,7 @@ import uuid
 import warnings
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from pydantic import UUID4, UUID7
 from api_connect.satio_session import SatIOSession
 from pydantic_models.definitions import SatelliteModel
 from pydantic_models.activity import ActivityInfoModel, ActivityStatus
@@ -537,7 +538,7 @@ class AssetRepository:
 
     @classmethod
     def delete_activities_from_satos(
-        cls, activity_uuids: Sequence[uuid.UUID | str]
+        cls, activity_uuids: Sequence[UUID4 | UUID7 | uuid.UUID]
     ) -> ActivityDeleteSummary:
         """
         Deletes activities and their anchored start/end schedule events by their UUIDs from SatOS and synchronizes local schedule caches.

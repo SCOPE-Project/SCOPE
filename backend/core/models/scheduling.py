@@ -24,13 +24,13 @@ class OverrideState(str, Enum):
 @dataclass
 class LinkBlock:
     link_id: str
+    start_time: datetime
+    end_time: datetime
     link_name: str = ""
     overpass_id: str = ""
     overpass_name: str = ""
     satellite_name: str = ""
     groundstation_name: str = ""
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
     duration_seconds: float = 0.0
     max_elevation_deg: float = 0.0
     estimated_data_capacity_mb: float = 0.0

@@ -246,4 +246,5 @@ def test_filter_pipeline_baseline_collision():
     assert link.is_available is False
     assert link.eligibility_status == LinkEligibilityStatus.BLOCKED_BY_BASELINE_ACTIVITY
     assert link.conflicting_activity_uuid == str(act_uuid)
+    assert link.ineligibility_reason is not None
     assert "Payload Imaging Pass" in link.ineligibility_reason

@@ -1,6 +1,6 @@
-# core/scheduling/forward_simulator.py
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 from collections import defaultdict
 
 from core.models.scheduling import (
@@ -17,6 +17,25 @@ from core.models.scheduling import (
 )
 from core.scheduling.strategy import BaseScoringRule, BaseScheduler, BufferUrgencyScoringRule, get_scoring_rule
 from core.models.activities import Activity
+
+
+@dataclass
+class _PayloadSimEvent:
+    start_time: datetime
+    end_time: datetime
+    satellite_name: str
+    activity: Activity
+
+
+@dataclass
+class _TradeoffGroupSimEvent:
+    start_time: datetime
+    end_time: datetime
+    tradeoff_id: str
+    group: TradeOffGroup
+
+
+_SimEvent = Union[_PayloadSimEvent, _TradeoffGroupSimEvent]
 
 
 def _ensure_utc(dt: datetime) -> datetime:
@@ -90,7 +109,7 @@ class ForwardSimulationScheduler(BaseScheduler):
             )
 
         # 3. Build Unified Chronological Event Queue within Scenario Horizon
-        events = []
+        events: List[_SimEvent] = []
 
         # Filter and add SatOS Payload activities overlapping [scenario_start, scenario_end]
         for sat_name, activities in asset_schedules.items():
@@ -108,26 +127,28 @@ class ForwardSimulationScheduler(BaseScheduler):
                         # Clamp activity interval to scenario boundaries
                         clamped_start = max(act_start, scenario_start)
                         clamped_end = min(act_end, scenario_end)
-                        events.append({
-                            "type": "PAYLOAD",
-                            "start_time": clamped_start,
-                            "end_time": clamped_end,
-                            "satellite_name": sat_name,
-                            "activity": act,
-                        })
+                        events.append(
+                            _PayloadSimEvent(
+                                start_time=clamped_start,
+                                end_time=clamped_end,
+                                satellite_name=sat_name,
+                                activity=act,
+                            )
+                        )
 
         # Add Trade-Off Groups
         for tradeoff_id, group in conflict_structure.trade_off_groups.items():
-            events.append({
-                "type": "TRADEOFF_GROUP",
-                "start_time": group.start_time,
-                "end_time": group.end_time,
-                "tradeoff_id": tradeoff_id,
-                "group": group,
-            })
+            events.append(
+                _TradeoffGroupSimEvent(
+                    start_time=group.start_time,
+                    end_time=group.end_time,
+                    tradeoff_id=tradeoff_id,
+                    group=group,
+                )
+            )
 
         # Sort events chronologically by start_time
-        events.sort(key=lambda e: e["start_time"])
+        events.sort(key=lambda e: e.start_time)
 
         # 4. Output Plan Maps
         current_plan: Dict[str, ScheduledLinkStatus] = {}
@@ -146,12 +167,12 @@ class ForwardSimulationScheduler(BaseScheduler):
 
         # 5. Simulation Execution Loop
         for event in events:
-            if event["type"] == "PAYLOAD":
-                sat_name = event["satellite_name"]
+            if isinstance(event, _PayloadSimEvent):
+                sat_name = event.satellite_name
                 config = satellite_configs[sat_name]
-                act = event["activity"]
-                start_t = event["start_time"]
-                end_t = event["end_time"]
+                act = event.activity
+                start_t = event.start_time
+                end_t = event.end_time
 
                 duration_sec = max(0.0, (end_t - start_t).total_seconds())
                 gen_data = duration_sec * config.payload_generation_rate_mbps
@@ -197,9 +218,9 @@ class ForwardSimulationScheduler(BaseScheduler):
                     )
                 )
 
-            elif event["type"] == "TRADEOFF_GROUP":
-                tradeoff_id = event["tradeoff_id"]
-                group: TradeOffGroup = event["group"]
+            elif isinstance(event, _TradeoffGroupSimEvent):
+                tradeoff_id = event.tradeoff_id
+                group: TradeOffGroup = event.group
                 group_link_ids = group.link_ids
                 group_links = [candidate_links[lid] for lid in group_link_ids if lid in candidate_links]
 

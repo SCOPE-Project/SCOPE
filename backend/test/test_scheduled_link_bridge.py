@@ -81,11 +81,16 @@ def test_create_activities_from_single_scheduled_link():
     assert sat_activity.uuid != gs_activity.uuid
 
     # Validate Shared Events
+    assert sat_activity.start_event is not None
+    assert sat_activity.end_event is not None
+    assert gs_activity.start_event is not None
+    assert gs_activity.end_event is not None
     assert sat_activity.start_event.uuid == gs_activity.start_event.uuid
     assert sat_activity.end_event.uuid == gs_activity.end_event.uuid
 
     # Validate AOS Event
     aos = sat_activity.start_event
+    assert aos is not None
     assert aos.id == f"{link.link_id}_AOS"
     assert aos.name == "AOS: Satellite-Alpha - GS-Kiruna"
     assert aos.schedule_1 == "Satellite-Alpha"
@@ -94,6 +99,7 @@ def test_create_activities_from_single_scheduled_link():
 
     # Validate LOS Event
     los = sat_activity.end_event
+    assert los is not None
     assert los.id == f"{link.link_id}_LOS"
     assert los.name == "LOS: Satellite-Alpha - GS-Kiruna"
     assert los.schedule_1 == "Satellite-Alpha"
@@ -135,7 +141,7 @@ def test_push_activities_to_satos_deduplication(mock_session, mock_put_events, m
     mock_put_activities.assert_called_once()
     passed_activities = mock_put_activities.call_args[0][0]
     assert len(passed_activities) == 2
-    expected_name = f"Pass {link.satellite_name} - {link.groundstation_name} at {link.start_time.isoformat()}"
+    expected_name = f"DOWNLINK_{link.link_id}_{link.satellite_name}-{link.groundstation_name}"
     assert passed_activities[0].name == expected_name
     assert passed_activities[1].name == expected_name
 

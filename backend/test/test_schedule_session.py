@@ -259,8 +259,11 @@ def test_trade_off_request_with_buffer_configs_dto():
     )
 
     result = state_manager.get_task_result(task_id)
+    assert result is not None
     assert result.status == "completed"
+    assert isinstance(result.payload, SessionPlanDTO)
     plan_payload: SessionPlanDTO = result.payload
+    assert plan_payload.satellite_configs is not None
     assert "Sat-X" in plan_payload.satellite_configs
     assert plan_payload.satellite_configs["Sat-X"].capacity_mb == 4000.0
     assert plan_payload.satellite_configs["Sat-X"].initial_level_mb == 800.0
@@ -287,8 +290,9 @@ def test_trade_off_processing_fails_hard_without_metadata():
     )
 
     task_state = state_manager.get_task(task_id)
-    assert task_state["status"] == "failed"
-    assert "Scenario time window" in task_state["message"]
+    assert task_state is not None
+    assert task_state.status == "failed"
+    assert "Scenario time window" in task_state.message
 
 
 def test_filter_pipeline_custom_downlink_rate():
@@ -363,8 +367,8 @@ def test_apply_override_auto_unpin_conflicts():
         scenario_start=t_start,
         scenario_end=t_end,
         satellite_configs={
-            "Sat-1": SatelliteBufferConfig(satellite_name="Sat-1", capacity_mb=2000.0, initial_level_mb=500.0),
-            "Sat-2": SatelliteBufferConfig(satellite_name="Sat-2", capacity_mb=2000.0, initial_level_mb=100.0),
+            "Sat-1": SatelliteBufferConfig(satellite_name="Sat-1", capacity_mb=2000.0, initial_level_mb=500.0, payload_generation_rate_mbps=20.0, downlink_rate_mbps=50.0),
+            "Sat-2": SatelliteBufferConfig(satellite_name="Sat-2", capacity_mb=2000.0, initial_level_mb=100.0, payload_generation_rate_mbps=20.0, downlink_rate_mbps=50.0),
         },
         session_id="sess_auto_unpin_test",
     )
@@ -395,7 +399,9 @@ def test_apply_override_auto_unpin_conflicts():
     assert session_after_pin_l1.current_plan["L1"].override_state == OverrideState.PINNED
     assert session_after_pin_l1.current_plan["L2"].is_scheduled is False
     assert session_after_pin_l1.current_plan["L2"].override_state == OverrideState.AUTO
-    assert "pinned" in session_after_pin_l1.current_plan["L2"].rejection_reason.lower()
+    rejection = session_after_pin_l1.current_plan["L2"].rejection_reason
+    assert rejection is not None
+    assert "pinned" in rejection.lower()
 
 
 

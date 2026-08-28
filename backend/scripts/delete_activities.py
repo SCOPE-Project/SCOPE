@@ -9,6 +9,7 @@ Description:
 """
 
 import sys
+import uuid
 import argparse
 from pathlib import Path
 from dotenv import load_dotenv
@@ -68,7 +69,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    uuids = [_clean_item(u) for u in args.uuids if u]
+    raw_uuids = [_clean_item(u) for u in args.uuids if u]
+    uuids = [uuid.UUID(u) for u in raw_uuids]
     schedule_names = [_clean_item(s) for s in args.schedule_names if s]
 
     if not uuids and not schedule_names and not args.clear_all:
