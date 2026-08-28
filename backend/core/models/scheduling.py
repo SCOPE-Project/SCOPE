@@ -61,6 +61,8 @@ class ScheduledLinkStatus:
     tradeoff_id: Optional[str] = None
     score: float = 0.0
     useful_data_offloaded_mb: float = 0.0
+    incoming_buffer_mb: float = 0.0
+    potential_data_downlink_mb: float = 0.0
     rejection_reason: Optional[str] = None
 
 

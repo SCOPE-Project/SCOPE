@@ -84,6 +84,8 @@ export const applySessionPlanToRows = (rows, sessionPlan) => {
       backendTradeOffId: status.tradeoff_id ?? null,
       tradeOffId: status.tradeoff_id ?? '—',
       usefulDataOffloadedMb: status.useful_data_offloaded_mb ?? 0,
+      incomingBufferMb: status.incoming_buffer_mb ?? null,
+      potentialDataDownlinkMb: status.potential_data_downlink_mb ?? null,
       rejectionReason: status.rejection_reason ?? link.ineligibility_reason ?? row.rejectionReason,
       conflictingActivityUuid: link.conflicting_activity_uuid ?? row.conflictingActivityUuid,
     }
@@ -141,6 +143,8 @@ export const buildTradeOffCardsFromPlan = (sessionPlan, rows) => {
           maxElevationDeg: row?.maxElevationDeg ?? status?.link?.max_elevation_deg,
           estimatedDataCapacityMb: row?.estimatedDataCapacityMb ?? status?.link?.estimated_data_capacity_mb ?? 0,
           usefulDataOffloadedMb: status?.useful_data_offloaded_mb ?? 0,
+          incomingBufferMb: status?.incoming_buffer_mb ?? row?.incomingBufferMb ?? null,
+          potentialDataDownlinkMb: status?.potential_data_downlink_mb ?? row?.potentialDataDownlinkMb ?? null,
           isScheduled: Boolean(status?.is_scheduled),
           overrideState: status?.override_state ?? 'auto',
           score: status?.score ?? 0,
@@ -235,4 +239,24 @@ export const buildCommitSummary = (finalScheduleRows = [], sessionPlan = null) =
     satellites,
     groundStations,
   }
+}
+
+export const filterVisibleTimelineActivities = (activities = [], timelineLayers = {}) => {
+  if (timelineLayers.payload === false) {
+    return []
+  }
+
+  return activities
+}
+
+export const filterVisibleTimelineLinks = (links = [], timelineLayers = {}) => {
+  if (timelineLayers.communication === false) {
+    return []
+  }
+
+  if (timelineLayers.ineligible) {
+    return links
+  }
+
+  return links.filter((link) => !link.ineligible)
 }

@@ -184,6 +184,8 @@ class ScheduledLinkStatusDTO(BaseModel):
     tradeoff_id: Optional[str] = None
     score: float = 0.0
     useful_data_offloaded_mb: float = 0.0
+    incoming_buffer_mb: float = 0.0
+    potential_data_downlink_mb: float = 0.0
     rejection_reason: Optional[str] = None
 
     @classmethod
@@ -195,6 +197,8 @@ class ScheduledLinkStatusDTO(BaseModel):
             tradeoff_id=domain.tradeoff_id,
             score=domain.score,
             useful_data_offloaded_mb=domain.useful_data_offloaded_mb,
+            incoming_buffer_mb=getattr(domain, "incoming_buffer_mb", 0.0),
+            potential_data_downlink_mb=getattr(domain, "potential_data_downlink_mb", 0.0),
             rejection_reason=domain.rejection_reason,
         )
 
@@ -313,6 +317,10 @@ class StrategyUpdateRequest(BaseModel):
     def to_domain(self):
         from core.scheduling.strategy import get_scoring_rule
         return get_scoring_rule(self.name, **self.parameters)
+
+
+class CommitRequestDTO(BaseModel):
+    user: Optional[str] = Field(default=None, description="Optional name of the mission operator committing the schedule")
 
 
 class CommitResponseDTO(BaseModel):

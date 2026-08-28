@@ -28,6 +28,8 @@ class AssetInformation(BaseModel):
 class AssetInitializationResponse(BaseModel):
     assets: list[AssetInformation]
     schedules: list[AssetSchedule]
+    cached: bool = False
+    source: Optional[str] = "initialization"
 
 
 class AssetListResponse(BaseModel):

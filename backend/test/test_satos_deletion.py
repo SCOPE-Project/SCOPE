@@ -2,9 +2,14 @@ import pytest
 import uuid
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+
+backend_dir = Path(__file__).resolve().parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 from core.models.activities import Activity, AssetSchedule
 from app.repositories import AssetRepository
@@ -505,8 +510,12 @@ def test_cli_delete_activities_dry_run():
     assert test_uuid in res.stdout
 
 
+@patch("scripts.delete_activities.satos_get_schedule_events")
+@patch("scripts.delete_activities.satos_get_activities_list")
 @patch("scripts.delete_activities.satos_get_schedules_list")
-def test_cli_clear_all_schedules_flag(mock_get_schedules):
+def test_cli_clear_all_schedules_flag(mock_get_schedules, mock_get_acts, mock_get_evs, capsys):
+    import scripts.delete_activities as delete_activities_mod
+
     mock_s1 = MagicMock()
     mock_s1.name = "Sat1_Group1"
     mock_s2 = MagicMock()
@@ -514,14 +523,18 @@ def test_cli_clear_all_schedules_flag(mock_get_schedules):
     mock_s3 = MagicMock()
     mock_s3.name = "OtherSat"
     mock_get_schedules.return_value = [mock_s1, mock_s2, mock_s3]
+    mock_get_acts.return_value = []
+    mock_get_evs.return_value = []
 
-    res = subprocess.run(
-        [sys.executable, "scripts/delete_activities.py", "--clear-all", "--dry-run"],
-        capture_output=True,
-        text=True,
-    )
-    assert res.returncode == 0
-    assert "[DRY RUN] Completed" in res.stdout
+    with patch("sys.argv", ["delete_activities.py", "--clear-all", "--dry-run"]):
+        delete_activities_mod.main()
+
+    captured = capsys.readouterr()
+    assert "[DRY RUN] Completed" in captured.out
+    assert "Discovered 2 schedule(s) matching 'Group1'" in captured.out
+    assert "Sat1_Group1" in captured.out
+    assert "Sat2_Group1" in captured.out
+    assert mock_get_acts.call_count == 2
 
 
 # =========================================================
@@ -560,5 +573,38 @@ def test_satos_clear_schedules_tracks_events_and_warnings(
     assert len(summary.failed_events["Sat-1"]) == 1
     assert summary.failed_events["Sat-1"][0]["uuid"] == str(ev_uuid_fail)
     assert "GS-1" in summary.failed_events["Sat-1"][0]["reason"]
+
+
+@patch("app.services.satos_connector.delete_schedule_events")
+@patch("app.services.satos_connector.delete_activity")
+@patch("app.services.satos_connector.get_activity_list")
+@patch("app.services.satos_connector.SatIOSession")
+def test_satos_clear_scope_activities_all_scope_initiators(mock_session_cls, mock_get_acts, mock_delete_act, mock_delete_ev):
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_delete_act.return_value = mock_resp
+    mock_delete_ev.return_value = mock_resp
+
+    u_auto = uuid.uuid4()
+    u_pinned = uuid.uuid4()
+    u_legacy = uuid.uuid4()
+    u_manual = uuid.uuid4()
+    u_pl = uuid.uuid4()
+
+    mock_act_auto = MagicMock(uuid=u_auto, initiator="SCOPE_auto-scheduled", start_event=None, end_event=None)
+    mock_act_pinned = MagicMock(uuid=u_pinned, initiator="SCOPE_pinned-Max Mustermann", start_event=None, end_event=None)
+    mock_act_legacy = MagicMock(uuid=u_legacy, initiator="SCOPE_Scheduler", start_event=None, end_event=None)
+    mock_act_manual = MagicMock(uuid=u_manual, initiator="Manual_Planner", start_event=None, end_event=None)
+    mock_act_pl = MagicMock(uuid=u_pl, initiator="PL Mission Planner", start_event=None, end_event=None)
+
+    mock_get_acts.return_value = [mock_act_auto, mock_act_pinned, mock_act_legacy, mock_act_manual, mock_act_pl]
+
+    cleared = satos_connector.satos_clear_scope_activities(["Sat-1"])
+
+    assert "Sat-1" in cleared
+    assert set(cleared["Sat-1"]) == {str(u_auto), str(u_pinned), str(u_legacy)}
+    assert str(u_manual) not in cleared["Sat-1"]
+    assert str(u_pl) not in cleared["Sat-1"]
+    assert mock_delete_act.call_count == 3
 
 

@@ -90,7 +90,10 @@ const postJson = (path, payload, signal) => requestJson(path, {
   signal,
 })
 
-export const initializeAssets = () => requestJson('/tasks/initialize')
+export const initializeAssets = ({ forceRefresh = false } = {}, signal) => {
+  const query = forceRefresh ? '?force_refresh=true' : ''
+  return requestJson(`/tasks/initialize${query}`, { signal })
+}
 
 export const startOrbitExtraction = (payload, signal) => (
   postJson('/tasks/extract-overpasses', payload, signal)
@@ -112,12 +115,11 @@ export const updateSessionStrategy = (sessionId, payload, signal) => (
   postJson(`/schedule/session/${encodeURIComponent(sessionId)}/strategy`, payload, signal)
 )
 
-export const commitSession = (sessionId, signal) => (
-  requestJson(`/schedule/session/${encodeURIComponent(sessionId)}/commit`, {
-    method: 'POST',
-    signal,
-  })
-)
+export const commitSession = (sessionId, user, signal) => {
+  const payload = typeof user === 'string' ? { user } : user && typeof user === 'object' && !('aborted' in user) ? user : {}
+  const abortSignal = user && typeof user === 'object' && 'aborted' in user ? user : signal
+  return postJson(`/schedule/session/${encodeURIComponent(sessionId)}/commit`, payload, abortSignal)
+}
 
 export const clearScopeActivities = (payload, signal) => (
   postJson('/utilities/satos/clear-scope-activities', payload, signal)

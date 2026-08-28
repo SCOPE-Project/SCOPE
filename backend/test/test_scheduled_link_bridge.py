@@ -65,7 +65,7 @@ def test_create_activities_from_single_scheduled_link():
     link = create_sample_scheduled_link()
     sat_activity, gs_activity = AssetRepository.create_activities_from_link_block(link)
 
-    expected_name = f"Pass {link.satellite_name} - {link.groundstation_name} at {link.start_time.isoformat()}"
+    expected_name = f"DOWNLINK_{link.link_id}_{link.satellite_name}-{link.groundstation_name}"
 
     # Validate Satellite Activity
     assert sat_activity.schedule_name == "Satellite-Alpha"

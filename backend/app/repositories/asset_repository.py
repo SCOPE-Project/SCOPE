@@ -2,6 +2,7 @@
 import uuid
 import warnings
 from collections.abc import Sequence
+from typing import Any
 from datetime import datetime, timezone
 from pydantic import UUID4, UUID7
 from api_connect.satio_session import SatIOSession
@@ -9,7 +10,7 @@ from pydantic_models.definitions import SatelliteModel
 from pydantic_models.activity import ActivityInfoModel, ActivityStatus
 from pydantic_models.schedule_event import ScheduleEventModel
 from core.models.assets import SatelliteInformation, GroundStationInformation
-from core.models.scheduling import LinkBlock
+from core.models.scheduling import LinkBlock, ScheduledLinkStatus, OverrideState
 from core.models.activities import Activity, AssetSchedule
 from app.models.satos import ActivityDTO, AssetInformation
 from app.services.satos_connector import (
@@ -41,11 +42,14 @@ class AssetRepository:
     _initialized = False
     
     @classmethod
-    def initialize_repository(cls, force_refresh: bool = False) -> None:
+    def initialize_repository(cls, force_refresh: bool = False) -> bool:
         """
         Retrieves the list of assets from SatOS, queries the full configuration
         for each asset, parses eligible assets as satellites or ground stations,
         and caches the results (including ineligible ones).
+
+        :param force_refresh: If True, clears existing cache and forces re-initialization.
+        :return: True if returned from cached repository, False if freshly initialized from SatOS.
         """
         # Clear existing caches
         if force_refresh:
@@ -58,7 +62,7 @@ class AssetRepository:
         
         # For debugging, read the return list from cache instead of querying SatOS
         if cls._initialized:
-            return
+            return True
 
         with SatIOSession():
             try:
@@ -171,6 +175,7 @@ class AssetRepository:
 
             cls._initialized_assets = results
             cls._initialized = True
+            return False
 
     @classmethod
     def get_assets(cls) -> list[AssetInformation]:
@@ -335,6 +340,8 @@ class AssetRepository:
     def create_activity_pair_from_link_block(
         cls,
         link: LinkBlock,
+        override_state: OverrideState | str | None = None,
+        user: str | None = None,
     ) -> tuple[Activity, Activity]:
         """
         Converts a single LinkBlock into a pair of correlated SatOS Activity objects:
@@ -343,6 +350,8 @@ class AssetRepository:
         and receive distinct, deterministic UUIDs.
 
         :param link: LinkBlock domain object
+        :param override_state: optional override state (auto, pinned, excluded)
+        :param user: optional operator name string for signing and initiator attribution
         :return: (satellite_activity, groundstation_activity)
         """
         start_time = link.start_time
@@ -352,6 +361,29 @@ class AssetRepository:
         end_time = link.end_time
         if end_time.tzinfo is None:
             end_time = end_time.replace(tzinfo=timezone.utc)
+
+        # Determine Initiator & Description
+        is_pinned = False
+        if isinstance(override_state, OverrideState):
+            is_pinned = (override_state == OverrideState.PINNED)
+        elif isinstance(override_state, str):
+            is_pinned = (override_state.lower() == "pinned")
+        elif hasattr(link, "override_state"):
+            link_ovr = getattr(link, "override_state")
+            if isinstance(link_ovr, OverrideState):
+                is_pinned = (link_ovr == OverrideState.PINNED)
+            elif isinstance(link_ovr, str):
+                is_pinned = (link_ovr.lower() == "pinned")
+
+        clean_user = user.strip() if user and isinstance(user, str) and user.strip() else None
+
+        if is_pinned:
+            initiator = f"SCOPE_pinned-{clean_user}" if clean_user else "SCOPE_pinned"
+        else:
+            initiator = "SCOPE_auto-scheduled"
+
+        base_desc = f"Downlink from {link.satellite_name} to {link.groundstation_name} from {start_time.isoformat()} to {end_time.isoformat()}"
+        act_description = f"{base_desc} (signed by {clean_user})" if clean_user else base_desc
 
         # 1. Create AOS Event
         aos_uuid = uuid.uuid4()
@@ -377,7 +409,6 @@ class AssetRepository:
 
         # 3. Create Satellite Activity
         act_name = f"DOWNLINK_{link.link_id}_{link.satellite_name}-{link.groundstation_name}"
-        act_description = f"Downlink from {link.satellite_name} to {link.groundstation_name} from {start_time.isoformat()} to {end_time.isoformat()}"
         sat_activity = Activity(
             uuid=uuid.uuid4(),
             schedule_name=link.satellite_name,
@@ -387,7 +418,7 @@ class AssetRepository:
             name=act_name,
             description=act_description,
             priority=1,
-            initiator="SCOPE_Scheduler",
+            initiator=initiator,
             executor=link.satellite_name,
         )
 
@@ -401,7 +432,7 @@ class AssetRepository:
             name=act_name,
             description=act_description,
             priority=1,
-            initiator="SCOPE_Scheduler",
+            initiator=initiator,
             executor=link.groundstation_name,
         )
 
@@ -412,18 +443,37 @@ class AssetRepository:
     @classmethod
     def create_activities_from_link_blocks(
         cls,
-        links: list[LinkBlock],
+        links: Sequence[LinkBlock | ScheduledLinkStatus | Any],
+        user: str | None = None,
     ) -> list[Activity]:
         """
-        Converts a collection of LinkBlock domain objects into a flat list
+        Converts a collection of LinkBlock or ScheduledLinkStatus domain objects into a flat list
         of SatOS Activity domain objects (two per link: satellite and groundstation).
 
-        :param links: sequence of LinkBlock domain objects
+        :param links: sequence of LinkBlock or ScheduledLinkStatus domain objects
+        :param user: optional operator name string for signing and initiator attribution
         :return: flat list of Activity domain objects
         """
         activities: list[Activity] = []
-        for link in links:
-            sat_act, gs_act = cls.create_activity_pair_from_link_block(link)
+        for item in links:
+            if isinstance(item, ScheduledLinkStatus):
+                sat_act, gs_act = cls.create_activity_pair_from_link_block(
+                    item.link,
+                    override_state=item.override_state,
+                    user=user,
+                )
+            elif isinstance(item, tuple) and len(item) == 2:
+                link_obj, override_state = item
+                sat_act, gs_act = cls.create_activity_pair_from_link_block(
+                    link_obj,
+                    override_state=override_state,
+                    user=user,
+                )
+            else:
+                sat_act, gs_act = cls.create_activity_pair_from_link_block(
+                    item,
+                    user=user,
+                )
             activities.extend([sat_act, gs_act])
         return activities
 

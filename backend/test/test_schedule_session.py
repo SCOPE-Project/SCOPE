@@ -404,4 +404,64 @@ def test_apply_override_auto_unpin_conflicts():
     assert "pinned" in rejection.lower()
 
 
+@patch("app.routers.schedule.push_activities_to_SatOS")
+def test_commit_schedule_with_user_and_initiators(mock_push):
+    filter_id = "test_filt_commit_user"
+    t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+    t_end = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
+
+    l1 = LinkBlock(link_id="L1", overpass_id="op1", satellite_name="Sat-1", groundstation_name="GS-1", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+    l2 = LinkBlock(link_id="L2", overpass_id="op2", satellite_name="Sat-2", groundstation_name="GS-2", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=50.0)
+
+    LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
+
+    session = SchedulingSessionManager.create_session(
+        filter_run_id=filter_id,
+        candidate_links=[l1, l2],
+        scenario_start=t_start,
+        scenario_end=t_end,
+        satellite_configs={
+            "Sat-1": SatelliteBufferConfig(satellite_name="Sat-1", capacity_mb=2000.0, initial_level_mb=500.0, payload_generation_rate_mbps=20.0, downlink_rate_mbps=50.0),
+            "Sat-2": SatelliteBufferConfig(satellite_name="Sat-2", capacity_mb=2000.0, initial_level_mb=500.0, payload_generation_rate_mbps=20.0, downlink_rate_mbps=50.0),
+        },
+        session_id="sess_commit_user_test",
+    )
+
+    # Pin L1, leave L2 in AUTO
+    SchedulingSessionManager.apply_override(
+        session_id="sess_commit_user_test",
+        link_id="L1",
+        override_state=OverrideState.PINNED,
+    )
+
+    # Commit with user="Alice Walker"
+    response = client.post(
+        "/schedule/session/sess_commit_user_test/commit",
+        json={"user": "Alice Walker"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["committed_links_count"] == 2
+    assert data["created_activities_count"] == 4
+
+    # Verify pushed activities
+    mock_push.assert_called_once()
+    activities = mock_push.call_args[0][0]
+    assert len(activities) == 4
+
+    # Pinned L1 activities (sat + gs)
+    l1_activities = [a for a in activities if "L1" in a.name]
+    assert len(l1_activities) == 2
+    for a in l1_activities:
+        assert a.initiator == "SCOPE_pinned-Alice Walker"
+        assert "(signed by Alice Walker)" in a.description
+
+    # Auto L2 activities (sat + gs)
+    l2_activities = [a for a in activities if "L2" in a.name]
+    assert len(l2_activities) == 2
+    for a in l2_activities:
+        assert a.initiator == "SCOPE_auto-scheduled"
+        assert "(signed by Alice Walker)" in a.description
+
+
 

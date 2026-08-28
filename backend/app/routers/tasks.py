@@ -21,11 +21,16 @@ router = APIRouter(prefix="/tasks", tags=["Task Processing Workspace"])
 
 @router.get("/initialize", response_model=AssetInitializationResponse)
 def initialize_assets(force_refresh: bool = False):
-    AssetRepository.initialize_repository(force_refresh=force_refresh)
+    was_cached = AssetRepository.initialize_repository(force_refresh=force_refresh)
     
     initialized_asset_infos = AssetRepository.get_assets()
     initialized_asset_schedules = AssetRepository.get_asset_schedules()
-    return {"assets": initialized_asset_infos, "schedules": initialized_asset_schedules}
+    return {
+        "assets": initialized_asset_infos,
+        "schedules": initialized_asset_schedules,
+        "cached": was_cached,
+        "source": "cache" if was_cached else "initialization",
+    }
 
 @router.post("/extract-overpasses", response_model=TaskReceiptResponse)
 def trigger_orbit_engine(payload: OrbitEngineRequest, background_tasks: BackgroundTasks):
