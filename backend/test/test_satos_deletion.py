@@ -2,9 +2,14 @@ import pytest
 import uuid
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+
+backend_dir = Path(__file__).resolve().parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 from core.models.activities import Activity, AssetSchedule
 from app.repositories import AssetRepository
@@ -505,8 +510,12 @@ def test_cli_delete_activities_dry_run():
     assert test_uuid in res.stdout
 
 
+@patch("scripts.delete_activities.satos_get_schedule_events")
+@patch("scripts.delete_activities.satos_get_activities_list")
 @patch("scripts.delete_activities.satos_get_schedules_list")
-def test_cli_clear_all_schedules_flag(mock_get_schedules):
+def test_cli_clear_all_schedules_flag(mock_get_schedules, mock_get_acts, mock_get_evs, capsys):
+    import scripts.delete_activities as delete_activities_mod
+
     mock_s1 = MagicMock()
     mock_s1.name = "Sat1_Group1"
     mock_s2 = MagicMock()
@@ -514,14 +523,18 @@ def test_cli_clear_all_schedules_flag(mock_get_schedules):
     mock_s3 = MagicMock()
     mock_s3.name = "OtherSat"
     mock_get_schedules.return_value = [mock_s1, mock_s2, mock_s3]
+    mock_get_acts.return_value = []
+    mock_get_evs.return_value = []
 
-    res = subprocess.run(
-        [sys.executable, "scripts/delete_activities.py", "--clear-all", "--dry-run"],
-        capture_output=True,
-        text=True,
-    )
-    assert res.returncode == 0
-    assert "[DRY RUN] Completed" in res.stdout
+    with patch("sys.argv", ["delete_activities.py", "--clear-all", "--dry-run"]):
+        delete_activities_mod.main()
+
+    captured = capsys.readouterr()
+    assert "[DRY RUN] Completed" in captured.out
+    assert "Discovered 2 schedule(s) matching 'Group1'" in captured.out
+    assert "Sat1_Group1" in captured.out
+    assert "Sat2_Group1" in captured.out
+    assert mock_get_acts.call_count == 2
 
 
 # =========================================================

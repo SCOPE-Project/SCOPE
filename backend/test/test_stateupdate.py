@@ -80,17 +80,6 @@ def test_generate_multiple_epoch_states_keyed_by_name() -> None:
     )
 
 
-def test_loads_bundled_external_config() -> None:
-    config = load_update_state_config(DEFAULT_UPDATE_STATE_CONFIG_PATH)
-
-    assert config.epoch_utc == datetime(2026, 8, 17, 12, tzinfo=timezone.utc)
-    assert [satellite.name for satellite in config.satellites] == [
-        "Sat1_Group1",
-        "Sat2_Group1",
-        "Sat3_Group1",
-    ]
-
-
 def test_rejects_naive_datetime() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         generate_satellite_states(

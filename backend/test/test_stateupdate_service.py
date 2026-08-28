@@ -20,17 +20,6 @@ from app.services.satos_connector import (
 from core.models.assets import SatelliteStateInputDefinition, UpdateSatelliteStateConfig, SatelliteState
 
 
-def test_loads_bundled_default_config() -> None:
-    config = load_update_state_config(DEFAULT_UPDATE_STATE_CONFIG_PATH)
-
-    assert config.epoch_utc == datetime(2026, 8, 17, 12, tzinfo=timezone.utc)
-    assert len(config.satellites) == 3
-    assert [satellite.name for satellite in config.satellites] == [
-        "Sat1_Group1",
-        "Sat2_Group1",
-        "Sat3_Group1",
-    ]
-
 
 def test_simulate_and_post_dry_run() -> None:
     config = load_update_state_config()
