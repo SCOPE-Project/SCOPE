@@ -2643,19 +2643,20 @@ body {
   padding: 0.8rem 0.85rem;
   min-width: 0;
   box-shadow: inset 3px 0 0 var(--tradeoff-accent, transparent);
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
-.tradeoff-option--selected {
-  border-color: #b8d5bf;
-  background: #f4faf5;
-  box-shadow: inset 3px 0 0 var(--tradeoff-accent, transparent);
+.tradeoff-option:hover {
+  border-color: #c9a37e;
+}
+
+.tradeoff-option:focus-visible {
+  outline: 2px solid rgba(185, 87, 31, 0.7);
+  outline-offset: 2px;
 }
 
 .tradeoff-option--timeline-drawer {
-  box-shadow: none;
-}
-
-.tradeoff-option--timeline-drawer.tradeoff-option--selected {
   box-shadow: none;
 }
 
@@ -2696,6 +2697,44 @@ body {
   border-color: #97b4d3;
 }
 
+.tradeoff-override-controls {
+  display: flex;
+  width: 100%;
+  gap: 0.4rem;
+}
+
+.tradeoff-override-button {
+  flex: 1 1 0;
+  padding: 0.5rem 0.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.tradeoff-override-button:hover:not(:disabled),
+.tradeoff-override-button:focus-visible {
+  background: #ebf1f8;
+  border-color: #97b4d3;
+  color: var(--accent-primary);
+}
+
+.tradeoff-override-button--active {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+}
+
+.tradeoff-override-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .tradeoff-option--selected .tradeoff-select-button {
   background: #d9f1df;
   border-color: #5aaf70;
@@ -2704,29 +2743,9 @@ body {
 
 .tradeoff-option-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.55rem;
   margin-top: 0.75rem;
-}
-
-.tradeoff-jump-button {
-  width: 100%;
-  font-family: var(--font-family);
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  background: #f4f6f8;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-btn);
-  padding: 0.65rem 0.8rem;
-  cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-}
-
-.tradeoff-jump-button:hover {
-  background: #ebf1f8;
-  border-color: #97b4d3;
-  color: #234b79;
 }
 
 .map-panel {
@@ -4188,6 +4207,73 @@ body {
   transform: translateY(-1px);
 }
 
+/* Per-asset "I reviewed this" checkbox that sits below each asset's link
+   table -- every one of these must be checked before the commit button
+   above unlocks. */
+.staging-asset-confirm-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--line-soft);
+  background: #fafbfc;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.staging-asset-confirm-label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.staging-asset-confirm-label input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: 0 0 auto;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.staging-asset-confirm-bar--confirmed {
+  background: var(--success-bg);
+  border-top-color: var(--success-border);
+}
+
+.staging-asset-confirm-bar--confirmed .staging-asset-confirm-label {
+  color: var(--success-text);
+}
+
+.staging-confirm-column,
+.staging-confirm-cell {
+  text-align: right;
+}
+
+.staging-link-confirm-checkbox {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.staging-links-table tr.staging-link-row--confirmed {
+  background: var(--success-bg);
+}
+
+.staging-commit-tooltip {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  max-width: 22rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #d7b27a;
+  border-radius: 0.18rem;
+  background: #fff7ea;
+  color: #7a4b00;
+}
+
 .timeline-scroll {
   display: block;
   width: 100%;
@@ -5431,7 +5517,7 @@ body {
 
 .timeline-label-cell--marked,
 .timeline-track-row--marked {
-  background: rgba(46, 118, 184, 0.1);
+  background: rgba(46, 118, 184, 0.16);
 }
 
 .timeline-label-cell--selected,
@@ -5597,10 +5683,29 @@ body {
 .timeline-bar--marked {
   border-color: #2e76b8;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
-    0 0 0 2px rgba(46, 118, 184, 0.62),
-    0 4px 10px rgba(31, 42, 51, 0.16);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+    0 0 0 3px rgba(46, 118, 184, 0.85),
+    0 0 0 6px rgba(46, 118, 184, 0.22),
+    0 4px 12px rgba(31, 42, 51, 0.22);
   z-index: 7;
+  animation: timeline-bar-marked-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes timeline-bar-marked-pulse {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+      0 0 0 3px rgba(46, 118, 184, 0.85),
+      0 0 0 6px rgba(46, 118, 184, 0.22),
+      0 4px 12px rgba(31, 42, 51, 0.22);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+      0 0 0 4px rgba(46, 118, 184, 0.95),
+      0 0 0 11px rgba(46, 118, 184, 0.12),
+      0 4px 14px rgba(31, 42, 51, 0.26);
+  }
 }
 
 .timeline-bar--tooltip-pinned {
@@ -5613,16 +5718,35 @@ body {
 }
 
 .tradeoff-option--marked {
-  outline: 2px solid rgba(185, 87, 31, 0.62);
-  outline-offset: 2px;
+  border-color: #2e76b8;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+    0 0 0 3px rgba(46, 118, 184, 0.85),
+    0 0 0 6px rgba(46, 118, 184, 0.22);
+  animation: tradeoff-option-marked-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes tradeoff-option-marked-pulse {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+      0 0 0 3px rgba(46, 118, 184, 0.85),
+      0 0 0 6px rgba(46, 118, 184, 0.22);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+      0 0 0 4px rgba(46, 118, 184, 0.95),
+      0 0 0 11px rgba(46, 118, 184, 0.12);
+  }
 }
 
 .tradeoff-marked-flag {
   padding: 0.1rem 0.36rem;
-  border: 1px solid #d8b089;
+  border: 1px solid rgba(46, 118, 184, 0.45);
   border-radius: 999px;
-  background: #f5e6d8;
-  color: #8c4f18;
+  background: rgba(46, 118, 184, 0.12);
+  color: #1d5686;
   font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.03em;

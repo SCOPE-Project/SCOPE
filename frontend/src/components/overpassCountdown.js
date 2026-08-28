@@ -12,29 +12,36 @@ const pad = (value) => String(value).padStart(2, '0')
 
 // Ceiling rather than floor: while any part of a second is left the pass has
 // not started yet, so the readout must not already show T-00:00:00.
-export const formatCountdownDelta = (deltaMs) => {
+//
+// `includeSeconds: false` drops the seconds component even below a day. Use
+// it whenever the caller only re-reads "now" once a minute (the Overview
+// column does, to cut re-renders) -- a seconds digit that never actually
+// ticks would just be a stale, misleading number sitting on screen.
+export const formatCountdownDelta = (deltaMs, { includeSeconds = true } = {}) => {
   const totalSeconds = Math.max(0, Math.ceil(deltaMs / SECOND_MS))
   const days = Math.floor(totalSeconds / 86400)
   const hours = Math.floor((totalSeconds % 86400) / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   const seconds = totalSeconds % 60
+  const hoursMinutes = `${pad(hours)}:${pad(minutes)}`
 
   // Seconds are dropped beyond a day: they are noise at that range and the
   // column is too narrow to carry them.
   if (days > 0) {
-    return `${days}d ${pad(hours)}:${pad(minutes)}`
+    return `${days}d ${hoursMinutes}`
   }
 
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`
+  return includeSeconds ? `${hoursMinutes}:${pad(seconds)}` : hoursMinutes
 }
 
 /**
  * @param {string} startTime ISO timestamp of AOS
  * @param {string} endTime   ISO timestamp of LOS
  * @param {number} nowMs     current epoch milliseconds
+ * @param {{includeSeconds?: boolean}} [options] forwarded to formatCountdownDelta
  * @returns {{label: string, state: 'future'|'active'|'past'|'unknown', deltaMs: number|null}}
  */
-export const formatOverpassCountdown = (startTime, endTime, nowMs) => {
+export const formatOverpassCountdown = (startTime, endTime, nowMs, options = {}) => {
   const startMs = Date.parse(startTime)
 
   if (!Number.isFinite(startMs) || !Number.isFinite(nowMs)) {
@@ -52,7 +59,7 @@ export const formatOverpassCountdown = (startTime, endTime, nowMs) => {
   }
 
   return {
-    label: `T-${formatCountdownDelta(startMs - nowMs)}`,
+    label: `T-${formatCountdownDelta(startMs - nowMs, options)}`,
     state: 'future',
     deltaMs: startMs - nowMs,
   }

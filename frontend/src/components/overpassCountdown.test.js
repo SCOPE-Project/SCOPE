@@ -26,6 +26,14 @@ describe('formatCountdownDelta', () => {
   it('clamps negative deltas to zero', () => {
     expect(formatCountdownDelta(-5000)).toBe('00:00:00')
   })
+
+  it('drops seconds when includeSeconds is false, even below one day', () => {
+    expect(formatCountdownDelta(3 * 3600000 + 12 * 60000 + 45000, { includeSeconds: false })).toBe('03:12')
+  })
+
+  it('keeps the "Xd HH:MM" form beyond a day regardless of includeSeconds', () => {
+    expect(formatCountdownDelta(2 * 86400000 + 3 * 3600000 + 12 * 60000, { includeSeconds: false })).toBe('2d 03:12')
+  })
 })
 
 describe('formatOverpassCountdown', () => {
@@ -73,5 +81,10 @@ describe('formatOverpassCountdown', () => {
     expect(formatOverpassCountdown(start, undefined, NOW).label).toBe('T-00:01:00')
     expect(formatOverpassCountdown(start, undefined, NOW + 1000).label).toBe('T-00:00:59')
     expect(formatOverpassCountdown(start, undefined, at(start) - 1).label).toBe('T-00:00:01')
+  })
+
+  it('forwards includeSeconds so the Overview column can update once a minute', () => {
+    const result = formatOverpassCountdown('2026-08-27T13:30:00Z', '2026-08-27T13:40:00Z', NOW, { includeSeconds: false })
+    expect(result.label).toBe('T-01:30')
   })
 })
