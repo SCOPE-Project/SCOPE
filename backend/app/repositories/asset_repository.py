@@ -42,11 +42,14 @@ class AssetRepository:
     _initialized = False
     
     @classmethod
-    def initialize_repository(cls, force_refresh: bool = False) -> None:
+    def initialize_repository(cls, force_refresh: bool = False) -> bool:
         """
         Retrieves the list of assets from SatOS, queries the full configuration
         for each asset, parses eligible assets as satellites or ground stations,
         and caches the results (including ineligible ones).
+
+        :param force_refresh: If True, clears existing cache and forces re-initialization.
+        :return: True if returned from cached repository, False if freshly initialized from SatOS.
         """
         # Clear existing caches
         if force_refresh:
@@ -59,7 +62,7 @@ class AssetRepository:
         
         # For debugging, read the return list from cache instead of querying SatOS
         if cls._initialized:
-            return
+            return True
 
         with SatIOSession():
             try:
@@ -172,6 +175,7 @@ class AssetRepository:
 
             cls._initialized_assets = results
             cls._initialized = True
+            return False
 
     @classmethod
     def get_assets(cls) -> list[AssetInformation]:

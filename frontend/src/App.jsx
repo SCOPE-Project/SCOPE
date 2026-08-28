@@ -241,6 +241,7 @@ export default function App() {
   const schedulerAbortControllerRef = useRef(null)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
+  const [assetsCached, setAssetsCached] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [backendAlive, setBackendAlive] = useState(null)
@@ -1610,18 +1611,20 @@ export default function App() {
     }
   }
 
-  const fetchAssets = async () => {
+  const fetchAssets = async ({ forceRefresh = false } = {}) => {
     setLoading(true)
     setError(null)
     setAssets([])
     setAssetSchedules([])
+    setAssetsCached(null)
     resetWorkspaceState()
     try {
-      const data = await initializeAssets()
+      const data = await initializeAssets({ forceRefresh })
       if (data && Array.isArray(data.assets)) {
         setSatosAlive(true)
         setAssets(data.assets)
         setAssetSchedules(Array.isArray(data.schedules) ? data.schedules : [])
+        setAssetsCached(Boolean(data.cached))
       } else {
         throw new Error("Invalid response format from server")
       }
@@ -2281,9 +2284,11 @@ export default function App() {
     : missionAssetsLoaded
       ? {
         tone: 'ready',
-        label: `Mission assets loaded \u2014 ${assets.length} asset${assets.length === 1 ? '' : 's'} from SatOS`,
+        label: assetsCached
+          ? `Mission assets loaded from Python session cache \u2014 ${assets.length} asset${assets.length === 1 ? '' : 's'}`
+          : `Mission assets loaded from SatOS initialization \u2014 ${assets.length} asset${assets.length === 1 ? '' : 's'}`,
         busy: false,
-        retryLabel: backendAlive ? 'Reload' : null,
+        retryLabel: backendAlive ? 'RELOAD' : null,
       }
       : backendAlive === null
         ? {
@@ -5181,8 +5186,9 @@ export default function App() {
                       <button
                         type="button"
                         className="landing-assets-status-action"
-                        onClick={fetchAssets}
+                        onClick={() => fetchAssets({ forceRefresh: true })}
                         disabled={launchingScheduler}
+                        title={missionAssetsLoaded ? 'Force fresh re-initialization from SatOS' : 'Retry loading assets'}
                       >
                         {missionAssetsStatus.retryLabel}
                       </button>

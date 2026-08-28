@@ -90,7 +90,10 @@ const postJson = (path, payload, signal) => requestJson(path, {
   signal,
 })
 
-export const initializeAssets = () => requestJson('/tasks/initialize')
+export const initializeAssets = ({ forceRefresh = false } = {}, signal) => {
+  const query = forceRefresh ? '?force_refresh=true' : ''
+  return requestJson(`/tasks/initialize${query}`, { signal })
+}
 
 export const startOrbitExtraction = (payload, signal) => (
   postJson('/tasks/extract-overpasses', payload, signal)
