@@ -91,14 +91,16 @@ def test_satos_delete_activities_batch(mock_session_cls, mock_delete_act, mock_g
 
     deleted = satos_connector.satos_delete_activities([uuid1, uuid2])
 
-    assert deleted == [str(uuid1), str(uuid2)]
+    assert deleted.deleted_activities == [str(uuid1), str(uuid2)]
+    assert len(deleted.deleted_events) == 2
     assert mock_delete_act.call_count == 2
     assert mock_delete_ev.call_count == 2
 
 
 def test_satos_delete_activities_empty():
     deleted = satos_connector.satos_delete_activities([])
-    assert deleted == []
+    assert deleted.deleted_activities == []
+
 
 
 @patch("app.services.satos_connector.delete_schedule_events")
@@ -129,17 +131,17 @@ def test_satos_clear_schedules(mock_session_cls, mock_get_acts, mock_delete_act,
 
     cleared = satos_connector.satos_clear_schedules(["Sat-1", "GS-1"])
 
-    assert "Sat-1" in cleared
-    assert cleared["Sat-1"] == [str(uuid1), str(uuid2)]
-    assert "GS-1" in cleared
-    assert cleared["GS-1"] == []
+    assert "Sat-1" in cleared.deleted_activities
+    assert cleared.deleted_activities["Sat-1"] == [str(uuid1), str(uuid2)]
+    assert "GS-1" in cleared.deleted_activities
+    assert cleared.deleted_activities["GS-1"] == []
     assert mock_delete_act.call_count == 2
     assert mock_delete_ev.call_count == 1
 
 
 def test_satos_clear_schedules_empty():
     cleared = satos_connector.satos_clear_schedules([])
-    assert cleared == {}
+    assert cleared.deleted_activities == {}
 
 
 # =========================================================
@@ -152,7 +154,12 @@ def test_repository_delete_activities_updates_caches(mock_connector_delete):
     uuid2 = uuid.uuid4()
     uuid3 = uuid.uuid4()
 
-    mock_connector_delete.return_value = [str(uuid1), str(uuid2)]
+    mock_summary = satos_connector.ActivityDeleteSummary(
+        deleted_activities=[str(uuid1), str(uuid2)],
+        deleted_events=[],
+        failed_events=[],
+    )
+    mock_connector_delete.return_value = mock_summary
 
     act1 = Activity(uuid=uuid1, schedule_name="Sat-A", status=2, start_event=MagicMock(), end_event=MagicMock(), name="Act1")
     act2 = Activity(uuid=uuid2, schedule_name="Sat-A", status=2, start_event=MagicMock(), end_event=MagicMock(), name="Act2")
@@ -167,9 +174,9 @@ def test_repository_delete_activities_updates_caches(mock_connector_delete):
         "Sat-B": [MagicMock(uuid=uuid3)],
     }
 
-    deleted = AssetRepository.delete_activities_from_satos([uuid1, uuid2])
+    deleted_summary = AssetRepository.delete_activities_from_satos([uuid1, uuid2])
 
-    assert deleted == [str(uuid1), str(uuid2)]
+    assert deleted_summary.deleted_activities == [str(uuid1), str(uuid2)]
     # Sat-A should now have no activities
     sat_a_sched = next(s for s in AssetRepository.get_asset_schedules() if s.name == "Sat-A")
     assert sat_a_sched.activities == []
@@ -186,13 +193,18 @@ def test_repository_clear_schedules_updates_caches(mock_connector_clear):
     uuid1 = uuid.uuid4()
     uuid2 = uuid.uuid4()
 
-    mock_connector_clear.return_value = {
-        "Sat-A": [str(uuid1)],
-        "Sat-B": [str(uuid2)],
-    }
+    mock_summary = satos_connector.ScheduleClearSummary(
+        deleted_activities={
+            "Sat-A": [str(uuid1)],
+            "Sat-B": [str(uuid2)],
+        },
+        deleted_events={"Sat-A": [], "Sat-B": []},
+        failed_events={"Sat-A": [], "Sat-B": []},
+    )
+    mock_connector_clear.return_value = mock_summary
 
     act1 = Activity(uuid=uuid1, schedule_name="Sat-A", status=2, start_event=MagicMock(), end_event=MagicMock(), name="Act1")
-    act2 = Activity(uuid=uuid2, schedule_name="Sat-B", status=2, start_event=MagicMock(), end_event=MagicMock(), name="Act2")
+    act2 = Activity(uuid=uuid2, schedule_name="Sat-A", status=2, start_event=MagicMock(), end_event=MagicMock(), name="Act2")
 
     AssetRepository._schedules = [
         AssetSchedule(name="Sat-A", activities=[act1]),
@@ -203,12 +215,14 @@ def test_repository_clear_schedules_updates_caches(mock_connector_clear):
         "Sat-B": [MagicMock(uuid=uuid2)],
     }
 
-    cleared = AssetRepository.clear_schedules_in_satos(["Sat-A"])
+    cleared_summary = AssetRepository.clear_schedules_in_satos(["Sat-A"])
 
-    assert "Sat-A" in cleared
+    assert "Sat-A" in cleared_summary.deleted_activities
     assert AssetRepository.get_asset_raw_schedules()["Sat-A"] == []
     sat_a_sched = next(s for s in AssetRepository.get_asset_schedules() if s.name == "Sat-A")
     assert sat_a_sched.activities == []
+
+
 
 
 # =========================================================
@@ -218,7 +232,9 @@ def test_repository_clear_schedules_updates_caches(mock_connector_clear):
 @patch("app.repositories.asset_repository.AssetRepository.delete_activities_from_satos")
 def test_router_delete_single_activity_success(mock_repo_delete):
     act_uuid = uuid.uuid4()
-    mock_repo_delete.return_value = [str(act_uuid)]
+    mock_repo_delete.return_value = satos_connector.ActivityDeleteSummary(
+        deleted_activities=[str(act_uuid)]
+    )
 
     client = TestClient(app)
     response = client.delete(f"/satos/activities/{act_uuid}")
@@ -232,7 +248,9 @@ def test_router_delete_single_activity_success(mock_repo_delete):
 @patch("app.repositories.asset_repository.AssetRepository.delete_activities_from_satos")
 def test_router_delete_single_activity_not_found(mock_repo_delete):
     act_uuid = uuid.uuid4()
-    mock_repo_delete.return_value = []
+    mock_repo_delete.return_value = satos_connector.ActivityDeleteSummary(
+        deleted_activities=[]
+    )
 
     client = TestClient(app)
     response = client.delete(f"/satos/activities/{act_uuid}")
@@ -246,8 +264,12 @@ def test_router_batch_delete_activities_endpoint(mock_clear_repo, mock_delete_re
     uuid1 = uuid.uuid4()
     uuid2 = uuid.uuid4()
 
-    mock_clear_repo.return_value = {"Sat-Alpha": [str(uuid1)]}
-    mock_delete_repo.return_value = [str(uuid2)]
+    mock_clear_repo.return_value = satos_connector.ScheduleClearSummary(
+        deleted_activities={"Sat-Alpha": [str(uuid1)]}
+    )
+    mock_delete_repo.return_value = satos_connector.ActivityDeleteSummary(
+        deleted_activities=[str(uuid2)]
+    )
 
     client = TestClient(app)
     payload = {
@@ -277,7 +299,9 @@ def test_router_batch_delete_empty():
 @patch("app.repositories.asset_repository.AssetRepository.clear_schedules_in_satos")
 def test_router_delete_activities_by_schedule_names(mock_clear_repo):
     uuid1 = uuid.uuid4()
-    mock_clear_repo.return_value = {"Sat-1": [str(uuid1)]}
+    mock_clear_repo.return_value = satos_connector.ScheduleClearSummary(
+        deleted_activities={"Sat-1": [str(uuid1)]}
+    )
 
     client = TestClient(app)
     response = client.post("/satos/activities/delete", json={"schedule_names": ["Sat-1"]})
@@ -288,6 +312,7 @@ def test_router_delete_activities_by_schedule_names(mock_clear_repo):
     assert data["deleted_count"] == 1
     assert data["deleted_activities"] == [str(uuid1)]
     assert data["schedules_cleared"] == {"Sat-1": [str(uuid1)]}
+
 
 
 # =========================================================
@@ -402,7 +427,7 @@ def test_repository_clear_scope_activities_updates_caches(mock_connector_clear):
     act2 = Activity(uuid=uuid2, schedule_name="Sat-A", status=2, start_event=MagicMock(), end_event=MagicMock(), name="Act2")
 
     AssetRepository._schedules = [
-        AssetSchedule(name="Sat-A", activities=[act1, act2], schedule_events=[]),
+        AssetSchedule(name="Sat-A", activities=[act1, act2]),
     ]
     AssetRepository._raw_schedules = {
         "Sat-A": [MagicMock(uuid=uuid1), MagicMock(uuid=uuid2)],
@@ -478,3 +503,62 @@ def test_cli_delete_activities_dry_run():
     assert res.returncode == 0
     assert "[DRY RUN] Completed" in res.stdout
     assert test_uuid in res.stdout
+
+
+@patch("scripts.delete_activities.satos_get_schedules_list")
+def test_cli_clear_all_schedules_flag(mock_get_schedules):
+    mock_s1 = MagicMock()
+    mock_s1.name = "Sat1_Group1"
+    mock_s2 = MagicMock()
+    mock_s2.name = "Sat2_Group1"
+    mock_s3 = MagicMock()
+    mock_s3.name = "OtherSat"
+    mock_get_schedules.return_value = [mock_s1, mock_s2, mock_s3]
+
+    res = subprocess.run(
+        [sys.executable, "scripts/delete_activities.py", "--clear-all", "--dry-run"],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0
+    assert "[DRY RUN] Completed" in res.stdout
+
+
+# =========================================================
+# 5. Detailed Clear and Event Warning Tests
+# =========================================================
+
+@patch("app.services.satos_connector.delete_schedule_events")
+@patch("app.services.satos_connector.get_schedule_events")
+@patch("app.services.satos_connector.delete_activity")
+@patch("app.services.satos_connector.get_activity_list")
+@patch("app.services.satos_connector.SatIOSession")
+def test_satos_clear_schedules_tracks_events_and_warnings(
+    mock_session_cls, mock_get_acts, mock_delete_act, mock_get_evs, mock_delete_ev
+):
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_delete_act.return_value = mock_resp
+
+    ev_uuid_success = uuid.uuid4()
+    ev_uuid_fail = uuid.uuid4()
+
+    mock_ev_success = MagicMock(uuid=ev_uuid_success, id="ev_1", name="Event 1", schedule_1="Sat-1", schedule_2=None)
+    mock_ev_fail = MagicMock(uuid=ev_uuid_fail, id="ev_2", name="Event 2", schedule_1="Sat-1", schedule_2="GS-1")
+
+    mock_get_acts.return_value = []
+    mock_get_evs.return_value = [mock_ev_success, mock_ev_fail]
+
+    # Success on first event, failure on second
+    mock_err_resp = MagicMock(status_code=404, text='{"detail":"Not Found"}')
+    mock_delete_ev.side_effect = [mock_resp, Exception("404 error")]
+
+    summary = satos_connector.satos_clear_schedules(["Sat-1"])
+
+    assert "Sat-1" in summary.deleted_events
+    assert str(ev_uuid_success) in summary.deleted_events["Sat-1"]
+    assert len(summary.failed_events["Sat-1"]) == 1
+    assert summary.failed_events["Sat-1"][0]["uuid"] == str(ev_uuid_fail)
+    assert "GS-1" in summary.failed_events["Sat-1"][0]["reason"]
+
+

@@ -1,0 +1,4 @@
+[environment]
+python = "backend/.venv"
+extra-paths = ["backend"]
+

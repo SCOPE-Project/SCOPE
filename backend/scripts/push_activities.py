@@ -121,8 +121,10 @@ def main() -> None:
         print(f"  - [{act.schedule_name}] {act.name} (UUID: {act.uuid})")
         print(f"      Priority: {act.priority} | Status: {act.status}")
         print(f"      Initiator: {act.initiator} | Executor: {act.executor}")
-        print(f"      Start Event: {act.start_event.name} @ {act.start_event.timestamp.isoformat()} (UUID: {act.start_event.uuid})")
-        print(f"      End Event:   {act.end_event.name} @ {act.end_event.timestamp.isoformat()} (UUID: {act.end_event.uuid})")
+        if act.start_event:
+            print(f"      Start Event: {act.start_event.name} @ {act.start_event.timestamp.isoformat()} (UUID: {act.start_event.uuid})")
+        if act.end_event:
+            print(f"      End Event:   {act.end_event.name} @ {act.end_event.timestamp.isoformat()} (UUID: {act.end_event.uuid})")
 
     if args.dry_run:
         print("\n[DRY RUN] Completed. No requests sent to SatOS API.")

@@ -53,7 +53,7 @@ class DeleteActivityResponse(BaseModel):
 
 
 class DeleteActivitiesRequest(BaseModel):
-    activity_uuids: list[Union[UUID4, UUID7, str]] = []
+    activity_uuids: list[UUID4 | UUID7] = []
     schedule_names: list[str] = []
 
 

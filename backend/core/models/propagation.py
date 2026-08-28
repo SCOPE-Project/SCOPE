@@ -56,11 +56,11 @@ class OverpassProfilePoint:
 @dataclass
 class OverpassBlock:
     overpass_id: str
+    start_time: datetime
+    end_time: datetime
     overpass_name: str = ""
     satellite_name: str = ""
     groundstation_name: str = ""
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
     duration_seconds: float = 0.0
     max_elevation_deg: float = 0.0
     high_res_trajectory: List[OverpassProfilePoint] = field(default_factory=list)

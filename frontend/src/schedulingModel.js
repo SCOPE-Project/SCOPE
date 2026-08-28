@@ -3,16 +3,6 @@ const toTimestamp = (value) => {
   return Number.isFinite(timestamp) ? timestamp : 0
 }
 
-const parseOverpassSequence = (overpassId) => {
-  const match = String(overpassId ?? '').match(/(\d+)$/)
-  return match ? Number.parseInt(match[1], 10) : Number.POSITIVE_INFINITY
-}
-
-const parseLinkSequence = (linkId) => {
-  const match = String(linkId ?? '').match(/(\d+)$/)
-  return match ? Number.parseInt(match[1], 10) : Number.POSITIVE_INFINITY
-}
-
 const eligibilityToAvailability = (link) => {
   if (link?.is_eligible) {
     return 'available'
@@ -30,14 +20,7 @@ const eligibilityToAvailability = (link) => {
 }
 
 export const buildRowsFromFilteredLinks = (links = []) => [...links]
-  .sort((left, right) => {
-    const sequenceDelta = parseOverpassSequence(left.overpass_id) - parseOverpassSequence(right.overpass_id)
-    if (sequenceDelta !== 0) {
-      return sequenceDelta
-    }
-
-    return String(left.overpass_id ?? '').localeCompare(String(right.overpass_id ?? ''))
-  })
+  .sort((left, right) => toTimestamp(left.start_time) - toTimestamp(right.start_time))
   .map((link) => ({
     overpassId: link.overpass_id,
     backendOverpassId: link.overpass_id,
@@ -76,7 +59,6 @@ export const applySessionPlanToRows = (rows, sessionPlan) => {
     const link = status.link ?? {}
     const eligibilityStatus = link.eligibility_status ?? row.eligibilityStatus
     const isEligible = link.is_eligible ?? row.isEligible
-    const nextRejectionReason = status.rejection_reason ?? link.ineligibility_reason ?? null
 
     return {
       ...row,
@@ -102,7 +84,7 @@ export const applySessionPlanToRows = (rows, sessionPlan) => {
       backendTradeOffId: status.tradeoff_id ?? null,
       tradeOffId: status.tradeoff_id ?? '—',
       usefulDataOffloadedMb: status.useful_data_offloaded_mb ?? 0,
-      rejectionReason: isEligible && Boolean(status.is_scheduled) ? null : nextRejectionReason,
+      rejectionReason: status.rejection_reason ?? link.ineligibility_reason ?? row.rejectionReason,
       conflictingActivityUuid: link.conflicting_activity_uuid ?? row.conflictingActivityUuid,
     }
   })
@@ -142,16 +124,7 @@ export const buildTradeOffCardsFromPlan = (sessionPlan, rows) => {
       ].join(' · '),
       reason: getConflictReason(group, conflictReasons),
       colorIndex,
-      options: [...group.link_ids]
-        .sort((left, right) => {
-          const sequenceDelta = parseLinkSequence(left) - parseLinkSequence(right)
-          if (sequenceDelta !== 0) {
-            return sequenceDelta
-          }
-
-          return String(left ?? '').localeCompare(String(right ?? ''))
-        })
-        .map((linkId) => {
+      options: group.link_ids.map((linkId) => {
         const row = rowByLinkId.get(linkId)
         const status = currentPlan[linkId]
 
@@ -191,75 +164,3 @@ export const buildSelectedOptionsFromPlan = (sessionPlan) => Object.fromEntries(
 )
 
 export const getScheduledRows = (rows) => rows.filter((row) => row.isScheduled)
-
-export const buildCommitSummary = (finalScheduleRows = [], sessionPlan = null) => {
-  const satelliteMap = new Map()
-  const groundStationMap = new Map()
-
-  let totalOffloadedMb = 0
-  let totalDurationSeconds = 0
-
-  const sortedRows = [...finalScheduleRows].sort((a, b) =>
-    new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
-  )
-
-  sortedRows.forEach((row) => {
-    const offloadMb = Number(row.usefulDataOffloadedMb ?? 0)
-    const duration = Number(row.durationSeconds ?? 0)
-    totalOffloadedMb += offloadMb
-    totalDurationSeconds += duration
-
-    const satId = row.satId || 'Unknown Satellite'
-    if (!satelliteMap.has(satId)) {
-      const profile = sessionPlan?.satellite_buffer_profiles?.[satId]
-      satelliteMap.set(satId, {
-        satId,
-        links: [],
-        totalDurationSeconds: 0,
-        totalOffloadedMb: 0,
-        capacityMb: Number(profile?.capacity_mb ?? 0),
-        peakBufferMb: Number(profile?.peak_level_mb ?? 0),
-        finalBufferMb: Number(profile?.final_level_mb ?? 0),
-        totalGeneratedMb: Number(profile?.total_generated_mb ?? 0),
-        totalDownlinkedMb: Number(profile?.total_downlinked_mb ?? 0),
-        totalLostMb: Number(profile?.total_lost_mb ?? 0),
-      })
-    }
-    const satGroup = satelliteMap.get(satId)
-    satGroup.links.push(row)
-    satGroup.totalDurationSeconds += duration
-    satGroup.totalOffloadedMb += offloadMb
-
-    const gsId = row.gsId || 'Unknown Station'
-    if (!groundStationMap.has(gsId)) {
-      groundStationMap.set(gsId, {
-        gsId,
-        links: [],
-        totalDurationSeconds: 0,
-        totalOffloadedMb: 0,
-      })
-    }
-    const gsGroup = groundStationMap.get(gsId)
-    gsGroup.links.push(row)
-    gsGroup.totalDurationSeconds += duration
-    gsGroup.totalOffloadedMb += offloadMb
-  })
-
-  const satellites = Array.from(satelliteMap.values()).sort((a, b) =>
-    a.satId.localeCompare(b.satId)
-  )
-
-  const groundStations = Array.from(groundStationMap.values()).sort((a, b) =>
-    a.gsId.localeCompare(b.gsId)
-  )
-
-  return {
-    totalScheduledLinks: finalScheduleRows.length,
-    totalOffloadedMb,
-    totalOffloadedGb: (totalOffloadedMb / 1000).toFixed(2),
-    totalDurationSeconds,
-    totalDurationMinutes: Math.round(totalDurationSeconds / 60),
-    satellites,
-    groundStations,
-  }
-}

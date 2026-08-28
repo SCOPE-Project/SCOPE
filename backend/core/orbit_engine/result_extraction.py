@@ -1,5 +1,9 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
+
+
+def _get_float_val(val: Any) -> float:
+    return float(val.getValue()) if hasattr(val, "getValue") else float(val)
 
 if TYPE_CHECKING:
     from org.orekit.bodies import OneAxisEllipsoid, GeodeticPoint
@@ -89,9 +93,9 @@ def extract_global_track(
                 float(velocity_vector.getY()),
                 float(velocity_vector.getZ()),
             ],
-            latitude_deg=float(degrees(geodetic_point.getLatitude())),
-            longitude_deg=float(degrees(geodetic_point.getLongitude())),
-            altitude_m=float(geodetic_point.getAltitude()),
+            latitude_deg=float(degrees(_get_float_val(geodetic_point.getLatitude()))),
+            longitude_deg=float(degrees(_get_float_val(geodetic_point.getLongitude()))),
+            altitude_m=_get_float_val(geodetic_point.getAltitude()),
         )
         global_track_points.append(track_point)
 
@@ -159,9 +163,9 @@ def extract_overpass_profile(
 
         overpass_profile_point = OverpassProfilePoint(
             timestamp=sample_time,
-            latitude_deg=float(degrees(geodetic_point.getLatitude())),
-            longitude_deg=float(degrees(geodetic_point.getLongitude())),
-            altitude_m=float(geodetic_point.getAltitude()),
+            latitude_deg=float(degrees(_get_float_val(geodetic_point.getLatitude()))),
+            longitude_deg=float(degrees(_get_float_val(geodetic_point.getLongitude()))),
+            altitude_m=_get_float_val(geodetic_point.getAltitude()),
             elevation_deg=float(degrees(tracking_coordinates.getElevation())),
             azimuth_deg=float(azimuth_deg),
             range_m=float(tracking_coordinates.getRange()),

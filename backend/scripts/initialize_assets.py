@@ -30,6 +30,7 @@ if credentials_path.exists():
     load_dotenv(credentials_path)
 
 from app.repositories import AssetRepository
+from core.models.assets import SatelliteInformation, GroundStationInformation
 
 
 def main() -> None:
@@ -58,31 +59,22 @@ def main() -> None:
         AssetRepository.initialize_repository(force_refresh=args.force_refresh)
         print("[OK] Successfully queried and initialized assets from SatOS.")
     except Exception as e:
-        print(f"HARD FAIL: Could not initialize repository from SatOS: {e}", file=sys.stderr)
+        print(f"ERROR: Failed to initialize AssetRepository: {e}", file=sys.stderr)
         sys.exit(1)
 
+    print("[2/2] Asset Discovery & Classification Summary:")
     assets = AssetRepository.get_assets()
-    schedules = AssetRepository.get_asset_schedules()
-
     satellites = [a for a in assets if a.eligible and a.classification == "satellite"]
     groundstations = [a for a in assets if a.eligible and a.classification == "groundstation"]
     ineligible = [a for a in assets if not a.eligible or a.classification == "ineligible"]
-
-    print("\n-------------------------------------------------------")
-    print(f"  Summary: {len(assets)} Assets Discovered")
-    print("-------------------------------------------------------")
-    print(f"  - Eligible Satellites:      {len(satellites)}")
-    print(f"  - Eligible Ground Stations: {len(groundstations)}")
-    print(f"  - Ineligible Assets:        {len(ineligible)}")
-    print(f"  - Baseline Asset Schedules: {len(schedules)}")
-    print("-------------------------------------------------------")
+    schedules = AssetRepository.get_asset_schedules()
 
     # 1. Eligible Satellites Table
     print("\n[ELIGIBLE SATELLITES]")
     if satellites:
         for idx, sat in enumerate(satellites, 1):
             details = sat.details
-            if details:
+            if isinstance(details, SatelliteInformation):
                 pos_str = f"[{details.position_r[0]/1000.0:,.1f}, {details.position_r[1]/1000.0:,.1f}, {details.position_r[2]/1000.0:,.1f}] km"
                 vel_str = f"[{details.velocity_v[0]:,.1f}, {details.velocity_v[1]:,.1f}, {details.velocity_v[2]:,.1f}] m/s"
                 epoch_str = details.state_timestamp.isoformat() if hasattr(details.state_timestamp, "isoformat") else str(details.state_timestamp)
@@ -100,7 +92,7 @@ def main() -> None:
     if groundstations:
         for idx, gs in enumerate(groundstations, 1):
             details = gs.details
-            if details:
+            if isinstance(details, GroundStationInformation):
                 print(f"  {idx:02d}. {gs.name} -> Lat: {details.latitude:.4f}°, Lon: {details.longitude:.4f}°, Min Elev: {details.min_link_elevation:.1f}°")
             else:
                 print(f"  {idx:02d}. {gs.name} (No details)")
