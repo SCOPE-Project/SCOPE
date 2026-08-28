@@ -44,7 +44,8 @@ def satos_delete_activity(activity_uuid: UUID4 | UUID7):
     Deletes a single activity by UUID from SatOS and updates the local repository cache.
     """
     try:
-        deleted = AssetRepository.delete_activities_from_satos([activity_uuid])
+        summary = AssetRepository.delete_activities_from_satos([activity_uuid])
+        deleted = summary.deleted_activities
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Activity {activity_uuid} not found or could not be deleted.")
         return DeleteActivityResponse(
@@ -78,7 +79,8 @@ def satos_delete_activities(request: DeleteActivitiesRequest):
 
         # 1. Clear requested schedules
         if request.schedule_names:
-            schedules_cleared_map = AssetRepository.clear_schedules_in_satos(request.schedule_names)
+            clear_summary = AssetRepository.clear_schedules_in_satos(request.schedule_names)
+            schedules_cleared_map = clear_summary.deleted_activities
             for act_list in schedules_cleared_map.values():
                 all_deleted_uuids.extend(act_list)
 
@@ -89,8 +91,10 @@ def satos_delete_activities(request: DeleteActivitiesRequest):
                 if str(u) not in set(all_deleted_uuids)
             ]
             if remaining_uuids:
-                deleted_individual = AssetRepository.delete_activities_from_satos(remaining_uuids)
+                delete_summary = AssetRepository.delete_activities_from_satos(remaining_uuids)
+                deleted_individual = delete_summary.deleted_activities
                 all_deleted_uuids.extend(deleted_individual)
+
 
         return DeleteActivitiesResponse(
             status="success",

@@ -19,7 +19,10 @@ from app.services.satos_connector import (
     satos_delete_activities,
     satos_clear_schedules,
     satos_clear_scope_activities,
+    ActivityDeleteSummary,
+    ScheduleClearSummary,
 )
+
 
 
 class AssetRepository:
@@ -533,18 +536,20 @@ class AssetRepository:
     push_link_blocks_to_satos = push_scheduled_links_to_satos
 
     @classmethod
-    def delete_activities_from_satos(cls, activity_uuids: Sequence[uuid.UUID | str]) -> list[str]:
+    def delete_activities_from_satos(
+        cls, activity_uuids: Sequence[uuid.UUID | str]
+    ) -> ActivityDeleteSummary:
         """
-        Deletes activities by their UUIDs from SatOS and synchronizes local schedule caches.
+        Deletes activities and their anchored start/end schedule events by their UUIDs from SatOS and synchronizes local schedule caches.
 
         :param activity_uuids: sequence of activity UUIDs (UUID objects or strings)
-        :return: list of deleted activity UUID strings
+        :return: ActivityDeleteSummary
         """
         if not activity_uuids:
-            return []
+            return ActivityDeleteSummary()
 
-        deleted_uuids = satos_delete_activities(activity_uuids)
-        deleted_set = set(str(u) for u in deleted_uuids)
+        summary = satos_delete_activities(activity_uuids)
+        deleted_set = set(str(u) for u in summary.deleted_activities)
 
         # Synchronize _schedules cache
         for sched in cls._schedules:
@@ -554,18 +559,18 @@ class AssetRepository:
         for sched_name, acts in cls._raw_schedules.items():
             cls._raw_schedules[sched_name] = [a for a in acts if str(a.uuid) not in deleted_set]
 
-        return deleted_uuids
+        return summary
 
     @classmethod
-    def clear_schedules_in_satos(cls, schedule_names: Sequence[str]) -> dict[str, list[str]]:
+    def clear_schedules_in_satos(cls, schedule_names: Sequence[str]) -> ScheduleClearSummary:
         """
-        Clears all activities for each specified schedule in SatOS and synchronizes local caches.
+        Clears all activities and schedule events for each specified schedule in SatOS and synchronizes local caches.
 
         :param schedule_names: sequence of schedule names to clear
-        :return: dictionary mapping each schedule_name to list of deleted activity UUID strings
+        :return: ScheduleClearSummary
         """
         if not schedule_names:
-            return {}
+            return ScheduleClearSummary()
 
         cleared_summary = satos_clear_schedules(schedule_names)
 
@@ -577,6 +582,7 @@ class AssetRepository:
                 existing_sched.activities = []
 
         return cleared_summary
+
 
     @classmethod
     def clear_scope_activities_in_satos(

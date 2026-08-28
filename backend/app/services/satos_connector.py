@@ -1,5 +1,7 @@
 import json
 import uuid
+import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Sequence
 from requests import Response
@@ -8,11 +10,13 @@ from api_connect.satio_session import SatIOSession
 from api_connect.satellites import get_satellite_list, get_satellite, post_satellite
 from api_connect.activities import get_activity_list, get_activities, put_activities, delete_activity
 from api_connect.schedule_events import get_schedule_events, put_schedule_events, delete_schedule_events
+from api_connect.schedules import get_schedules_list
 
 from pydantic_models.definitions import SatelliteInfoModel, SatelliteModel
 from pydantic_models.activity import ActivityInfoModel, ActivityModel
 from pydantic_models.schedule_event import ScheduleEventModel
 from pydantic_models.schedule_event_relation import ScheduleEventRelationModel
+from pydantic_models.schedule import ScheduleInfoModel
 
 from pydantic import UUID4, UUID7
 from core.models.activities import Activity
@@ -20,6 +24,22 @@ from core.models.assets import SatelliteStateInputDefinition, SatelliteState, Up
 from core.astrodynamics.coordinates import generate_satellite_states
 
 DEFAULT_UPDATE_STATE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "update_state_config.json"
+_logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ScheduleClearSummary:
+    deleted_activities: dict[str, list[str]] = field(default_factory=dict)
+    deleted_events: dict[str, list[str]] = field(default_factory=dict)
+    failed_events: dict[str, list[dict]] = field(default_factory=dict)
+
+
+@dataclass
+class ActivityDeleteSummary:
+    deleted_activities: list[str] = field(default_factory=list)
+    deleted_events: list[str] = field(default_factory=list)
+    failed_events: list[dict] = field(default_factory=list)
+
 
 
 
@@ -80,6 +100,22 @@ def satos_get_activities_list(schedule_name: str) -> list[ActivityInfoModel]:
     except LookupError:
         with SatIOSession() as session:
             return get_activity_list(session, schedule_name)
+
+# GET /satos/schedules/list
+def satos_get_schedules_list() -> list[ScheduleInfoModel]:
+    """
+    Get list of all schedules from SatOS API.
+    SatOS Connector to GET .../schedules/list
+
+    :return: list of ScheduleInfoModel
+    """
+    try:
+        session = SatIOSession.get_session()
+        return get_schedules_list(session)
+    except LookupError:
+        with SatIOSession() as session:
+            return get_schedules_list(session)
+
 
 # GET /satos/schedule_events
 def satos_get_schedule_events(schedule_name: str) -> list[ScheduleEventModel]:
@@ -154,8 +190,8 @@ def satos_delete_activity(activity_uuid: UUID4 | UUID7 | uuid.UUID | str) -> Res
             try:
                 ev_resp = delete_schedule_events(session, ev_uuid)
                 ev_resp.raise_for_status()
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.warning(f"Failed to delete anchored event [{ev_uuid}] for activity [{activity_uuid}]: {e}")
 
         return resp
 
@@ -167,19 +203,22 @@ def satos_delete_activity(activity_uuid: UUID4 | UUID7 | uuid.UUID | str) -> Res
             return _execute(session)
 
 
-def satos_delete_activities(activity_uuids: Sequence[UUID4 | UUID7 | uuid.UUID | str]) -> list[str]:
+def satos_delete_activities(
+    activity_uuids: Sequence[UUID4 | UUID7 | uuid.UUID | str]
+) -> ActivityDeleteSummary:
     """
-    Delete multiple activities and their anchored start/end schedule events by their UUIDs from SatOS.
+    Delete multiple activities and their anchored start/end schedule events by their UUIDs from SatOS,
+    returning a summary of deleted activities, deleted events, and failed events with reasons.
     Reuses an active or newly initialized SatIOSession across requests.
 
     :param activity_uuids: sequence of UUIDs (UUID4, UUID7, UUID, or string representations)
-    :return: list of successfully deleted activity UUID strings
+    :return: ActivityDeleteSummary
     """
     if not activity_uuids:
-        return []
+        return ActivityDeleteSummary()
 
-    def _execute_deletions(session: SatIOSession) -> list[str]:
-        res = []
+    def _execute_deletions(session: SatIOSession) -> ActivityDeleteSummary:
+        summary = ActivityDeleteSummary()
         all_event_uuids = set()
 
         # 1. Discover anchored schedule event UUIDs
@@ -199,17 +238,28 @@ def satos_delete_activities(activity_uuids: Sequence[UUID4 | UUID7 | uuid.UUID |
         for act_uuid in activity_uuids:
             resp = delete_activity(session, act_uuid)
             resp.raise_for_status()
-            res.append(str(act_uuid))
+            summary.deleted_activities.append(str(act_uuid))
 
         # 3. Delete anchored schedule events
         for ev_uuid in all_event_uuids:
+            ev_uuid_str = str(ev_uuid)
             try:
                 ev_resp = delete_schedule_events(session, ev_uuid)
                 ev_resp.raise_for_status()
-            except Exception:
-                pass
+                summary.deleted_events.append(ev_uuid_str)
+            except Exception as e:
+                status_code = getattr(getattr(e, "response", None), "status_code", None)
+                err_text = getattr(getattr(e, "response", None), "text", str(e))
+                reason = f"HTTP {status_code} - {err_text}" if status_code else str(e)
+                _logger.warning(f"Failed to delete anchored schedule event [{ev_uuid_str}]: {reason}")
+                summary.failed_events.append({
+                    "uuid": ev_uuid_str,
+                    "status_code": status_code,
+                    "error": err_text,
+                    "reason": reason,
+                })
 
-        return res
+        return summary
 
     try:
         session = SatIOSession.get_session()
@@ -219,38 +269,85 @@ def satos_delete_activities(activity_uuids: Sequence[UUID4 | UUID7 | uuid.UUID |
             return _execute_deletions(session)
 
 
-def satos_clear_schedules(schedule_names: Sequence[str]) -> dict[str, list[str]]:
+def satos_clear_schedules(schedule_names: Sequence[str]) -> ScheduleClearSummary:
     """
-    Clear all activities and all schedule events for each specified schedule in SatOS.
-    1. Queries get_activity_list for each schedule and deletes all returned activities.
-    2. Queries get_schedule_events for each schedule and deletes all returned schedule events (including detached ones).
+    Clear all activities and all schedule events for each specified schedule in SatOS,
+    returning a summary with deleted activities, deleted events, and failed events with reasons.
+
+    Phase 1: Queries and deletes all activities across all specified schedules.
+    Phase 2: Queries and deletes all schedule events across all specified schedules.
 
     :param schedule_names: sequence of schedule names to clear
-    :return: dictionary mapping each schedule_name to the list of deleted activity UUID strings
+    :return: ScheduleClearSummary
     """
     if not schedule_names:
-        return {}
+        return ScheduleClearSummary()
 
-    def _execute_clear(session: SatIOSession) -> dict[str, list[str]]:
-        summary = {}
+    def _execute_clear(session: SatIOSession) -> ScheduleClearSummary:
+        summary = ScheduleClearSummary(
+            deleted_activities={s: [] for s in schedule_names},
+            deleted_events={s: [] for s in schedule_names},
+            failed_events={s: [] for s in schedule_names},
+        )
+
+        # 1. Phase 1: Delete all activities across all target schedules first
         for sched_name in schedule_names:
-            # 1. Delete all activities in the schedule
             activities = get_activity_list(session, schedule_name=sched_name)
-            deleted_for_sched = []
             for act in activities:
                 resp = delete_activity(session, act.uuid)
                 resp.raise_for_status()
-                deleted_for_sched.append(str(act.uuid))
-            summary[sched_name] = deleted_for_sched
+                summary.deleted_activities[sched_name].append(str(act.uuid))
 
-            # 2. Delete ALL schedule events in the schedule (including detached ones)
+        # 2. Phase 2: Delete ALL schedule events across all target schedules
+        seen_event_uuids = set()
+        target_sched_set = set(schedule_names)
+
+        for sched_name in schedule_names:
             events = get_schedule_events(session, schedule_name=sched_name)
             for event in events:
+                ev_uuid_str = str(event.uuid)
+                if ev_uuid_str in seen_event_uuids:
+                    continue
+                seen_event_uuids.add(ev_uuid_str)
+
                 try:
                     ev_resp = delete_schedule_events(session, event.uuid)
                     ev_resp.raise_for_status()
-                except Exception:
-                    pass
+                    summary.deleted_events[sched_name].append(ev_uuid_str)
+                except Exception as e:
+                    status_code = getattr(getattr(e, "response", None), "status_code", None)
+                    err_text = getattr(getattr(e, "response", None), "text", str(e))
+
+                    reason_parts = []
+                    sched_2 = getattr(event, "schedule_2", None)
+                    if sched_2 and sched_2 not in target_sched_set:
+                        reason_parts.append(
+                            f"Event is shared with schedule '{sched_2}' which is not in the cleared schedules list and may still contain active activities referencing this event."
+                        )
+                    elif sched_2:
+                        reason_parts.append(f"Event is shared with schedule '{sched_2}'.")
+
+                    if status_code:
+                        reason_parts.append(f"SatOS API returned HTTP {status_code} ({err_text}).")
+                    else:
+                        reason_parts.append(f"Error: {e}")
+
+                    reason = " ".join(reason_parts)
+                    ev_name = getattr(event, "name", "")
+                    ev_id = getattr(event, "id", "")
+                    _logger.warning(
+                        f"Failed to delete schedule event [{event.uuid}] '{ev_name}' (id: '{ev_id}') for schedule '{sched_name}': {reason}"
+                    )
+                    summary.failed_events[sched_name].append({
+                        "uuid": ev_uuid_str,
+                        "id": ev_id,
+                        "name": ev_name,
+                        "schedule_1": getattr(event, "schedule_1", sched_name),
+                        "schedule_2": sched_2,
+                        "status_code": status_code,
+                        "error": err_text,
+                        "reason": reason,
+                    })
 
         return summary
 
@@ -260,6 +357,8 @@ def satos_clear_schedules(schedule_names: Sequence[str]) -> dict[str, list[str]]
     except LookupError:
         with SatIOSession() as session:
             return _execute_clear(session)
+
+
 
 
 def satos_clear_scope_activities(

@@ -27,7 +27,11 @@ if credentials_path.exists():
     load_dotenv(credentials_path)
 
 from app.repositories import AssetRepository
-from app.services.satos_connector import satos_get_activities_list, satos_get_schedule_events
+from app.services.satos_connector import (
+    satos_get_activities_list,
+    satos_get_schedule_events,
+    satos_get_schedules_list,
+)
 
 
 def _clean_item(item: str) -> str:
@@ -52,6 +56,11 @@ def main() -> None:
         help="List of schedule names to clear (deletes all activities and events in these schedules).",
     )
     parser.add_argument(
+        "--clear-all",
+        action="store_true",
+        help="Clear all schedules that have 'Group1' substring in their schedule names.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Query and display activities and events to delete without sending delete requests to SatOS API.",
@@ -62,9 +71,22 @@ def main() -> None:
     uuids = [_clean_item(u) for u in args.uuids if u]
     schedule_names = [_clean_item(s) for s in args.schedule_names if s]
 
-    if not uuids and not schedule_names:
-        print("HARD FAIL: You must provide at least one --uuids or --schedule-names argument.", file=sys.stderr)
+    if not uuids and not schedule_names and not args.clear_all:
+        print("HARD FAIL: You must provide at least one --uuids, --schedule-names, or --clear-all argument.", file=sys.stderr)
         sys.exit(1)
+
+    # If --clear-all is requested, find all schedules with 'Group1' in their name
+    if args.clear_all:
+        try:
+            all_schedules = satos_get_schedules_list()
+            group1_schedules = [s.name for s in all_schedules if "Group1" in s.name]
+            for s in group1_schedules:
+                if s not in schedule_names:
+                    schedule_names.append(s)
+            print(f"Discovered {len(group1_schedules)} schedule(s) matching 'Group1': {', '.join(group1_schedules)}")
+        except Exception as e:
+            print(f"HARD FAIL: Failed to query schedules from SatOS: {e}", file=sys.stderr)
+            sys.exit(1)
 
     print("=== SatOS Activity & Event Deletion ===")
     if uuids:
@@ -98,19 +120,40 @@ def main() -> None:
 
     print("\nExecuting deletions in SatOS...")
     try:
-        deleted_count = 0
+        total_acts_deleted = 0
+        total_evs_deleted = 0
+        all_failed_events = []
+
         if schedule_names:
-            cleared = AssetRepository.clear_schedules_in_satos(schedule_names)
-            for sched, u_list in cleared.items():
-                print(f"Cleared schedule '{sched}': {len(u_list)} activit(ies) deleted.")
-                deleted_count += len(u_list)
+            cleared_summary = AssetRepository.clear_schedules_in_satos(schedule_names)
+            for sched in schedule_names:
+                act_list = cleared_summary.deleted_activities.get(sched, [])
+                ev_list = cleared_summary.deleted_events.get(sched, [])
+                failed_list = cleared_summary.failed_events.get(sched, [])
+
+                print(f"Cleared schedule '{sched}': {len(act_list)} activit(ies) deleted, {len(ev_list)} event(s) deleted.")
+                total_acts_deleted += len(act_list)
+                total_evs_deleted += len(ev_list)
+
+                if failed_list:
+                    all_failed_events.extend(failed_list)
+                    for f in failed_list:
+                        print(f"  [WARNING] Failed to delete event [{f['uuid']}] '{f['name']}' (id: '{f['id']}'): {f['reason']}")
 
         if uuids:
-            deleted_uuids = AssetRepository.delete_activities_from_satos(uuids)
-            print(f"Deleted {len(deleted_uuids)} individually requested activit(ies).")
-            deleted_count += len(deleted_uuids)
+            act_summary = AssetRepository.delete_activities_from_satos(uuids)
+            print(f"Deleted {len(act_summary.deleted_activities)} individually requested activit(ies) and {len(act_summary.deleted_events)} anchored event(s).")
+            total_acts_deleted += len(act_summary.deleted_activities)
+            total_evs_deleted += len(act_summary.deleted_events)
+            if act_summary.failed_events:
+                all_failed_events.extend(act_summary.failed_events)
+                for f in act_summary.failed_events:
+                    print(f"  [WARNING] Failed to delete anchored event [{f['uuid']}]: {f['reason']}")
 
-        print(f"\nSuccessfully deleted total {deleted_count} activit(ies) from SatOS.")
+
+        print(f"\nSuccessfully deleted total {total_acts_deleted} activit(ies) and {total_evs_deleted} event(s) from SatOS.")
+        if all_failed_events:
+            print(f"\n[WARNING] Total {len(all_failed_events)} event(s) failed to delete. Review warnings above for details.", file=sys.stderr)
     except Exception as e:
         print(f"HARD FAIL: Failed to delete activities: {e}", file=sys.stderr)
         sys.exit(1)
@@ -118,3 +161,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
