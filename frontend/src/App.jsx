@@ -179,25 +179,27 @@ const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
 // App state: a tick then re-renders only the countdown cells, leaving the
 // timeline, map and the rest of the table untouched.
 //
-// The Overview T- column only displays minute-level precision (see
-// OverpassCountdownCell below), so it re-renders only when the minute
-// actually changes, even though the shared clock underneath still ticks
-// once a second for any other subscriber.
-const useMinuteCountdownNow = () => {
+// The Overview T- column shows seconds, but re-rendering every single one
+// of them is unnecessary churn -- so it only re-renders every 20 seconds,
+// even though the shared clock underneath still ticks once a second for
+// any other subscriber.
+const COUNTDOWN_REFRESH_INTERVAL_MS = 20000
+
+const usePeriodicCountdownNow = (intervalMs) => {
   const [nowMs, setNowMs] = useState(getCountdownNow)
 
   useEffect(() => subscribeCountdownClock((tickNowMs) => {
     setNowMs((current) => (
-      Math.floor(tickNowMs / 60000) === Math.floor(current / 60000) ? current : tickNowMs
+      Math.floor(tickNowMs / intervalMs) === Math.floor(current / intervalMs) ? current : tickNowMs
     ))
-  }), [])
+  }), [intervalMs])
 
   return nowMs
 }
 
 function OverpassCountdownCell({ startTime, endTime }) {
-  const nowMs = useMinuteCountdownNow()
-  const { label, state } = formatOverpassCountdown(startTime, endTime, nowMs, { includeSeconds: false })
+  const nowMs = usePeriodicCountdownNow(COUNTDOWN_REFRESH_INTERVAL_MS)
+  const { label, state } = formatOverpassCountdown(startTime, endTime, nowMs, { includeSeconds: true })
 
   return (
     <span
@@ -221,6 +223,7 @@ export default function App() {
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
+  const timelinePlayingRef = useRef(false)
   const timelinePlayheadDraggingRef = useRef(false)
   const timelinePlaybackDomRef = useRef({ playhead: null, bars: [], label: null })
   const timelinePlaybackLastTextSyncRef = useRef(0)
@@ -234,6 +237,7 @@ export default function App() {
   const timelineWheelHintTimeoutRef = useRef(null)
   const timelineWheelHandlerRef = useRef(null)
   const timelineTradeOffDrawerDragCleanupRef = useRef(null)
+  const timelineTradeOffDrawerRef = useRef(null)
   const schedulerAbortControllerRef = useRef(null)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
@@ -2344,10 +2348,20 @@ export default function App() {
   const timelinePlayheadTimestamp = clampToPlanningWindow(timelinePlayheadTime)
 
   useEffect(() => {
+    timelinePlayingRef.current = timelinePlaying
+  }, [timelinePlaying])
+
+  // Deliberately does not depend on timelinePlaying: this effect resets the
+  // playhead to the window start when the planning window itself changes
+  // (or the scheduler freshly launches), not when playback is merely
+  // paused/resumed. Reading timelinePlayingRef instead of timelinePlaying
+  // lets it still skip the reset while actively playing, without re-running
+  // -- and incorrectly resetting -- every time Play/Pause is toggled.
+  useEffect(() => {
     if (
       !schedulerLaunched
       || planningWindowStartTimestamp === null
-      || timelinePlaying
+      || timelinePlayingRef.current
       || timelinePlayheadDraggingRef.current
     ) {
       return
@@ -2358,7 +2372,7 @@ export default function App() {
       current === planningWindowStartTimestamp ? current : planningWindowStartTimestamp
     ))
     setTimelineLive(false)
-  }, [planningWindowStartTimestamp, schedulerLaunched, timelinePlaying])
+  }, [planningWindowStartTimestamp, schedulerLaunched])
 
   const getSatelliteTrackCoordinates = useCallback((assetName) => (
     interpolateTrackPosition(preparedSatelliteTracks[assetName], timelinePlayheadTimestamp)
@@ -3179,14 +3193,34 @@ export default function App() {
       return
     }
 
+    const container = timelinePanelRef.current
+    const drawer = timelineTradeOffDrawerRef.current
+    if (!container || !drawer) {
+      return
+    }
+
     const startX = event.clientX
     const startY = event.clientY
     const startOffset = { ...timelineTradeOffDrawerOffset }
 
+    // Figure out how far the drawer can move, in offset space, before it
+    // would cross the timeline panel's edge. The panel clips its contents
+    // (overflow: hidden), so dragging the drawer past this range is what
+    // was making it appear to vanish instead of just stopping at the edge.
+    const containerRect = container.getBoundingClientRect()
+    const drawerRect = drawer.getBoundingClientRect()
+    const naturalLeft = drawerRect.left - startOffset.x
+    const naturalTop = drawerRect.top - startOffset.y
+    const minX = containerRect.left - naturalLeft
+    const maxX = Math.max(minX, containerRect.right - naturalLeft - drawerRect.width)
+    const minY = containerRect.top - naturalTop
+    const maxY = Math.max(minY, containerRect.bottom - naturalTop - drawerRect.height)
+    const clampRange = (value, min, max) => Math.min(Math.max(value, min), max)
+
     const handlePointerMove = (moveEvent) => {
       setTimelineTradeOffDrawerOffset({
-        x: startOffset.x + (moveEvent.clientX - startX),
-        y: startOffset.y + (moveEvent.clientY - startY),
+        x: clampRange(startOffset.x + (moveEvent.clientX - startX), minX, maxX),
+        y: clampRange(startOffset.y + (moveEvent.clientY - startY), minY, maxY),
       })
     }
 
@@ -5632,7 +5666,6 @@ export default function App() {
                             <div className="tradeoff-option-header">
                               <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
                               <div className="tradeoff-meta tradeoff-meta--option">
-                                {optionMarked && <span className="tradeoff-marked-flag">In Timeline</span>}
                                 {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
                                 <span className="tradeoff-score">Score {displayScore.toFixed(2)}</span>
                               </div>
@@ -6435,6 +6468,7 @@ export default function App() {
                     </div>
                     {activeTimelineTradeOffCard && (
                       <aside
+                        ref={timelineTradeOffDrawerRef}
                         className="timeline-tradeoff-drawer"
                         style={{
                           transform: `translate(${timelineTradeOffDrawerOffset.x}px, ${timelineTradeOffDrawerOffset.y}px)`,
@@ -6495,7 +6529,6 @@ export default function App() {
                                 <div className="tradeoff-option-header">
                                   <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
                                   <div className="tradeoff-meta tradeoff-meta--option">
-                                    {optionMarked && <span className="tradeoff-marked-flag">In Timeline</span>}
                                     {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
                                     <span className="tradeoff-score">Score {displayScore.toFixed(2)}</span>
                                   </div>
