@@ -562,3 +562,36 @@ def test_satos_clear_schedules_tracks_events_and_warnings(
     assert "GS-1" in summary.failed_events["Sat-1"][0]["reason"]
 
 
+@patch("app.services.satos_connector.delete_schedule_events")
+@patch("app.services.satos_connector.delete_activity")
+@patch("app.services.satos_connector.get_activity_list")
+@patch("app.services.satos_connector.SatIOSession")
+def test_satos_clear_scope_activities_all_scope_initiators(mock_session_cls, mock_get_acts, mock_delete_act, mock_delete_ev):
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_delete_act.return_value = mock_resp
+    mock_delete_ev.return_value = mock_resp
+
+    u_auto = uuid.uuid4()
+    u_pinned = uuid.uuid4()
+    u_legacy = uuid.uuid4()
+    u_manual = uuid.uuid4()
+    u_pl = uuid.uuid4()
+
+    mock_act_auto = MagicMock(uuid=u_auto, initiator="SCOPE_auto-scheduled", start_event=None, end_event=None)
+    mock_act_pinned = MagicMock(uuid=u_pinned, initiator="SCOPE_pinned-Max Mustermann", start_event=None, end_event=None)
+    mock_act_legacy = MagicMock(uuid=u_legacy, initiator="SCOPE_Scheduler", start_event=None, end_event=None)
+    mock_act_manual = MagicMock(uuid=u_manual, initiator="Manual_Planner", start_event=None, end_event=None)
+    mock_act_pl = MagicMock(uuid=u_pl, initiator="PL Mission Planner", start_event=None, end_event=None)
+
+    mock_get_acts.return_value = [mock_act_auto, mock_act_pinned, mock_act_legacy, mock_act_manual, mock_act_pl]
+
+    cleared = satos_connector.satos_clear_scope_activities(["Sat-1"])
+
+    assert "Sat-1" in cleared
+    assert set(cleared["Sat-1"]) == {str(u_auto), str(u_pinned), str(u_legacy)}
+    assert str(u_manual) not in cleared["Sat-1"]
+    assert str(u_pl) not in cleared["Sat-1"]
+    assert mock_delete_act.call_count == 3
+
+

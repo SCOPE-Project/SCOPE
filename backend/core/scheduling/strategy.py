@@ -36,6 +36,14 @@ class BaseScoringRule(ABC):
         pass
 
 
+def _get_pass_capacity(link: LinkBlock, satellite_config: SatelliteBufferConfig) -> float:
+    if link.estimated_data_capacity_mb > 0.0:
+        return link.estimated_data_capacity_mb
+    if link.duration_seconds > 0.0 and satellite_config.downlink_rate_mbps > 0.0:
+        return link.duration_seconds * satellite_config.downlink_rate_mbps
+    return 0.0
+
+
 class BufferUrgencyScoringRule(BaseScoringRule):
     """
     Non-linear buffer urgency scoring rule:
@@ -52,7 +60,7 @@ class BufferUrgencyScoringRule(BaseScoringRule):
         current_buffer_mb: float,
         satellite_config: SatelliteBufferConfig,
     ) -> Tuple[float, float]:
-        pass_capacity = link.estimated_data_capacity_mb
+        pass_capacity = _get_pass_capacity(link, satellite_config)
         useful_data = min(current_buffer_mb, pass_capacity)
 
         capacity = satellite_config.capacity_mb
@@ -70,7 +78,7 @@ class ThroughputScoringRule(BaseScoringRule):
         current_buffer_mb: float,
         satellite_config: SatelliteBufferConfig,
     ) -> Tuple[float, float]:
-        pass_capacity = link.estimated_data_capacity_mb
+        pass_capacity = _get_pass_capacity(link, satellite_config)
         useful_data = min(current_buffer_mb, pass_capacity)
         return useful_data, useful_data
 
@@ -84,7 +92,7 @@ class DurationScoringRule(BaseScoringRule):
         current_buffer_mb: float,
         satellite_config: SatelliteBufferConfig,
     ) -> Tuple[float, float]:
-        pass_capacity = link.estimated_data_capacity_mb
+        pass_capacity = _get_pass_capacity(link, satellite_config)
         useful_data = min(current_buffer_mb, pass_capacity)
         return float(link.duration_seconds), useful_data
 

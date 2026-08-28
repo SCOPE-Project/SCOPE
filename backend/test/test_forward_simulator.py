@@ -342,3 +342,99 @@ def test_forward_simulator_profile_has_scenario_start_and_end_points():
         assert last_pt.level_mb == prof.final_level_mb
 
 
+def test_excluded_and_losing_links_retain_objective_score():
+    """
+    Regression test: Verifies that excluded, losing, or unselected links in a trade-off group
+    retain their objective score computed against the pre-decision buffer snapshot, rather than
+    receiving score=0.00 due to a winning sibling link draining the satellite buffer first.
+    """
+    t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+    t_end = datetime(2026, 8, 18, 10, 10, 0, tzinfo=timezone.utc)
+
+    sat_configs = {
+        "Sat-1": SatelliteBufferConfig(
+            satellite_name="Sat-1",
+            capacity_mb=1000.0,
+            initial_level_mb=500.0,
+            payload_generation_rate_mbps=0.0,
+            downlink_rate_mbps=1.0,
+        )
+    }
+
+    # Two mutually exclusive passes for the same satellite (Sat-1 to GS-1 vs Sat-1 to GS-2)
+    l1 = LinkBlock(
+        link_id="L1_Sat1_GS1",
+        overpass_id="op1",
+        satellite_name="Sat-1",
+        groundstation_name="GS-1",
+        start_time=t_start,
+        end_time=t_end,
+        duration_seconds=600.0,
+        max_elevation_deg=50.0,
+        estimated_data_capacity_mb=600.0,
+    )
+    l2 = LinkBlock(
+        link_id="L2_Sat1_GS2",
+        overpass_id="op2",
+        satellite_name="Sat-1",
+        groundstation_name="GS-2",
+        start_time=t_start,
+        end_time=t_end,
+        duration_seconds=600.0,
+        max_elevation_deg=40.0,
+        estimated_data_capacity_mb=600.0,
+    )
+
+    candidate_links = {"L1_Sat1_GS1": l1, "L2_Sat1_GS2": l2}
+    conflict_struct = build_conflict_structure([l1, l2])
+
+    # Case A: Auto solver (one wins and drains buffer, one loses)
+    plan_auto, _ = run_forward_simulation(
+        candidate_links=candidate_links,
+        user_overrides={},
+        satellite_configs=sat_configs,
+        conflict_structure=conflict_struct,
+        asset_schedules={},
+        scenario_start=t_start,
+        scenario_end=t_end,
+    )
+
+    # Both links should have the exact same objective score based on 500 MB buffer
+    expected_score = plan_auto["L1_Sat1_GS1"].score
+    assert expected_score > 0.0
+    assert plan_auto["L2_Sat1_GS2"].score == expected_score
+    assert plan_auto["L1_Sat1_GS1"].is_scheduled != plan_auto["L2_Sat1_GS2"].is_scheduled
+
+    # Case B: User manually excludes the competing link L2
+    plan_excluded, _ = run_forward_simulation(
+        candidate_links=candidate_links,
+        user_overrides={"L2_Sat1_GS2": OverrideState.EXCLUDED},
+        satellite_configs=sat_configs,
+        conflict_structure=conflict_struct,
+        asset_schedules={},
+        scenario_start=t_start,
+        scenario_end=t_end,
+    )
+
+    assert plan_excluded["L1_Sat1_GS1"].is_scheduled is True
+    assert plan_excluded["L2_Sat1_GS2"].is_scheduled is False
+    assert plan_excluded["L2_Sat1_GS2"].score == expected_score
+
+    # Case C: User manually pins L2 (inverting selection)
+    plan_pinned, _ = run_forward_simulation(
+        candidate_links=candidate_links,
+        user_overrides={"L2_Sat1_GS2": OverrideState.PINNED},
+        satellite_configs=sat_configs,
+        conflict_structure=conflict_struct,
+        asset_schedules={},
+        scenario_start=t_start,
+        scenario_end=t_end,
+    )
+
+    assert plan_pinned["L2_Sat1_GS2"].is_scheduled is True
+    assert plan_pinned["L1_Sat1_GS1"].is_scheduled is False
+    assert plan_pinned["L1_Sat1_GS1"].score == expected_score
+    assert plan_pinned["L2_Sat1_GS2"].score == expected_score
+
+
+

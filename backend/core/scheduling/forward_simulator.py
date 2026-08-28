@@ -156,12 +156,16 @@ class ForwardSimulationScheduler(BaseScheduler):
         # Initialize unavailable or ineligible links in current_plan immediately
         for lid, link in candidate_links.items():
             if not link.is_available or not link.is_eligible:
+                init_buf = satellite_configs[link.satellite_name].initial_level_mb if link.satellite_name in satellite_configs else 0.0
                 current_plan[lid] = ScheduledLinkStatus(
                     link=link,
                     is_scheduled=False,
                     override_state=user_overrides.get(lid, OverrideState.AUTO),
                     tradeoff_id=None,
+                    score=0.0,
                     useful_data_offloaded_mb=0.0,
+                    incoming_buffer_mb=round(init_buf, 2),
+                    potential_data_downlink_mb=0.0,
                     rejection_reason=link.ineligibility_reason or "Unavailable link",
                 )
 
@@ -227,6 +231,17 @@ class ForwardSimulationScheduler(BaseScheduler):
                 if not group_links:
                     continue
 
+                # 1. Compute objective scores and potential useful data offload for ALL links in group
+                # against the pre-decision buffer snapshot entering this trade-off window.
+                group_evaluations: Dict[str, Tuple[float, float, float]] = {}
+                for l in group_links:
+                    sat_name = l.satellite_name
+                    config = satellite_configs[sat_name]
+                    curr_buf = current_buffer[sat_name]
+                    score, useful_offload = scoring_rule.compute_score(l, curr_buf, config)
+                    group_evaluations[l.link_id] = (score, useful_offload, curr_buf)
+
+                # 2. Resolve scheduled links
                 pinned_links = [l for l in group_links if user_overrides.get(l.link_id) == OverrideState.PINNED]
                 excluded_link_ids = {l.link_id for l in group_links if user_overrides.get(l.link_id) == OverrideState.EXCLUDED}
 
@@ -239,24 +254,15 @@ class ForwardSimulationScheduler(BaseScheduler):
                     if not any(conflict_id in scheduled_link_ids for conflict_id in conflicts):
                         scheduled_link_ids.add(pid)
 
-                # For AUTO links, compute scores via injected BaseScoringRule
+                # For AUTO links, sort unassigned links by pre-computed objective score descending
                 unassigned_links = [
                     l for l in group_links 
                     if l.link_id not in scheduled_link_ids and l.link_id not in excluded_link_ids
                 ]
 
-                link_scores = {}
-                for l in unassigned_links:
-                    sat_name = l.satellite_name
-                    config = satellite_configs[sat_name]
-                    curr_buf = current_buffer[sat_name]
-                    score, useful_offload = scoring_rule.compute_score(l, curr_buf, config)
-                    link_scores[l.link_id] = (score, useful_offload)
-
-                # Sort unassigned links by score descending
                 sorted_unassigned = sorted(
                     unassigned_links,
-                    key=lambda l: link_scores[l.link_id][0],
+                    key=lambda l: group_evaluations[l.link_id][0],
                     reverse=True
                 )
 
@@ -268,21 +274,15 @@ class ForwardSimulationScheduler(BaseScheduler):
                     if not any(conflict_id in scheduled_link_ids for conflict_id in conflicts):
                         scheduled_link_ids.add(cid)
 
-                # Update Plan Status and Deduct Buffer for Winners
+                # 3. Update Plan Status and Deduct Buffer for Winners
                 for l in group_links:
                     lid = l.link_id
                     sat_name = l.satellite_name
                     config = satellite_configs[sat_name]
                     override = user_overrides.get(lid, OverrideState.AUTO)
-
-                    # Obtain the computed score for this candidate link
-                    if lid in link_scores:
-                        score_val, _ = link_scores[lid]
-                    else:
-                        score_val, _ = scoring_rule.compute_score(l, current_buffer[sat_name], config)
+                    score_val, useful_offload, incoming_buf = group_evaluations[lid]
 
                     if lid in scheduled_link_ids:
-                        _, useful_offload = scoring_rule.compute_score(l, current_buffer[sat_name], config)
                         total_downlinked[sat_name] += useful_offload
 
                         # Record profile points
@@ -316,6 +316,8 @@ class ForwardSimulationScheduler(BaseScheduler):
                             tradeoff_id=tradeoff_id,
                             score=round(score_val, 2),
                             useful_data_offloaded_mb=round(useful_offload, 2),
+                            incoming_buffer_mb=round(incoming_buf, 2),
+                            potential_data_downlink_mb=round(useful_offload, 2),
                             rejection_reason=None,
                         )
                     else:
@@ -333,6 +335,8 @@ class ForwardSimulationScheduler(BaseScheduler):
                             tradeoff_id=tradeoff_id,
                             score=round(score_val, 2),
                             useful_data_offloaded_mb=0.0,
+                            incoming_buffer_mb=round(incoming_buf, 2),
+                            potential_data_downlink_mb=round(useful_offload, 2),
                             rejection_reason=reason,
                         )
 

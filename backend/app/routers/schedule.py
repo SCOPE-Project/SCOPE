@@ -9,6 +9,7 @@ from app.models.scheduling import (
     SessionPlanDTO,
     OverrideRequest,
     StrategyUpdateRequest,
+    CommitRequestDTO,
     CommitResponseDTO,
 )
 
@@ -74,7 +75,7 @@ def update_scoring_strategy(session_id: str, payload: StrategyUpdateRequest):
 
 
 @router.post("/session/{session_id}/commit", response_model=CommitResponseDTO)
-def commit_schedule_to_satos(session_id: str):
+def commit_schedule_to_satos(session_id: str, payload: CommitRequestDTO | None = None):
     """
     Transforms all active scheduled links into SatOS Activity and ScheduleEvent models,
     and commits them to the central SatOS schedule.
@@ -83,12 +84,14 @@ def commit_schedule_to_satos(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail=f"SchedulingSession '{session_id}' not found.")
 
-    # 1. Filter scheduled links
-    scheduled_links = [
-        status.link for status in session.current_plan.values() if status.is_scheduled
+    user = payload.user if payload else None
+
+    # 1. Filter scheduled links (preserving ScheduledLinkStatus for override state)
+    scheduled_statuses = [
+        status for status in session.current_plan.values() if status.is_scheduled
     ]
 
-    if not scheduled_links:
+    if not scheduled_statuses:
         return CommitResponseDTO(
             session_id=session_id,
             committed_links_count=0,
@@ -98,14 +101,17 @@ def commit_schedule_to_satos(session_id: str):
 
     try:
         # 2. Convert to SatOS Activity and Event models
-        activities = AssetRepository.create_activities_from_link_blocks(scheduled_links)
+        activities = AssetRepository.create_activities_from_link_blocks(
+            scheduled_statuses,
+            user=user,
+        )
 
         # 3. Push batch activities to SatOS
         push_activities_to_SatOS(activities)
 
         return CommitResponseDTO(
             session_id=session_id,
-            committed_links_count=len(scheduled_links),
+            committed_links_count=len(scheduled_statuses),
             created_activities_count=len(activities),
             status="synchronized",
         )

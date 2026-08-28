@@ -23,6 +23,8 @@ import {
   buildRowsFromFilteredLinks,
   buildSelectedOptionsFromPlan,
   buildTradeOffCardsFromPlan,
+  filterVisibleTimelineActivities,
+  filterVisibleTimelineLinks,
   getScheduledRows,
 } from './schedulingModel.js'
 
@@ -31,12 +33,10 @@ const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
 // Reset View puts the whole planning window back on screen. Everything between
 // 1x and the max multiplier is reached with Ctrl/Cmd + wheel.
 const TIMELINE_DEFAULT_ZOOM_LEVEL = 'fit'
-// The three layers used to BE the timeline's rows. Since rows became
-// asset-centric they are pure filters over which kind of bar is drawn.
+// The primary schedule layers for the timeline.
 const TIMELINE_LAYERS = [
-  { id: 'current', label: 'Current Schedule' },
-  { id: 'proposed', label: 'Proposed Schedule' },
-  { id: 'ineligible', label: 'Ineligible Links' },
+  { id: 'payload', label: 'Payload Schedule' },
+  { id: 'communication', label: 'Communication Schedule' },
 ]
 const TIMELINE_WHEEL_ZOOM_STEP = 0.6
 const TIMELINE_MIN_ZOOM_MULTIPLIER = 1
@@ -246,6 +246,7 @@ export default function App() {
   const [backendAlive, setBackendAlive] = useState(null)
   const [satosAlive, setSatosAlive] = useState(null)
   const [view, setView] = useState('landing')
+  const [userName, setUserName] = useState('')
   const [selectedSatellites, setSelectedSatellites] = useState([])
   const [selectedGroundStations, setSelectedGroundStations] = useState([])
   const [minimumLinkElevationFilterDeg, setMinimumLinkElevationFilterDeg] = useState('')
@@ -367,9 +368,9 @@ export default function App() {
   // Fit/Detail preset until they click a preset button again.
   const [timelineCustomZoomMultiplier, setTimelineCustomZoomMultiplier] = useState(null)
   const [timelineLayers, setTimelineLayers] = useState({
-    current: true,
+    payload: true,
+    communication: true,
     ineligible: false,
-    proposed: true,
   })
   const [timelineAssetVisibility, setTimelineAssetVisibility] = useState({
     satellites: true,
@@ -669,11 +670,11 @@ export default function App() {
       return '—'
     }
 
-    if (seconds < 60) {
-      return `${Math.round(seconds)} sec`
-    }
+    const totalSeconds = Math.round(seconds)
+    const minutes = Math.floor(totalSeconds / 60)
+    const remainingSeconds = totalSeconds % 60
 
-    return `${Math.round(seconds / 60)} min`
+    return `${minutes}min ${remainingSeconds}s`
   }
 
   const formatUtcEventDateTime = (value) => {
@@ -938,14 +939,8 @@ export default function App() {
       return '—'
     }
 
-    const durationMinutes = Math.round((endTimestamp - startTimestamp) / 60000)
-    if (durationMinutes < 60) {
-      return `${durationMinutes} min`
-    }
-
-    const hours = Math.floor(durationMinutes / 60)
-    const minutes = durationMinutes % 60
-    return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`
+    const durationSeconds = (endTimestamp - startTimestamp) / 1000
+    return formatDurationFromSeconds(durationSeconds)
   }
 
   const formatTimelineItemDuration = (item) => {
@@ -1118,14 +1113,20 @@ export default function App() {
           variant = 'neutral'
         }
 
+        const resolvedLinkId = (row.backendLinkId && String(row.backendLinkId).trim().length > 0)
+          ? row.backendLinkId
+          : (row.linkId && String(row.linkId).trim().length > 0)
+            ? row.linkId
+            : row.overpassId
+
         return {
           kind: 'link',
-          linkId: row.backendLinkId ?? row.linkId,
+          linkId: resolvedLinkId,
           overpassId: row.overpassId,
           satId: row.satId,
           gsId: row.gsId,
           durationSeconds: row.durationSeconds,
-          label: row.backendLinkId ?? row.linkId,
+          label: resolvedLinkId,
           detail: hasTradeOff
             ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
             : `${row.satId} → ${row.gsId}`,
@@ -1133,7 +1134,6 @@ export default function App() {
           endTime: row.endTime,
           startTimestamp,
           endTimestamp,
-          layer: partOfProposal ? 'proposed' : 'potential',
           variant,
           dimmed,
           ineligible,
@@ -1274,11 +1274,8 @@ export default function App() {
       durationMinutes: Math.max(1 / 60, (item.endTimestamp - item.startTimestamp) / 60000),
     })
 
-    const layerVisible = (layer) => timelineLayers[layer] !== false
-    const visibleLinkItems = clampedLinkItems.filter((item) => (
-      layerVisible(item.layer) && (!item.ineligible || timelineLayers.ineligible)
-    ))
-    const visibleActivityItems = clampedCurrentItems.filter(() => layerVisible('current'))
+    const visibleActivityItems = filterVisibleTimelineActivities(clampedCurrentItems, timelineLayers)
+    const visibleLinkItems = filterVisibleTimelineLinks(clampedLinkItems, timelineLayers)
 
     const satelliteNames = [...new Set([
       ...rows.map((row) => row.satId),
@@ -1308,9 +1305,9 @@ export default function App() {
 
       const headerSource = [
         ...visibleActivityItems.filter((item) => item.assetName === assetName),
-        // Q7/Q11: the header aggregates what is actually scheduled for this
+        // The header aggregates what is actually scheduled for this
         // asset, so a collapsed group still tells the truth.
-        ...ownLinkItems.filter((item) => item.layer === 'proposed'),
+        ...ownLinkItems.filter((item) => item.isScheduled),
       ]
       const headerLayout = layoutTimelineItems(headerSource.map(mapToTimelineItem))
 
@@ -1325,7 +1322,7 @@ export default function App() {
           laneCount: layout.laneCount,
           items: layout.items.map((item) => ({
             ...item,
-            id: `${kind}:${assetName}|${counterpartName}|${item.linkId}`,
+            id: `${kind}:${assetName}|${counterpartName}|${item.overpassId || item.linkId}`,
           })),
           containsSelected: rowItems.some((item) => item.variant === 'selected'),
         }
@@ -1339,7 +1336,7 @@ export default function App() {
         laneCount: headerLayout.laneCount,
         items: headerLayout.items.map((item) => ({
           ...item,
-          id: `${kind}:${assetName}|header|${item.linkId ?? item.id}`,
+          id: `${kind}:${assetName}|header|${item.overpassId || item.linkId || item.id}`,
         })),
         rows: assetRows,
         linkCount: assetRows.length,
@@ -1466,9 +1463,9 @@ export default function App() {
     setMarkedTimelineLinkId(null)
     setMarkedTradeOffOptionId(null)
     setTimelineLayers({
-      current: true,
+      payload: true,
+      communication: true,
       ineligible: false,
-      proposed: true,
     })
     setExpandedSections({
       timeWindow: true,
@@ -1696,7 +1693,7 @@ export default function App() {
   }))
 
   const handleLaunchScheduler = async () => {
-    if (!launchRequirementsMet) return false
+    if (!launchRequirementsMet || backendAlive !== true) return false
 
     const planningWindow = {
       startTime: planningDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime),
@@ -2094,7 +2091,7 @@ export default function App() {
     setError(null)
 
     try {
-      const result = await commitSession(sessionId)
+      const result = await commitSession(sessionId, userName.trim())
       setConfirmationProgress(100)
       setConfirmationStep('Communication schedule confirmed.')
       setConfirmationSuccess(true)
@@ -2149,6 +2146,15 @@ export default function App() {
         <div className="app-header-subtitle">Satellite Communication Optimizer and Planning Engine</div>
       </div>
       <div className="app-header-controls">
+        {userName.trim() !== '' && (
+          <div className="app-header-user" title={`Logged Mission Operator: ${userName.trim()}`}>
+            <span className="app-header-user-badge">
+              <span className="app-header-user-icon" aria-hidden="true">👤</span>
+              <span className="app-header-user-label">Operator:</span>
+              <strong className="app-header-user-name">{userName.trim()}</strong>
+            </span>
+          </div>
+        )}
         {showStatus && (
           <div className="app-header-status">
             <div className="app-status-stack">
@@ -2256,8 +2262,10 @@ export default function App() {
     && planningWindowEndInstant
     && planningWindowEndInstant > planningWindowStartInstant,
   )
+  const operatorNameValid = userName.trim().length > 0
   const launchRequirementsMet =
-    planningWindowValid
+    operatorNameValid
+    && planningWindowValid
     && selectedSatellites.length >= 1
     && selectedGroundStations.length >= 1
     && linkFiltersValid
@@ -2270,26 +2278,26 @@ export default function App() {
       busy: true,
       retryLabel: null,
     }
-    : backendAlive === null
+    : missionAssetsLoaded
       ? {
-        tone: 'busy',
-        label: 'Connecting to the SCOPE backend\u2026',
-        busy: true,
-        retryLabel: null,
+        tone: 'ready',
+        label: `Mission assets loaded \u2014 ${assets.length} asset${assets.length === 1 ? '' : 's'} from SatOS`,
+        busy: false,
+        retryLabel: backendAlive ? 'Reload' : null,
       }
-      : backendAlive === false
+      : backendAlive === null
         ? {
-          tone: 'error',
-          label: 'Backend offline \u2014 start the SCOPE backend to load mission assets.',
-          busy: false,
+          tone: 'busy',
+          label: 'Connecting to the SCOPE backend\u2026',
+          busy: true,
           retryLabel: null,
         }
-        : missionAssetsLoaded
+        : backendAlive === false
           ? {
-            tone: 'ready',
-            label: `Mission assets loaded \u2014 ${assets.length} asset${assets.length === 1 ? '' : 's'} from SatOS`,
+            tone: 'error',
+            label: 'Backend offline \u2014 start the SCOPE backend to load mission assets.',
             busy: false,
-            retryLabel: 'Reload',
+            retryLabel: null,
           }
           : {
             tone: 'error',
@@ -2300,6 +2308,7 @@ export default function App() {
   const loadScopeDisabled =
     loading
     || launchingScheduler
+    || backendAlive !== true
     || !missionAssetsLoaded
     || !launchRequirementsMet
   const loadScopeDisabledReason =
@@ -2307,21 +2316,27 @@ export default function App() {
       ? 'Wait until the current request is finished.'
       : launchingScheduler
         ? 'SCOPE is currently starting.'
-        : !missionAssetsLoaded
-          ? 'Waiting for SatOS mission data to finish loading.'
-          : !planningWindowValid
-            ? 'Enter a valid planning window with an end time after the start time.'
-            : selectedSatellites.length < 1
-              ? 'Select at least one satellite.'
-              : selectedGroundStations.length < 1
-                ? 'Select at least one ground station.'
-                : !linkFiltersValid
-                  ? 'Optional filter values must stay between 0° and 90°.'
-                  : !bufferConfigValid
-                    ? 'Enter a valid buffer configuration and keep initial fill at or below capacity.'
-                    : !tradeOffConfigValid
-                      ? 'Enter a valid trade-off scoring configuration.'
-                      : ''
+        : backendAlive === false
+          ? 'Backend offline \u2014 start the SCOPE backend to load SCOPE.'
+          : backendAlive === null
+            ? 'Connecting to the SCOPE backend\u2026'
+            : !missionAssetsLoaded
+              ? 'Waiting for SatOS mission data to finish loading.'
+              : !operatorNameValid
+                ? 'Enter an operator name before launching SCOPE.'
+                : !planningWindowValid
+                  ? 'Enter a valid planning window with an end time after the start time.'
+                  : selectedSatellites.length < 1
+                    ? 'Select at least one satellite.'
+                    : selectedGroundStations.length < 1
+                      ? 'Select at least one ground station.'
+                      : !linkFiltersValid
+                        ? 'Optional filter values must stay between 0° and 90°.'
+                        : !bufferConfigValid
+                          ? 'Enter a valid buffer configuration and keep initial fill at or below capacity.'
+                          : !tradeOffConfigValid
+                            ? 'Enter a valid trade-off scoring configuration.'
+                            : ''
   const timeOptions = Array.from({ length: 96 }, (_, index) => {
     const hours = String(Math.floor(index / 4)).padStart(2, '0')
     const minutes = String((index % 4) * 15).padStart(2, '0')
@@ -2591,11 +2606,18 @@ export default function App() {
   )
   const bufferLevelBeforeByLinkId = useMemo(() => {
     const next = new Map()
-    const profiles = sessionPlan?.satellite_buffer_profiles ?? {}
+    const currentPlan = sessionPlan?.current_plan ?? {}
 
+    Object.entries(currentPlan).forEach(([linkId, status]) => {
+      if (status?.incoming_buffer_mb !== undefined && status?.incoming_buffer_mb !== null) {
+        next.set(linkId, Number(status.incoming_buffer_mb))
+      }
+    })
+
+    const profiles = sessionPlan?.satellite_buffer_profiles ?? {}
     Object.values(profiles).forEach((profile) => {
       ;(profile?.profile_points ?? []).forEach((point) => {
-        if (point?.event_type === 'downlink_start' && point?.associated_id) {
+        if (point?.event_type === 'downlink_start' && point?.associated_id && !next.has(point.associated_id)) {
           next.set(point.associated_id, Number(point.level_mb ?? 0))
         }
       })
@@ -5229,15 +5251,30 @@ export default function App() {
                 )}
 
                 <div className="landing-config-footer">
-                  <label className="landing-clear-scope-option">
-                    <input
-                      type="checkbox"
-                      checked={clearExistingScopeActivities}
-                      onChange={(e) => setClearExistingScopeActivities(e.target.checked)}
-                      disabled={launchingScheduler}
-                    />
-                    <span>Clear all existing SCOPE activities from the SatOS schedule</span>
-                  </label>
+                  <div className="landing-footer-controls">
+                    <label className="landing-operator-inline-label">
+                      <span className="landing-operator-icon" aria-hidden="true">👤</span>
+                      <span className="landing-operator-text">Operator:</span>
+                      <input
+                        type="text"
+                        className="landing-operator-inline-input"
+                        placeholder="Enter your name (required)..."
+                        value={userName}
+                        onChange={(e) => setUserName(e.target.value)}
+                        disabled={launchingScheduler}
+                        aria-label="Mission operator name"
+                      />
+                    </label>
+                    <label className="landing-clear-scope-option">
+                      <input
+                        type="checkbox"
+                        checked={clearExistingScopeActivities}
+                        onChange={(e) => setClearExistingScopeActivities(e.target.checked)}
+                        disabled={launchingScheduler}
+                      />
+                      <span>Clear all existing SCOPE activities from the SatOS schedule</span>
+                    </label>
+                  </div>
                   <div className="landing-action-wrapper">
                     {launchingScheduler ? (
                       <button
@@ -5381,7 +5418,7 @@ export default function App() {
                         <span>Score</span>
                       </span>
                     )}
-                    {tradeOffsCalculated && <span>Data Downlink</span>}
+                    {tradeOffsCalculated && <span>Real Data Downlink</span>}
                     {tradeOffsCalculated && (
                       <span className="overview-header-cell overview-header-cell--controls">
                         <span>Controls</span>
@@ -5464,7 +5501,7 @@ export default function App() {
                             <span>{row.duration}</span>
                             <span>{row.maxElevation ?? '—'}</span>
                             {tradeOffsCalculated && (
-                              <span>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(row.backendLinkId ?? row.linkId ?? null))}</span>
+                              <span>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(row.backendLinkId ?? row.linkId ?? null) ?? row.incomingBufferMb)}</span>
                             )}
                             {tradeOffsCalculated && (
                               rowUnavailable
@@ -5492,9 +5529,17 @@ export default function App() {
                             )}
                             {tradeOffsCalculated && (
                               <span className="overview-offloaded-cell">
-                                {row.isScheduled
-                                  ? formatDataDownlinkGb(getBackendDataDownlinkMb(row))
-                                  : '—'}
+                                {formatDataDownlinkGb(
+                                  row.potentialDataDownlinkMb
+                                    ?? (() => {
+                                      const passCap = getPassCapacityMb(row)
+                                      const bufBefore = bufferLevelBeforeByLinkId.get(row.backendLinkId ?? row.linkId ?? null) ?? row.incomingBufferMb
+                                      if (Number.isFinite(passCap) && Number.isFinite(bufBefore)) {
+                                        return Math.min(passCap, bufBefore)
+                                      }
+                                      return getBackendDataDownlinkMb(row)
+                                    })()
+                                )}
                               </span>
                             )}
                             {tradeOffsCalculated && (
@@ -5710,18 +5755,36 @@ export default function App() {
                               </div>
                               <div className="tradeoff-option-fact">
                                 <dt>Buffer level before</dt>
-                                <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
+                                <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb)}</dd>
                               </div>
                               <div className="tradeoff-option-fact">
-                                <dt>Pass capacity</dt>
-                                <dd>{formatDataDownlinkGb(getPassCapacityMb(option))}</dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
-                                <dt>Data Downlink</dt>
+                                <dt>Full pass capacity</dt>
                                 <dd>
-                                  {option.isScheduled
-                                    ? formatDataDownlinkGb(getBackendDataDownlinkMb(option))
-                                    : '—'}
+                                  <span>{formatDataDownlinkGb(getPassCapacityMb(option))}</span>
+                                  {(() => {
+                                    const passCapMb = getPassCapacityMb(option)
+                                    const bufBeforeMb = bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb
+                                    if (Number.isFinite(passCapMb) && Number.isFinite(bufBeforeMb) && bufBeforeMb < passCapMb) {
+                                      return renderAssetWarning("Pass Capacity exceeds Buffer level")
+                                    }
+                                    return null
+                                  })()}
+                                </dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
+                                <dt>Real data downlink</dt>
+                                <dd>
+                                  {formatDataDownlinkGb(
+                                    option.potentialDataDownlinkMb
+                                      ?? (() => {
+                                        const passCap = getPassCapacityMb(option)
+                                        const bufBefore = bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb
+                                        if (Number.isFinite(passCap) && Number.isFinite(bufBefore)) {
+                                          return Math.min(passCap, bufBefore)
+                                        }
+                                        return getBackendDataDownlinkMb(option)
+                                      })()
+                                  )}
                                 </dd>
                               </div>
                             </dl>
@@ -6087,6 +6150,16 @@ export default function App() {
                               {layer.label}
                             </button>
                           ))}
+                          {timelineLayers.communication && (
+                            <button
+                              type="button"
+                              className={`timeline-toggle timeline-toggle--sub ${timelineLayers.ineligible ? 'timeline-toggle--active' : ''}`}
+                              onClick={() => toggleTimelineLayer('ineligible')}
+                              aria-pressed={Boolean(timelineLayers.ineligible)}
+                            >
+                              Show Ineligible Links
+                            </button>
+                          )}
                         </div>
                         <div className="timeline-toggle-group timeline-toggle-group--asset" role="group" aria-label="Timeline assets">
                           <button
@@ -6573,18 +6646,36 @@ export default function App() {
                                   </div>
                                   <div className="tradeoff-option-fact">
                                     <dt>Buffer level before</dt>
-                                    <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
+                                    <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb)}</dd>
                                   </div>
                                   <div className="tradeoff-option-fact">
-                                    <dt>Pass capacity</dt>
-                                    <dd>{formatDataDownlinkGb(getPassCapacityMb(option))}</dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
-                                    <dt>Data Downlink</dt>
+                                    <dt>Full pass capacity</dt>
                                     <dd>
-                                      {option.isScheduled
-                                        ? formatDataDownlinkGb(getBackendDataDownlinkMb(option))
-                                        : '—'}
+                                      <span>{formatDataDownlinkGb(getPassCapacityMb(option))}</span>
+                                      {(() => {
+                                        const passCapMb = getPassCapacityMb(option)
+                                        const bufBeforeMb = bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb
+                                        if (Number.isFinite(passCapMb) && Number.isFinite(bufBeforeMb) && bufBeforeMb < passCapMb) {
+                                          return renderAssetWarning("Pass Capacity exceeds Buffer level")
+                                        }
+                                        return null
+                                      })()}
+                                    </dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
+                                    <dt>Real data downlink</dt>
+                                    <dd>
+                                      {formatDataDownlinkGb(
+                                        option.potentialDataDownlinkMb
+                                          ?? (() => {
+                                            const passCap = getPassCapacityMb(option)
+                                            const bufBefore = bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb
+                                            if (Number.isFinite(passCap) && Number.isFinite(bufBefore)) {
+                                              return Math.min(passCap, bufBefore)
+                                            }
+                                            return getBackendDataDownlinkMb(option)
+                                          })()
+                                      )}
                                     </dd>
                                   </div>
                                 </dl>
@@ -6702,7 +6793,7 @@ export default function App() {
                       </div>
                       <div className="staging-metric-card">
                         <span className="staging-metric-label">Total Contact Time</span>
-                        <span className="staging-metric-value">{commitSummary.totalDurationMinutes} min</span>
+                        <span className="staging-metric-value">{formatDurationFromSeconds(commitSummary.totalDurationSeconds)}</span>
                         <span className="staging-metric-subtext">{commitSummary.totalDurationSeconds} seconds total</span>
                       </div>
                       <div className="staging-metric-card">
@@ -6774,11 +6865,14 @@ export default function App() {
                                     const linkId = link.backendLinkId || link.linkId
                                     const actName = `DOWNLINK_${linkId}_${link.satId}-${link.gsId}`
                                     const linkConfirmed = Boolean(confirmedStagingLinks[`sat:${linkId}`])
+                                    const linkInitiator = link.overrideState === 'pinned'
+                                      ? `SCOPE_pinned-${userName.trim() || 'operator'}`
+                                      : 'SCOPE_auto-scheduled'
                                     return (
                                       <tr key={linkId} className={linkConfirmed ? 'staging-link-row--confirmed' : ''}>
                                         <td><strong>{linkId}</strong></td>
                                         <td><code className="staging-code-cell">{actName}</code></td>
-                                        <td><span className="staging-initiator-badge">SCOPE_Scheduler</span></td>
+                                        <td><span className="staging-initiator-badge">{linkInitiator}</span></td>
                                         <td>{link.gsId}</td>
                                         <td>{formatUtcEventDateTime(link.startTime)}</td>
                                         <td>{formatUtcEventDateTime(link.endTime)}</td>
@@ -6870,11 +6964,14 @@ export default function App() {
                                     const linkId = link.backendLinkId || link.linkId
                                     const actName = `DOWNLINK_${linkId}_${link.satId}-${link.gsId}`
                                     const linkConfirmed = Boolean(confirmedStagingLinks[`gs:${linkId}`])
+                                    const linkInitiator = link.overrideState === 'pinned'
+                                      ? `SCOPE_pinned-${userName.trim() || 'operator'}`
+                                      : 'SCOPE_auto-scheduled'
                                     return (
                                       <tr key={linkId} className={linkConfirmed ? 'staging-link-row--confirmed' : ''}>
                                         <td><strong>{linkId}</strong></td>
                                         <td><code className="staging-code-cell">{actName}</code></td>
-                                        <td><span className="staging-initiator-badge">SCOPE_Scheduler</span></td>
+                                        <td><span className="staging-initiator-badge">{linkInitiator}</span></td>
                                         <td>{link.satId}</td>
                                         <td>{formatUtcEventDateTime(link.startTime)}</td>
                                         <td>{formatUtcEventDateTime(link.endTime)}</td>
@@ -7207,15 +7304,17 @@ export default function App() {
                   <button
                     type="button"
                     className="btn-fetch"
-                    disabled={!launchRequirementsMet}
+                    disabled={!launchRequirementsMet || backendAlive !== true}
                     onClick={handleLaunchScheduler}
                   >
                     Launch Communication Scheduler
                   </button>
                 )}
-                {!launchRequirementsMet && !launchingScheduler && (
+                {!launchingScheduler && (!launchRequirementsMet || backendAlive !== true) && (
                   <span className="sidebar-action-tooltip">
-                    Enter a valid time window and select at least 1 satellite and 1 ground station first.
+                    {backendAlive === false
+                      ? 'Backend offline \u2014 start the SCOPE backend to launch the scheduler.'
+                      : 'Enter a valid time window and select at least 1 satellite and 1 ground station first.'}
                   </span>
                 )}
               </div>

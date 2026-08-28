@@ -112,12 +112,11 @@ export const updateSessionStrategy = (sessionId, payload, signal) => (
   postJson(`/schedule/session/${encodeURIComponent(sessionId)}/strategy`, payload, signal)
 )
 
-export const commitSession = (sessionId, signal) => (
-  requestJson(`/schedule/session/${encodeURIComponent(sessionId)}/commit`, {
-    method: 'POST',
-    signal,
-  })
-)
+export const commitSession = (sessionId, user, signal) => {
+  const payload = typeof user === 'string' ? { user } : user && typeof user === 'object' && !('aborted' in user) ? user : {}
+  const abortSignal = user && typeof user === 'object' && 'aborted' in user ? user : signal
+  return postJson(`/schedule/session/${encodeURIComponent(sessionId)}/commit`, payload, abortSignal)
+}
 
 export const clearScopeActivities = (payload, signal) => (
   postJson('/utilities/satos/clear-scope-activities', payload, signal)

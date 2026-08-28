@@ -5,6 +5,8 @@ import {
   buildRowsFromFilteredLinks,
   buildSelectedOptionsFromPlan,
   buildTradeOffCardsFromPlan,
+  filterVisibleTimelineActivities,
+  filterVisibleTimelineLinks,
   getScheduledRows,
 } from './schedulingModel.js'
 
@@ -111,6 +113,36 @@ describe('scheduling view-model adapters', () => {
       totalOffloadedMb: 500,
       totalDurationSeconds: 600,
     })
+  })
+
+  it('filters timeline activities based on payload schedule layer', () => {
+    const activities = [{ id: 'act-1', assetName: 'Sat-1' }, { id: 'act-2', assetName: 'GS-1' }]
+
+    expect(filterVisibleTimelineActivities(activities, { payload: true })).toEqual(activities)
+    expect(filterVisibleTimelineActivities(activities, { payload: false })).toEqual([])
+  })
+
+  it('filters timeline links based on communication schedule and ineligible toggle', () => {
+    const timelineLinks = [
+      { id: 'link-1', ineligible: false, isScheduled: true },
+      { id: 'link-2', ineligible: false, isScheduled: false },
+      { id: 'link-3', ineligible: true, isScheduled: false },
+    ]
+
+    // Communication schedule active, ineligible hidden (default)
+    expect(filterVisibleTimelineLinks(timelineLinks, { communication: true, ineligible: false })).toEqual([
+      timelineLinks[0],
+      timelineLinks[1],
+    ])
+
+    // Communication schedule active, ineligible shown
+    expect(filterVisibleTimelineLinks(timelineLinks, { communication: true, ineligible: true })).toEqual(
+      timelineLinks,
+    )
+
+    // Communication schedule disabled (hides ALL links regardless of ineligible setting)
+    expect(filterVisibleTimelineLinks(timelineLinks, { communication: false, ineligible: false })).toEqual([])
+    expect(filterVisibleTimelineLinks(timelineLinks, { communication: false, ineligible: true })).toEqual([])
   })
 })
 

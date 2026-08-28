@@ -379,7 +379,8 @@ def satos_clear_scope_activities(
         return {}
 
     def _is_within_window(act: ActivityInfoModel) -> bool:
-        if getattr(act, "initiator", None) != "SCOPE_Scheduler":
+        initiator = getattr(act, "initiator", None) or ""
+        if not (initiator == "SCOPE_Scheduler" or initiator.startswith("SCOPE_")):
             return False
 
         if start_time is None and end_time is None:
