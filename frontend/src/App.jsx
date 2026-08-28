@@ -345,6 +345,7 @@ export default function App() {
   const [confirmedStagingLinks, setConfirmedStagingLinks] = useState({})
   const [clearExistingScopeActivities, setClearExistingScopeActivities] = useState(false)
   const [confirmationSuccess, setConfirmationSuccess] = useState(false)
+  const [scheduleCommitted, setScheduleCommitted] = useState(false)
   const [confirmedScheduleCount, setConfirmedScheduleCount] = useState(0)
   const [createdActivitiesCount, setCreatedActivitiesCount] = useState(0)
   const [overridingLinkId, setOverridingLinkId] = useState(null)
@@ -586,6 +587,7 @@ export default function App() {
     const animationFrameId = window.requestAnimationFrame(() => {
       setIsScheduleStaged(false)
       setConfirmationSuccess(false)
+      setScheduleCommitted(false)
       setConfirmedScheduleCount(0)
       setCreatedActivitiesCount(0)
       setConfirmedStagingLinks({})
@@ -1493,6 +1495,7 @@ export default function App() {
     setConfirmationStep('')
     setIsScheduleStaged(false)
     setConfirmationSuccess(false)
+    setScheduleCommitted(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
     setConfirmedStagingLinks({})
@@ -1769,6 +1772,7 @@ export default function App() {
     setMarkedTradeOffOptionId(null)
     setIsScheduleStaged(false)
     setConfirmationSuccess(false)
+    setScheduleCommitted(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
     setConfirmedStagingLinks({})
@@ -1968,6 +1972,7 @@ export default function App() {
     setTradeOffsCalculated(true)
     setIsScheduleStaged(false)
     setConfirmationSuccess(false)
+    setScheduleCommitted(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
     setConfirmedStagingLinks({})
@@ -2070,7 +2075,13 @@ export default function App() {
   }
 
   const handleCommitToSatOS = async () => {
-    if (!sessionId || finalScheduleRows.length === 0 || confirmingSchedule || !allStagingLinksConfirmed) {
+    if (
+      !sessionId
+      || finalScheduleRows.length === 0
+      || confirmingSchedule
+      || !allStagingLinksConfirmed
+      || scheduleCommitted
+    ) {
       return
     }
 
@@ -2087,6 +2098,7 @@ export default function App() {
       setConfirmationProgress(100)
       setConfirmationStep('Communication schedule confirmed.')
       setConfirmationSuccess(true)
+      setScheduleCommitted(true)
       setConfirmedScheduleCount(result.committed_links_count ?? 0)
       setCreatedActivitiesCount(result.created_activities_count ?? 0)
 
@@ -6927,14 +6939,24 @@ export default function App() {
                           || !sessionId
                           || finalScheduleRows.length === 0
                           || !allStagingLinksConfirmed
+                          || scheduleCommitted
                         }
                         onClick={handleCommitToSatOS}
                       >
-                        {confirmingSchedule ? 'Committing Activities to SatOS...' : 'Commit SCOPE Communication Activities to SatOS'}
+                        {confirmingSchedule
+                          ? 'Committing Activities to SatOS...'
+                          : scheduleCommitted
+                          ? 'Schedule Already Committed to SatOS'
+                          : 'Commit SCOPE Communication Activities to SatOS'}
                       </button>
-                      {!confirmingSchedule && !allStagingLinksConfirmed && (
+                      {!confirmingSchedule && !scheduleCommitted && !allStagingLinksConfirmed && (
                         <span className="staging-commit-tooltip">
                           Every link needs to be confirmed on both its satellite side and its ground station side before committing to SatOS.
+                        </span>
+                      )}
+                      {!confirmingSchedule && scheduleCommitted && (
+                        <span className="staging-commit-tooltip">
+                          This schedule was already committed to SatOS. Change an override or recalculate trade-offs to commit again.
                         </span>
                       )}
                     </div>

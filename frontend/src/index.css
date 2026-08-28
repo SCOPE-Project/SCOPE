@@ -2255,10 +2255,16 @@ body {
 }
 
 .overview-header-cell--schedule {
-  justify-content: flex-start;
-  text-align: left;
+  justify-content: flex-end;
   padding-left: 0.12rem;
-  padding-right: 0.28rem;
+  padding-right: 0;
+}
+
+.overview-header-cell--schedule > span {
+  display: inline-block;
+  width: 5.5rem;
+  max-width: 100%;
+  text-align: left;
 }
 
 .overview-header-note {
