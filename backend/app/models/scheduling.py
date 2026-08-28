@@ -4,6 +4,10 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 from core.models.scheduling import (
+    DEFAULT_BUFFER_CAPACITY_MB,
+    DEFAULT_BUFFER_INITIAL_LEVEL_MB,
+    DEFAULT_DOWNLINK_RATE_MBPS,
+    DEFAULT_PAYLOAD_GENERATION_RATE_MBPS,
     LinkBlock,
     ScheduledLinkStatus,
     TradeOffGroup,
@@ -83,10 +87,10 @@ class FilterResultDTO(BaseModel):
 
 class SatelliteBufferConfigDTO(BaseModel):
     satellite_name: Optional[str] = Field(default=None, description="Satellite name/identifier")
-    capacity_mb: float = Field(default=2000.0, gt=0, description="Buffer capacity in MB")
-    initial_level_mb: float = Field(default=0.0, ge=0, description="Initial buffer level in MB")
-    payload_generation_rate_mbps: float = Field(default=15.0, ge=0, description="Payload generation data rate in MB/s")
-    downlink_rate_mbps: float = Field(default=25.0, gt=0, description="Downlink transmission data rate in MB/s")
+    capacity_mb: float = Field(default=DEFAULT_BUFFER_CAPACITY_MB, gt=0, description="Buffer capacity in MB")
+    initial_level_mb: float = Field(default=DEFAULT_BUFFER_INITIAL_LEVEL_MB, ge=0, description="Initial buffer level in MB")
+    payload_generation_rate_mbps: float = Field(default=DEFAULT_PAYLOAD_GENERATION_RATE_MBPS, ge=0, description="Payload generation data rate in MB/s")
+    downlink_rate_mbps: float = Field(default=DEFAULT_DOWNLINK_RATE_MBPS, gt=0, description="Downlink transmission data rate in MB/s")
 
     def to_domain(self, satellite_name: Optional[str] = None) -> SatelliteBufferConfig:
         name = satellite_name or self.satellite_name or ""

@@ -478,6 +478,72 @@ body {
   min-width: 14rem;
 }
 
+/* Mission assets load automatically; this strip reports that load and is the
+   only place the operator can trigger a manual reload or retry. */
+.landing-assets-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  min-height: 2.2rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-card);
+  background: var(--bg-panel-strong);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.landing-assets-status-text {
+  font-weight: 500;
+}
+
+.landing-assets-status--busy {
+  border-color: var(--line-strong);
+  color: var(--text-secondary);
+}
+
+.landing-assets-status--ready {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.landing-assets-status--error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.landing-assets-status-action {
+  border: 1px solid currentColor;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.6rem;
+}
+
+.landing-assets-status-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.landing-assets-status-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.loading-spinner--inline {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
 .filter-grid {
   display: flex;
   flex-direction: column;
@@ -1359,7 +1425,17 @@ body {
   color: var(--text-muted);
 }
 
-.sidebar-block .time-window-error {
+.time-window-error {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--error-text);
+  border-radius: 0.18rem;
+  background: #fdecec;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--error-text);
+}
+
+.time-window-warning {
   padding: 0.55rem 0.7rem;
   border: 1px solid #d7b27a;
   border-radius: 0.18rem;
@@ -1862,6 +1938,30 @@ body {
   flex-direction: column;
 }
 
+.overview-countdown-cell {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.overview-countdown-cell--active {
+  font-weight: 600;
+  color: var(--accent-success);
+}
+
+.overview-countdown-cell--past,
+.overview-countdown-cell--unknown {
+  color: var(--text-muted);
+}
+
+.overview-list-empty {
+  margin: 0;
+  padding: 1.1rem 0.9rem;
+  font-size: 0.84rem;
+  font-style: italic;
+  color: var(--text-muted);
+  text-align: center;
+}
+
 .overview-table-scroll {
   position: relative;
   overflow-x: auto;
@@ -1990,11 +2090,12 @@ body {
     minmax(6.4rem, 6.4fr)
     minmax(6.1rem, 6.1fr)
     minmax(6.1rem, 6.1fr)
+    minmax(5.4rem, 5.4fr)
     minmax(4.6rem, 4.6fr)
     minmax(5rem, 5fr);
   column-gap: 0.02rem;
   row-gap: 0;
-  width: max(100%, 52.3rem);
+  width: max(100%, 57.7rem);
   min-width: 0;
 }
 
@@ -2007,6 +2108,7 @@ body {
     minmax(6.2rem, 6.2fr)
     minmax(5.5rem, 5.5fr)
     minmax(4.3rem, 4.3fr)
+    minmax(5.1rem, 5.1fr)
     minmax(4.6rem, 4.6fr)
     minmax(4.8rem, 4.8fr)
     minmax(6.3rem, 6.3fr)
@@ -2153,10 +2255,16 @@ body {
 }
 
 .overview-header-cell--schedule {
-  justify-content: flex-start;
-  text-align: left;
+  justify-content: flex-end;
   padding-left: 0.12rem;
-  padding-right: 0.28rem;
+  padding-right: 0;
+}
+
+.overview-header-cell--schedule > span {
+  display: inline-block;
+  width: 5.5rem;
+  max-width: 100%;
+  text-align: left;
 }
 
 .overview-header-note {
@@ -2195,10 +2303,6 @@ body {
   border-color: #b8d5bf;
   background: #edf6ef;
   color: #1f5f31;
-}
-
-.overview-list-row--placeholder {
-  color: var(--text-secondary);
 }
 
 .overview-schedule-state-cell {
@@ -2545,19 +2649,20 @@ body {
   padding: 0.8rem 0.85rem;
   min-width: 0;
   box-shadow: inset 3px 0 0 var(--tradeoff-accent, transparent);
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
-.tradeoff-option--selected {
-  border-color: #b8d5bf;
-  background: #f4faf5;
-  box-shadow: inset 3px 0 0 var(--tradeoff-accent, transparent);
+.tradeoff-option:hover {
+  border-color: #98a3ad;
+}
+
+.tradeoff-option:focus-visible {
+  outline: 2px solid rgba(104, 119, 133, 0.7);
+  outline-offset: 2px;
 }
 
 .tradeoff-option--timeline-drawer {
-  box-shadow: none;
-}
-
-.tradeoff-option--timeline-drawer.tradeoff-option--selected {
   box-shadow: none;
 }
 
@@ -2598,6 +2703,44 @@ body {
   border-color: #97b4d3;
 }
 
+.tradeoff-override-controls {
+  display: flex;
+  width: 100%;
+  gap: 0.4rem;
+}
+
+.tradeoff-override-button {
+  flex: 1 1 0;
+  padding: 0.5rem 0.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.tradeoff-override-button:hover:not(:disabled),
+.tradeoff-override-button:focus-visible {
+  background: #ebf1f8;
+  border-color: #97b4d3;
+  color: var(--accent-primary);
+}
+
+.tradeoff-override-button--active {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+}
+
+.tradeoff-override-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .tradeoff-option--selected .tradeoff-select-button {
   background: #d9f1df;
   border-color: #5aaf70;
@@ -2606,29 +2749,9 @@ body {
 
 .tradeoff-option-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.55rem;
   margin-top: 0.75rem;
-}
-
-.tradeoff-jump-button {
-  width: 100%;
-  font-family: var(--font-family);
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  background: #f4f6f8;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-btn);
-  padding: 0.65rem 0.8rem;
-  cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-}
-
-.tradeoff-jump-button:hover {
-  background: #ebf1f8;
-  border-color: #97b4d3;
-  color: #234b79;
 }
 
 .map-panel {
@@ -4090,6 +4213,73 @@ body {
   transform: translateY(-1px);
 }
 
+/* Per-asset "I reviewed this" checkbox that sits below each asset's link
+   table -- every one of these must be checked before the commit button
+   above unlocks. */
+.staging-asset-confirm-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--line-soft);
+  background: #fafbfc;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.staging-asset-confirm-label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.staging-asset-confirm-label input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: 0 0 auto;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.staging-asset-confirm-bar--confirmed {
+  background: var(--success-bg);
+  border-top-color: var(--success-border);
+}
+
+.staging-asset-confirm-bar--confirmed .staging-asset-confirm-label {
+  color: var(--success-text);
+}
+
+.staging-confirm-column,
+.staging-confirm-cell {
+  text-align: right;
+}
+
+.staging-link-confirm-checkbox {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.staging-links-table tr.staging-link-row--confirmed {
+  background: var(--success-bg);
+}
+
+.staging-commit-tooltip {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  max-width: 22rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #d7b27a;
+  border-radius: 0.18rem;
+  background: #fff7ea;
+  color: #7a4b00;
+}
+
 .timeline-scroll {
   display: block;
   width: 100%;
@@ -5333,7 +5523,7 @@ body {
 
 .timeline-label-cell--marked,
 .timeline-track-row--marked {
-  background: rgba(46, 118, 184, 0.1);
+  background: rgba(46, 118, 184, 0.16);
 }
 
 .timeline-label-cell--selected,
@@ -5499,10 +5689,29 @@ body {
 .timeline-bar--marked {
   border-color: #2e76b8;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
-    0 0 0 2px rgba(46, 118, 184, 0.62),
-    0 4px 10px rgba(31, 42, 51, 0.16);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+    0 0 0 3px rgba(46, 118, 184, 0.85),
+    0 0 0 6px rgba(46, 118, 184, 0.22),
+    0 4px 12px rgba(31, 42, 51, 0.22);
   z-index: 7;
+  animation: timeline-bar-marked-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes timeline-bar-marked-pulse {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+      0 0 0 3px rgba(46, 118, 184, 0.85),
+      0 0 0 6px rgba(46, 118, 184, 0.22),
+      0 4px 12px rgba(31, 42, 51, 0.22);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+      0 0 0 4px rgba(46, 118, 184, 0.95),
+      0 0 0 11px rgba(46, 118, 184, 0.12),
+      0 4px 14px rgba(31, 42, 51, 0.26);
+  }
 }
 
 .timeline-bar--tooltip-pinned {
@@ -5515,20 +5724,8 @@ body {
 }
 
 .tradeoff-option--marked {
-  outline: 2px solid rgba(185, 87, 31, 0.62);
-  outline-offset: 2px;
-}
-
-.tradeoff-marked-flag {
-  padding: 0.1rem 0.36rem;
-  border: 1px solid #d8b089;
-  border-radius: 999px;
-  background: #f5e6d8;
-  color: #8c4f18;
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  background: var(--bg-panel);
+  border-color: var(--line-strong);
 }
 
 /* --- Data Volume ------------------------------------------------------ */
@@ -5735,11 +5932,11 @@ body {
   }
 
   .overview-list-grid--with-tradeoffs {
-    min-width: 1040px;
+    min-width: 1120px;
   }
 
   .overview-list-grid {
-    min-width: 920px;
+    min-width: 1000px;
   }
 
   .map-layout {
@@ -5878,11 +6075,11 @@ body {
   }
 
   .overview-list-grid {
-    min-width: 860px;
+    min-width: 940px;
   }
 
   .overview-list-grid--with-tradeoffs {
-    min-width: 1040px;
+    min-width: 1120px;
   }
 
   .mission-map-shell {

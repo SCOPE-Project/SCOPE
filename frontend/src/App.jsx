@@ -1,5 +1,7 @@
 import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { getCountdownNow, subscribeCountdownClock } from './components/countdownClock.js'
+import { formatOverpassCountdown } from './components/overpassCountdown.js'
 import {
   interpolateTrackPosition,
   prepareTrackPoints,
@@ -33,8 +35,8 @@ const TIMELINE_DEFAULT_ZOOM_LEVEL = 'fit'
 // asset-centric they are pure filters over which kind of bar is drawn.
 const TIMELINE_LAYERS = [
   { id: 'current', label: 'Current Schedule' },
-  { id: 'potential', label: 'Unselected Links' },
   { id: 'proposed', label: 'Proposed Schedule' },
+  { id: 'ineligible', label: 'Ineligible Links' },
 ]
 const TIMELINE_WHEEL_ZOOM_STEP = 0.6
 const TIMELINE_MIN_ZOOM_MULTIPLIER = 1
@@ -60,8 +62,12 @@ const TRADE_OFF_PANEL_ENABLED = false
 
 // Values entered in GB are converted to MB at the API boundary. Backend rate
 // fields currently use MB/s semantics despite their historical `_mbps` names.
-const DEFAULT_DATA_START_FILL_GB = 40
-const DEFAULT_DATA_GENERATION_MBPS = 100
+// Keep in sync with the backend fallbacks in core/models/scheduling.py
+// (DEFAULT_BUFFER_* / DEFAULT_PAYLOAD_GENERATION_RATE_MBPS). The frontend always
+// sends an explicit default_buffer_config, so these are the values that actually
+// reach the scheduler; the backend constants only cover API/CLI callers.
+const DEFAULT_DATA_START_FILL_GB = 5
+const DEFAULT_DATA_GENERATION_MBPS = 4
 const DEFAULT_DATA_CAPACITY_GB = 100
 const DEFAULT_DOWNLINK_RATE_MBPS = 25
 const DEFAULT_TRADE_OFF_STRATEGY = 'buffer_overflow_avoidance'
@@ -121,9 +127,24 @@ const parsePlanningDateFields = (dateValue, timeValue, timeMode) => {
   return Number.isFinite(parsed.getTime()) ? parsed : null
 }
 
+// The planning window may never begin in the past. A small tolerance keeps a
+// window the operator just chose from turning invalid because the wall clock
+// advanced a few seconds while they were still typing.
+const PLANNING_PAST_TOLERANCE_MS = 60 * 1000
+
+// Smallest hour boundary strictly after `date`. Adding milliseconds (rather
+// than incrementing the hour field) keeps this correct across DST changes.
+const roundUpToNextHour = (date) => {
+  const rounded = new Date(date)
+  rounded.setMinutes(0, 0, 0)
+  while (rounded.getTime() <= date.getTime()) {
+    rounded.setTime(rounded.getTime() + 60 * 60000)
+  }
+  return rounded
+}
+
 const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start = new Date()) => {
-  const roundedStart = new Date(start)
-  roundedStart.setMinutes(0, 0, 0)
+  const roundedStart = roundUpToNextHour(start)
   const end = new Date(roundedStart.getTime() + 60 * 60000)
   const startFields = formatPlanningDateFields(roundedStart, timeMode)
   const endFields = formatPlanningDateFields(end, timeMode)
@@ -138,7 +159,57 @@ const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start 
   }
 }
 
+// The stored reset preset was built when the workspace was reset and may have
+// aged into the past. Fall back to a freshly rounded window so Reset always
+// lands on a clean future hour instead of clamping to a ragged "now".
+const resolvePlanningResetDate = (presetIso, timeMode, target) => {
+  const presetDate = new Date(presetIso)
+
+  if (presetDate.getTime() >= Date.now()) {
+    return presetDate
+  }
+
+  const freshPreset = buildPlanningWindowPreset(timeMode)
+  return new Date(target === 'start' ? freshPreset.startIso : freshPreset.endIso)
+}
+
 const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
+
+// Subscribes to the shared ticker instead of lifting a per-second clock into
+// App state: a tick then re-renders only the countdown cells, leaving the
+// timeline, map and the rest of the table untouched.
+//
+// The Overview T- column shows seconds, but re-rendering every single one
+// of them is unnecessary churn -- so it only re-renders every 20 seconds,
+// even though the shared clock underneath still ticks once a second for
+// any other subscriber.
+const COUNTDOWN_REFRESH_INTERVAL_MS = 20000
+
+const usePeriodicCountdownNow = (intervalMs) => {
+  const [nowMs, setNowMs] = useState(getCountdownNow)
+
+  useEffect(() => subscribeCountdownClock((tickNowMs) => {
+    setNowMs((current) => (
+      Math.floor(tickNowMs / intervalMs) === Math.floor(current / intervalMs) ? current : tickNowMs
+    ))
+  }), [intervalMs])
+
+  return nowMs
+}
+
+function OverpassCountdownCell({ startTime, endTime }) {
+  const nowMs = usePeriodicCountdownNow(COUNTDOWN_REFRESH_INTERVAL_MS)
+  const { label, state } = formatOverpassCountdown(startTime, endTime, nowMs, { includeSeconds: true })
+
+  return (
+    <span
+      className={`overview-countdown-cell overview-countdown-cell--${state}`}
+      title={state === 'future' ? `Time until AOS at ${startTime}` : undefined}
+    >
+      {label}
+    </span>
+  )
+}
 
 export default function App() {
   const splitPanelsRef = useRef(null)
@@ -152,6 +223,7 @@ export default function App() {
   const timelinePlaybackRafRef = useRef(null)
   const timelinePlaybackFrameTimestampRef = useRef(null)
   const timelinePlayheadTimeRef = useRef(null)
+  const timelinePlayingRef = useRef(false)
   const timelinePlayheadDraggingRef = useRef(false)
   const timelinePlaybackDomRef = useRef({ playhead: null, bars: [], label: null })
   const timelinePlaybackLastTextSyncRef = useRef(0)
@@ -159,10 +231,13 @@ export default function App() {
   const visibleMapAssetListRef = useRef(null)
   const tradeOffCardListRef = useRef(null)
   const timelinePanelRef = useRef(null)
+  const scheduleStagingReviewRef = useRef(null)
+  const confirmationSuccessRef = useRef(null)
   const timelineWheelHintRef = useRef(null)
   const timelineWheelHintTimeoutRef = useRef(null)
   const timelineWheelHandlerRef = useRef(null)
   const timelineTradeOffDrawerDragCleanupRef = useRef(null)
+  const timelineTradeOffDrawerRef = useRef(null)
   const schedulerAbortControllerRef = useRef(null)
   const [assets, setAssets] = useState([])
   const [assetSchedules, setAssetSchedules] = useState([])
@@ -184,6 +259,10 @@ export default function App() {
     startIso: DEFAULT_PLANNING_WINDOW_PRESET.startIso,
     endIso: DEFAULT_PLANNING_WINDOW_PRESET.endIso,
   })
+  // Re-read the wall clock periodically so the earliest selectable date, the
+  // time dropdown and the validation message stay correct while the landing
+  // page sits open.
+  const [planningNowMs, setPlanningNowMs] = useState(() => Date.now())
   const [activeTimeMenu, setActiveTimeMenu] = useState(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [launchingScheduler, setLaunchingScheduler] = useState(false)
@@ -259,8 +338,14 @@ export default function App() {
   const [confirmationProgress, setConfirmationProgress] = useState(0)
   const [confirmationStep, setConfirmationStep] = useState('')
   const [isScheduleStaged, setIsScheduleStaged] = useState(false)
+  // Per-asset "I reviewed this asset's staged links" checkbox, required
+  // before the SatOS commit button unlocks. Reset every time staging is
+  // (re)entered or abandoned so a stale confirmation can never carry over
+  // to a schedule that has since changed.
+  const [confirmedStagingLinks, setConfirmedStagingLinks] = useState({})
   const [clearExistingScopeActivities, setClearExistingScopeActivities] = useState(false)
   const [confirmationSuccess, setConfirmationSuccess] = useState(false)
+  const [scheduleCommitted, setScheduleCommitted] = useState(false)
   const [confirmedScheduleCount, setConfirmedScheduleCount] = useState(0)
   const [createdActivitiesCount, setCreatedActivitiesCount] = useState(0)
   const [overridingLinkId, setOverridingLinkId] = useState(null)
@@ -283,12 +368,12 @@ export default function App() {
   const [timelineCustomZoomMultiplier, setTimelineCustomZoomMultiplier] = useState(null)
   const [timelineLayers, setTimelineLayers] = useState({
     current: true,
-    potential: true,
+    ineligible: false,
     proposed: true,
   })
   const [timelineAssetVisibility, setTimelineAssetVisibility] = useState({
     satellites: true,
-    groundStations: true,
+    groundStations: false,
   })
   // Asset groups start collapsed: the header row already aggregates what is
   // scheduled for the asset, and selecting a trade-off expands exactly the
@@ -451,6 +536,11 @@ export default function App() {
     }
   }, [view])
 
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setPlanningNowMs(Date.now()), 30000)
+    return () => window.clearInterval(intervalId)
+  }, [])
+
   useEffect(() => () => {
     if (timelineTooltipHideTimeoutRef.current !== null) {
       window.clearTimeout(timelineTooltipHideTimeoutRef.current)
@@ -497,8 +587,10 @@ export default function App() {
     const animationFrameId = window.requestAnimationFrame(() => {
       setIsScheduleStaged(false)
       setConfirmationSuccess(false)
+      setScheduleCommitted(false)
       setConfirmedScheduleCount(0)
       setCreatedActivitiesCount(0)
+      setConfirmedStagingLinks({})
     })
     return () => window.cancelAnimationFrame(animationFrameId)
   }, [selectedTradeOffOption, tradeOffsCalculated, schedulerLaunched])
@@ -611,6 +703,7 @@ export default function App() {
     date.toLocaleTimeString([], {
       hour: '2-digit',
       minute: '2-digit',
+      second: '2-digit',
       ...getTimeZoneFormatOptions(timeMode),
     })
 
@@ -745,22 +838,21 @@ export default function App() {
     return formatGb(valueMb / 1000)
   }
 
-  const getDisplayDataDownlinkMb = (item) => {
+  // The volume the backend scheduler actually offloads over this link
+  // (ScheduledLinkStatus.useful_data_offloaded_mb). It is authoritative and is
+  // never substituted with a locally derived estimate: the backend reports 0.0
+  // for every link it did not schedule, and presenting the theoretical pass
+  // capacity instead made unscheduled links look like they carried data.
+  const getBackendDataDownlinkMb = (item) => {
     const usefulDataOffloadedMb = Number(item?.usefulDataOffloadedMb)
+    return Number.isFinite(usefulDataOffloadedMb) ? usefulDataOffloadedMb : Number.NaN
+  }
+
+  // What the link could carry if it were scheduled and the buffer were full
+  // (LinkBlock.estimated_data_capacity_mb, produced by the filter pipeline).
+  // A separate quantity from the offloaded volume - never conflate the two.
+  const getPassCapacityMb = (item) => {
     const estimatedDataCapacityMb = Number(item?.estimatedDataCapacityMb)
-
-    if (Number.isFinite(usefulDataOffloadedMb) && usefulDataOffloadedMb > 0) {
-      return usefulDataOffloadedMb
-    }
-
-    if (Number.isFinite(estimatedDataCapacityMb) && estimatedDataCapacityMb > 0) {
-      return estimatedDataCapacityMb
-    }
-
-    if (Number.isFinite(usefulDataOffloadedMb)) {
-      return usefulDataOffloadedMb
-    }
-
     return Number.isFinite(estimatedDataCapacityMb) ? estimatedDataCapacityMb : Number.NaN
   }
 
@@ -1009,6 +1101,7 @@ export default function App() {
         const hasTradeOff = Boolean(row.tradeOffId && row.tradeOffId !== '—')
         const partOfProposal = tradeOffsCalculated && row.isScheduled
         const dimmed = tradeOffsCalculated && hasTradeOff && !row.isScheduled
+        const ineligible = getOverviewRowStatus(row) === 'ineligible'
 
         let variant = 'neutral'
         if (row.scheduleBlocked) {
@@ -1043,6 +1136,7 @@ export default function App() {
           layer: partOfProposal ? 'proposed' : 'potential',
           variant,
           dimmed,
+          ineligible,
           blocked: Boolean(row.scheduleBlocked),
           blockMessage: row.scheduleBlocked
             ? row.rejectionReason
@@ -1181,7 +1275,9 @@ export default function App() {
     })
 
     const layerVisible = (layer) => timelineLayers[layer] !== false
-    const visibleLinkItems = clampedLinkItems.filter((item) => layerVisible(item.layer))
+    const visibleLinkItems = clampedLinkItems.filter((item) => (
+      layerVisible(item.layer) && (!item.ineligible || timelineLayers.ineligible)
+    ))
     const visibleActivityItems = clampedCurrentItems.filter(() => layerVisible('current'))
 
     const satelliteNames = [...new Set([
@@ -1371,7 +1467,7 @@ export default function App() {
     setMarkedTradeOffOptionId(null)
     setTimelineLayers({
       current: true,
-      potential: true,
+      ineligible: false,
       proposed: true,
     })
     setExpandedSections({
@@ -1399,8 +1495,10 @@ export default function App() {
     setConfirmationStep('')
     setIsScheduleStaged(false)
     setConfirmationSuccess(false)
+    setScheduleCommitted(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
+    setConfirmedStagingLinks({})
     setOverridingLinkId(null)
   }
 
@@ -1491,7 +1589,7 @@ export default function App() {
     const presetValue = target === 'start'
       ? planningWindowResetPreset.startIso
       : planningWindowResetPreset.endIso
-    const presetDate = new Date(presetValue)
+    const presetDate = resolvePlanningResetDate(presetValue, planningTimeMode, target)
 
     if (target === 'start') {
       setPlanningStartFromDate(presetDate)
@@ -1538,6 +1636,35 @@ export default function App() {
       setLoading(false)
     }
   }
+
+  // Mission assets are loaded automatically as soon as the backend answers its
+  // health check, so the operator never has to trigger the first fetch by hand.
+  // The ref stops a successful load from repeating (fetchAssets resets the
+  // workspace); a failed attempt is retried when the backend comes back, or
+  // manually from the status strip on the landing page.
+  const assetAutoLoadAttemptedRef = useRef(false)
+  const fetchAssetsRef = useRef(fetchAssets)
+
+  // Kept in an effect rather than assigned during render, so the auto-load
+  // effect below can call the latest fetchAssets without taking a dependency
+  // on its identity (which changes on every render).
+  useEffect(() => {
+    fetchAssetsRef.current = fetchAssets
+  })
+
+  useEffect(() => {
+    if (backendAlive !== true) {
+      if (backendAlive === false) {
+        assetAutoLoadAttemptedRef.current = false
+      }
+      return
+    }
+    if (assetAutoLoadAttemptedRef.current || loading || assets.length > 0) {
+      return
+    }
+    assetAutoLoadAttemptedRef.current = true
+    fetchAssetsRef.current()
+  }, [backendAlive, loading, assets.length])
 
   const appendTaskStatus = (taskStatus, stageLabel, progressStart = 0, progressSpan = 100) => {
     setExtractionStatus(`${stageLabel}: ${formatTaskStatusLabel(taskStatus.status)}`)
@@ -1645,8 +1772,10 @@ export default function App() {
     setMarkedTradeOffOptionId(null)
     setIsScheduleStaged(false)
     setConfirmationSuccess(false)
+    setScheduleCommitted(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
+    setConfirmedStagingLinks({})
     const schedulerLaunchTime = new Date(planningWindow.startTime).getTime()
     setTimelinePlayheadTime(schedulerLaunchTime)
     timelinePlayheadTimeRef.current = schedulerLaunchTime
@@ -1843,8 +1972,10 @@ export default function App() {
     setTradeOffsCalculated(true)
     setIsScheduleStaged(false)
     setConfirmationSuccess(false)
+    setScheduleCommitted(false)
     setConfirmedScheduleCount(0)
     setCreatedActivitiesCount(0)
+    setConfirmedStagingLinks({})
     if (focusTimeline && !preservedTimelineTradeOffCard) {
       focusTimelineOnTradeOffCard(nextCards[0])
     }
@@ -1901,14 +2032,56 @@ export default function App() {
     setError(null)
     setConfirmationSuccess(false)
     setIsScheduleStaged(true)
+    setConfirmedStagingLinks({})
+
+    window.requestAnimationFrame(() => {
+      scheduleStagingReviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
   }
 
   const handleBackToEdit = () => {
     setIsScheduleStaged(false)
+    setConfirmedStagingLinks({})
+  }
+
+  // A link is reviewed once from its satellite side and, separately, once
+  // from its ground station side -- these keys must never collide, so each
+  // side gets its own namespaced slot in confirmedStagingLinks.
+  const stagingLinkConfirmKey = (side, linkId) => `${side}:${linkId}`
+
+  const toggleStagingLinkConfirmation = (side, linkId) => {
+    const key = stagingLinkConfirmKey(side, linkId)
+    setConfirmedStagingLinks((current) => ({
+      ...current,
+      [key]: !current[key],
+    }))
+  }
+
+  // The alternative to checking each of this asset's links one by one:
+  // confirms every link belonging to it, on this side only, in a single
+  // click -- or, if they are all already confirmed, un-confirms them all
+  // together. Never touches the other side's confirmations for those links.
+  const toggleStagingAssetConfirmation = (side, links) => {
+    const keys = links.map((link) => stagingLinkConfirmKey(side, link.backendLinkId || link.linkId))
+
+    setConfirmedStagingLinks((current) => {
+      const allConfirmed = keys.length > 0 && keys.every((key) => current[key])
+      const next = { ...current }
+      keys.forEach((key) => {
+        next[key] = !allConfirmed
+      })
+      return next
+    })
   }
 
   const handleCommitToSatOS = async () => {
-    if (!sessionId || finalScheduleRows.length === 0 || confirmingSchedule) {
+    if (
+      !sessionId
+      || finalScheduleRows.length === 0
+      || confirmingSchedule
+      || !allStagingLinksConfirmed
+      || scheduleCommitted
+    ) {
       return
     }
 
@@ -1925,8 +2098,13 @@ export default function App() {
       setConfirmationProgress(100)
       setConfirmationStep('Communication schedule confirmed.')
       setConfirmationSuccess(true)
+      setScheduleCommitted(true)
       setConfirmedScheduleCount(result.committed_links_count ?? 0)
       setCreatedActivitiesCount(result.created_activities_count ?? 0)
+
+      window.requestAnimationFrame(() => {
+        confirmationSuccessRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
 
       try {
         const initialized = await initializeAssets()
@@ -2055,11 +2233,29 @@ export default function App() {
     && planningWindowStartTime !== ''
     && planningWindowEndDate !== ''
     && planningWindowEndTime !== ''
-  const planningWindowValid =
+  const planningWindowStartInstant = parsePlanningDateFields(
+    planningWindowStartDate,
+    planningWindowStartTime,
+    planningTimeMode,
+  )
+  const planningWindowEndInstant = parsePlanningDateFields(
+    planningWindowEndDate,
+    planningWindowEndTime,
+    planningTimeMode,
+  )
+  const planningEarliestAllowedMs = planningNowMs - PLANNING_PAST_TOLERANCE_MS
+  const planningWindowInPast = (
+    (planningWindowStartInstant !== null
+      && planningWindowStartInstant.getTime() < planningEarliestAllowedMs)
+    || (planningWindowEndInstant !== null
+      && planningWindowEndInstant.getTime() < planningEarliestAllowedMs)
+  )
+  const planningWindowValid = Boolean(
     planningWindowComplete
-    && planningDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime)
-    && planningDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)
-    && new Date(planningDateAndTimeToIso(planningWindowEndDate, planningWindowEndTime)) > new Date(planningDateAndTimeToIso(planningWindowStartDate, planningWindowStartTime))
+    && planningWindowStartInstant
+    && planningWindowEndInstant
+    && planningWindowEndInstant > planningWindowStartInstant,
+  )
   const launchRequirementsMet =
     planningWindowValid
     && selectedSatellites.length >= 1
@@ -2067,7 +2263,40 @@ export default function App() {
     && linkFiltersValid
     && bufferConfigValid
     && tradeOffConfigValid
-  const loadMissionAssetsDisabled = loading || launchingScheduler || backendAlive !== true
+  const missionAssetsStatus = loading
+    ? {
+      tone: 'busy',
+      label: 'Loading mission assets from SatOS\u2026',
+      busy: true,
+      retryLabel: null,
+    }
+    : backendAlive === null
+      ? {
+        tone: 'busy',
+        label: 'Connecting to the SCOPE backend\u2026',
+        busy: true,
+        retryLabel: null,
+      }
+      : backendAlive === false
+        ? {
+          tone: 'error',
+          label: 'Backend offline \u2014 start the SCOPE backend to load mission assets.',
+          busy: false,
+          retryLabel: null,
+        }
+        : missionAssetsLoaded
+          ? {
+            tone: 'ready',
+            label: `Mission assets loaded \u2014 ${assets.length} asset${assets.length === 1 ? '' : 's'} from SatOS`,
+            busy: false,
+            retryLabel: 'Reload',
+          }
+          : {
+            tone: 'error',
+            label: error || 'Mission assets could not be loaded from SatOS.',
+            busy: false,
+            retryLabel: 'Retry',
+          }
   const loadScopeDisabled =
     loading
     || launchingScheduler
@@ -2079,7 +2308,7 @@ export default function App() {
       : launchingScheduler
         ? 'SCOPE is currently starting.'
         : !missionAssetsLoaded
-          ? 'Load SatOS mission data first to enable filtering.'
+          ? 'Waiting for SatOS mission data to finish loading.'
           : !planningWindowValid
             ? 'Enter a valid planning window with an end time after the start time.'
             : selectedSatellites.length < 1
@@ -2131,10 +2360,20 @@ export default function App() {
   const timelinePlayheadTimestamp = clampToPlanningWindow(timelinePlayheadTime)
 
   useEffect(() => {
+    timelinePlayingRef.current = timelinePlaying
+  }, [timelinePlaying])
+
+  // Deliberately does not depend on timelinePlaying: this effect resets the
+  // playhead to the window start when the planning window itself changes
+  // (or the scheduler freshly launches), not when playback is merely
+  // paused/resumed. Reading timelinePlayingRef instead of timelinePlaying
+  // lets it still skip the reset while actively playing, without re-running
+  // -- and incorrectly resetting -- every time Play/Pause is toggled.
+  useEffect(() => {
     if (
       !schedulerLaunched
       || planningWindowStartTimestamp === null
-      || timelinePlaying
+      || timelinePlayingRef.current
       || timelinePlayheadDraggingRef.current
     ) {
       return
@@ -2145,7 +2384,7 @@ export default function App() {
       current === planningWindowStartTimestamp ? current : planningWindowStartTimestamp
     ))
     setTimelineLive(false)
-  }, [planningWindowStartTimestamp, schedulerLaunched, timelinePlaying])
+  }, [planningWindowStartTimestamp, schedulerLaunched])
 
   const getSatelliteTrackCoordinates = useCallback((assetName) => (
     interpolateTrackPosition(preparedSatelliteTracks[assetName], timelinePlayheadTimestamp)
@@ -2272,6 +2511,18 @@ export default function App() {
     return 'Eligible'
   }
 
+  // Override state a Schedule/Scheduled toggle must send. It keys off whether
+  // the link is currently in the plan, never off its override state: an
+  // auto-scheduled link sits at 'auto', so the old toggle sent 'pinned', the
+  // link stayed scheduled and the button looked dead. 'excluded' is the only
+  // state that removes a link from the plan - 'auto' would just let the solver
+  // pick it straight back up.
+  const getScheduleToggleState = (isScheduled) => (isScheduled ? 'excluded' : 'pinned')
+
+  const getScheduleToggleTitle = (isScheduled) => (isScheduled
+    ? 'Scheduled: click to force this link to stay unscheduled.'
+    : 'Unscheduled: click to force this link to stay scheduled.')
+
   const getOverviewControlTooltip = (state) => {
     if (state === 'auto') {
       return 'Auto: keep the backend scheduling decision.'
@@ -2326,6 +2577,14 @@ export default function App() {
     () => buildCommitSummary(finalScheduleRows, sessionPlan),
     [finalScheduleRows, sessionPlan],
   )
+  const allScheduledLinkIds = [
+    ...new Set(finalScheduleRows.map((row) => row.backendLinkId || row.linkId)),
+  ]
+  const allStagingLinksConfirmed =
+    allScheduledLinkIds.length > 0
+    && allScheduledLinkIds.every((linkId) => (
+      confirmedStagingLinks[`sat:${linkId}`] && confirmedStagingLinks[`gs:${linkId}`]
+    ))
   const overviewRowByLinkId = useMemo(
     () => new Map(overviewRows.map((row) => [row.backendLinkId ?? row.linkId, row])),
     [overviewRows],
@@ -2946,14 +3205,34 @@ export default function App() {
       return
     }
 
+    const container = timelinePanelRef.current
+    const drawer = timelineTradeOffDrawerRef.current
+    if (!container || !drawer) {
+      return
+    }
+
     const startX = event.clientX
     const startY = event.clientY
     const startOffset = { ...timelineTradeOffDrawerOffset }
 
+    // Figure out how far the drawer can move, in offset space, before it
+    // would cross the timeline panel's edge. The panel clips its contents
+    // (overflow: hidden), so dragging the drawer past this range is what
+    // was making it appear to vanish instead of just stopping at the edge.
+    const containerRect = container.getBoundingClientRect()
+    const drawerRect = drawer.getBoundingClientRect()
+    const naturalLeft = drawerRect.left - startOffset.x
+    const naturalTop = drawerRect.top - startOffset.y
+    const minX = containerRect.left - naturalLeft
+    const maxX = Math.max(minX, containerRect.right - naturalLeft - drawerRect.width)
+    const minY = containerRect.top - naturalTop
+    const maxY = Math.max(minY, containerRect.bottom - naturalTop - drawerRect.height)
+    const clampRange = (value, min, max) => Math.min(Math.max(value, min), max)
+
     const handlePointerMove = (moveEvent) => {
       setTimelineTradeOffDrawerOffset({
-        x: startOffset.x + (moveEvent.clientX - startX),
-        y: startOffset.y + (moveEvent.clientY - startY),
+        x: clampRange(startOffset.x + (moveEvent.clientX - startX), minX, maxX),
+        y: clampRange(startOffset.y + (moveEvent.clientY - startY), minY, maxY),
       })
     }
 
@@ -2971,17 +3250,26 @@ export default function App() {
     window.addEventListener('pointercancel', stopDragging)
   }
 
-  const jumpToTimelineLink = (linkId, optionId = null) => {
-    if (!linkId) {
+  // Clicking an option card marks (or, if already marked, unmarks -- same
+  // toggle the timeline bars themselves use) its link and, only when the
+  // click just turned marking on, scrolls the timeline so the newly marked
+  // block is actually visible instead of marking something off-screen.
+  const focusTimelineOnOption = (option) => {
+    if (!option?.linkId) {
       return
     }
 
-    setMarkedTimelineLinkId(linkId)
-    setMarkedTradeOffOptionId(optionId ?? null)
+    const wasMarked = markedTimelineLinkId === option.linkId
+    markLinkForNavigation(option.linkId, option.optionId)
+
+    if (wasMarked) {
+      return
+    }
+
     timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 
     window.requestAnimationFrame(() => {
-      const node = timelinePanelRef.current?.querySelector(`[data-link-id="${linkId}"]`)
+      const node = timelinePanelRef.current?.querySelector(`[data-link-id="${option.linkId}"]`)
       node?.scrollIntoView({
         behavior: 'smooth',
         block: 'nearest',
@@ -3610,8 +3898,8 @@ export default function App() {
       <span>Duration: {formatTimelineItemDuration(item)}</span>
       {item.recommended && <span>Auto-scheduled by the backend</span>}
       {item.overrideState && item.overrideState !== 'auto' && <span>Override: {item.overrideState}</span>}
-      {Number.isFinite(getDisplayDataDownlinkMb(item)) && getDisplayDataDownlinkMb(item) > 0 && (
-        <span>Data downlink: {(getDisplayDataDownlinkMb(item) / 1000).toFixed(2)} GB</span>
+      {Number.isFinite(getBackendDataDownlinkMb(item)) && getBackendDataDownlinkMb(item) > 0 && (
+        <span>Data downlink: {(getBackendDataDownlinkMb(item) / 1000).toFixed(2)} GB</span>
       )}
       {Number.isFinite(item.score) && <span>Backend score: {item.score.toFixed(2)}</span>}
       {item.rejectionReason && !item.blockMessage && <span>{item.rejectionReason}</span>}
@@ -3675,15 +3963,13 @@ export default function App() {
                   ...item,
                   optionId: item.optionId ?? item.linkId,
                   tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
-                }, item.isScheduled ? 'excluded' : 'pinned')}
+                }, getScheduleToggleState(item.isScheduled))}
                 disabled={Boolean(overridingLinkId)}
                 aria-pressed={item.isScheduled}
                 aria-label={item.isScheduled
                   ? `Scheduled. Click to unschedule ${item.linkId}`
                   : `Unscheduled. Click to schedule ${item.linkId}`}
-                title={item.isScheduled
-                  ? 'Scheduled: click to force this link to stay unscheduled.'
-                  : 'Unscheduled: click to force this link to stay scheduled.'}
+                title={getScheduleToggleTitle(item.isScheduled)}
               >
                 {item.isScheduled ? 'Scheduled' : 'Unscheduled'}
               </button>
@@ -4282,6 +4568,10 @@ export default function App() {
     return `${digitsOnly.slice(0, 2)}:${digitsOnly.slice(2)}`
   }
 
+  // Past time windows are allowed (a warning is shown instead), so every
+  // time-of-day option stays selectable regardless of the chosen date.
+  const getSelectableTimeOptions = () => timeOptions
+
   const renderTimeInput = (menuKey, value, setValue, disabled = false) => (
     <div
       className={`time-window-dropdown ${activeTimeMenu === menuKey ? 'time-window-dropdown--open' : ''}`}
@@ -4326,7 +4616,7 @@ export default function App() {
       </div>
       {activeTimeMenu === menuKey && !disabled && (
         <div className="time-window-select-menu" role="listbox" aria-label={`${menuKey} time`}>
-          {timeOptions.map((timeValue) => (
+          {getSelectableTimeOptions(menuKey).map((timeValue) => (
             <button
               key={`${menuKey}-${timeValue}`}
               type="button"
@@ -4522,6 +4812,11 @@ export default function App() {
       {planningWindowComplete && !planningWindowValid && (
         <p className="time-window-error">
           Enter a valid time window with an end time after the start time.
+        </p>
+      )}
+      {planningWindowInPast && (
+        <p className="time-window-warning">
+          Warning: This Planning Time Window lies in the past.
         </p>
       )}
     </div>
@@ -4841,7 +5136,7 @@ export default function App() {
   )
 
   if (view === 'landing') {
-    const filterTooltip = 'Load SatOS mission data first to enable filtering.'
+    const filterTooltip = 'Waiting for SatOS mission data\u2026'
 
     return (
       <div className="app-shell">
@@ -4851,20 +5146,26 @@ export default function App() {
             <div className="landing-content">
               <div className={`landing-config-shell ${missionAssetsLoaded ? '' : 'landing-config-shell--disabled'}`}>
                 <div className="landing-config-header landing-config-header--primary">
-                  <button
-                    className="btn-fetch landing-action-button"
-                    onClick={fetchAssets}
-                    disabled={loadMissionAssetsDisabled}
+                  <div
+                    className={`landing-assets-status landing-assets-status--${missionAssetsStatus.tone}`}
+                    role="status"
+                    aria-live="polite"
                   >
-                    {loading ? (
-                      <>
-                        <span className="loading-spinner"></span>
-                        Fetching...
-                      </>
-                    ) : (
-                      'Load Mission Assets'
+                    {missionAssetsStatus.busy && (
+                      <span className="loading-spinner loading-spinner--inline" aria-hidden="true"></span>
                     )}
-                  </button>
+                    <span className="landing-assets-status-text">{missionAssetsStatus.label}</span>
+                    {missionAssetsStatus.retryLabel && (
+                      <button
+                        type="button"
+                        className="landing-assets-status-action"
+                        onClick={fetchAssets}
+                        disabled={launchingScheduler}
+                      >
+                        {missionAssetsStatus.retryLabel}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="landing-config-divider"></div>
@@ -5066,6 +5367,7 @@ export default function App() {
                     <span>GS ID</span>
                     <span>Start</span>
                     <span>End</span>
+                    <span title="Time until the overpass starts (T-minus)">T-</span>
                     <span>Duration</span>
                     <span>Max Elev.</span>
                     {tradeOffsCalculated && <span>Buffer level before</span>}
@@ -5093,23 +5395,13 @@ export default function App() {
                   </div>
                   {visibleOverviewRows.length === 0 ? (
                     <>
-                      <div className={`overview-list-row overview-list-row--placeholder overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                        <span>{showUnavailableOverviewRows ? 'L-001' : '—'}</span>
-                        <span>—</span>
-                        <span>{showUnavailableOverviewRows ? 'OP-001' : 'No available overpasses'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        <span>{showUnavailableOverviewRows ? 'Pending' : '—'}</span>
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                        {tradeOffsCalculated && <span>—</span>}
-                      </div>
+                      {/* No fabricated sample row here: the table only ever
+                          renders links the backend actually returned. */}
+                      <p className="overview-list-empty">
+                        {overviewRows.length === 0
+                          ? 'No candidate links yet. Run the scheduler to propagate orbits and extract overpasses.'
+                          : 'No links match the current visibility filter.'}
+                      </p>
                     </>
                   ) : (
                     <>
@@ -5168,6 +5460,7 @@ export default function App() {
                             <span>{row.gsId}</span>
                             <span>{formatOverviewStartDateTime(row.startTime)}</span>
                             <span>{formatOverviewEndDateTime(row.startTime, row.endTime)}</span>
+                            <OverpassCountdownCell startTime={row.startTime} endTime={row.endTime} />
                             <span>{row.duration}</span>
                             <span>{row.maxElevation ?? '—'}</span>
                             {tradeOffsCalculated && (
@@ -5199,7 +5492,9 @@ export default function App() {
                             )}
                             {tradeOffsCalculated && (
                               <span className="overview-offloaded-cell">
-                                {formatDataDownlinkGb(getDisplayDataDownlinkMb(row))}
+                                {row.isScheduled
+                                  ? formatDataDownlinkGb(getBackendDataDownlinkMb(row))
+                                  : '—'}
                               </span>
                             )}
                             {tradeOffsCalculated && (
@@ -5238,9 +5533,14 @@ export default function App() {
                                     className={`overview-select-button ${row.isScheduled ? 'overview-select-button--selected' : ''}`}
                                     onClick={() => handleLinkOverride(
                                       overrideOption,
-                                      row.overrideState === 'pinned' ? 'auto' : 'pinned',
+                                      getScheduleToggleState(row.isScheduled),
                                     )}
                                     disabled={Boolean(overridingLinkId)}
+                                    aria-pressed={row.isScheduled}
+                                    aria-label={row.isScheduled
+                                      ? `Scheduled. Click to unschedule ${getOverviewDisplayLinkId(row)}`
+                                      : `Unscheduled. Click to schedule ${getOverviewDisplayLinkId(row)}`}
+                                    title={getScheduleToggleTitle(row.isScheduled)}
                                   >
                                     {row.isScheduled ? 'Scheduled' : 'Schedule'}
                                   </button>
@@ -5351,6 +5651,8 @@ export default function App() {
                         const optionRecommended = optionScheduled && effectiveOverrideState === 'auto'
                         const displayScore = Number(optionRow?.score ?? option.score ?? 0)
 
+                        const optionMarked = markedTradeOffOptionId === option.optionId
+
                         return (
                           <div
                             key={option.optionId}
@@ -5358,9 +5660,20 @@ export default function App() {
                             className={[
                               'tradeoff-option',
                               optionScheduled ? 'tradeoff-option--selected' : '',
-                              markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
+                              optionMarked ? 'tradeoff-option--marked' : '',
                             ].filter(Boolean).join(' ')}
                             style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
+                            role="button"
+                            tabIndex={0}
+                            aria-pressed={optionMarked}
+                            title={optionMarked ? 'Unmark this pass in the timeline' : 'Mark this pass in the timeline'}
+                            onClick={() => focusTimelineOnOption(option)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                focusTimelineOnOption(option)
+                              }
+                            }}
                           >
                             <div className="tradeoff-option-header">
                               <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
@@ -5400,24 +5713,57 @@ export default function App() {
                                 <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
                               </div>
                               <div className="tradeoff-option-fact">
+                                <dt>Pass capacity</dt>
+                                <dd>{formatDataDownlinkGb(getPassCapacityMb(option))}</dd>
+                              </div>
+                              <div className="tradeoff-option-fact">
                                 <dt>Data Downlink</dt>
-                                <dd>{formatDataDownlinkGb(getDisplayDataDownlinkMb(option))}</dd>
+                                <dd>
+                                  {option.isScheduled
+                                    ? formatDataDownlinkGb(getBackendDataDownlinkMb(option))
+                                    : '—'}
+                                </dd>
                               </div>
                             </dl>
 
                             <div className="tradeoff-option-actions">
-                              <button
-                                type="button"
-                                className="tradeoff-jump-button"
-                                onClick={() => jumpToTimelineLink(option.linkId, option.optionId)}
+                              <span
+                                className="tradeoff-override-controls"
+                                role="group"
+                                aria-label={`Override ${option.linkId ?? option.overpassId}`}
                               >
-                                Jump to Timeline
-                              </button>
+                                {['auto', 'pinned', 'excluded'].map((state) => (
+                                  <button
+                                    key={state}
+                                    type="button"
+                                    className={`tradeoff-override-button ${effectiveOverrideState === state ? 'tradeoff-override-button--active' : ''}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      handleLinkOverride(option, state)
+                                    }}
+                                    disabled={Boolean(overridingLinkId)}
+                                    aria-pressed={effectiveOverrideState === state}
+                                    title={getOverviewControlTooltip(state)}
+                                    onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
+                                    onMouseMove={moveWarningTooltip}
+                                    onMouseLeave={hideWarningTooltip}
+                                    onFocus={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
+                                    onBlur={hideWarningTooltip}
+                                  >
+                                    {state === 'auto' ? 'A' : state === 'pinned' ? 'P' : 'X'}
+                                  </button>
+                                ))}
+                              </span>
                               <button
                                 type="button"
                                 className="tradeoff-select-button"
-                                onClick={() => handleLinkOverride(option, effectiveOverrideState === 'pinned' ? 'auto' : 'pinned')}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  handleLinkOverride(option, getScheduleToggleState(optionScheduled))
+                                }}
                                 disabled={Boolean(overridingLinkId)}
+                                aria-pressed={optionScheduled}
+                                title={getScheduleToggleTitle(optionScheduled)}
                               >
                                 {optionScheduled ? 'Scheduled' : 'Schedule'}
                               </button>
@@ -6134,6 +6480,7 @@ export default function App() {
                     </div>
                     {activeTimelineTradeOffCard && (
                       <aside
+                        ref={timelineTradeOffDrawerRef}
                         className="timeline-tradeoff-drawer"
                         style={{
                           transform: `translate(${timelineTradeOffDrawerOffset.x}px, ${timelineTradeOffDrawerOffset.y}px)`,
@@ -6167,6 +6514,8 @@ export default function App() {
                             const optionRecommended = optionScheduled && effectiveOverrideState === 'auto'
                             const displayScore = Number(optionRow?.score ?? option.score ?? 0)
 
+                            const optionMarked = markedTradeOffOptionId === option.optionId
+
                             return (
                               <div
                                 key={option.optionId}
@@ -6174,9 +6523,20 @@ export default function App() {
                                 className={[
                                   'tradeoff-option',
                                   optionScheduled ? 'tradeoff-option--selected' : '',
-                                  markedTradeOffOptionId === option.optionId ? 'tradeoff-option--marked' : '',
+                                  optionMarked ? 'tradeoff-option--marked' : '',
                                   'tradeoff-option--timeline-drawer',
                                 ].filter(Boolean).join(' ')}
+                                role="button"
+                                tabIndex={0}
+                                aria-pressed={optionMarked}
+                                title={optionMarked ? 'Unmark this pass in the timeline' : 'Mark this pass in the timeline'}
+                                onClick={() => focusTimelineOnOption(option)}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault()
+                                    focusTimelineOnOption(option)
+                                  }
+                                }}
                               >
                                 <div className="tradeoff-option-header">
                                   <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
@@ -6216,24 +6576,57 @@ export default function App() {
                                     <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId))}</dd>
                                   </div>
                                   <div className="tradeoff-option-fact">
+                                    <dt>Pass capacity</dt>
+                                    <dd>{formatDataDownlinkGb(getPassCapacityMb(option))}</dd>
+                                  </div>
+                                  <div className="tradeoff-option-fact">
                                     <dt>Data Downlink</dt>
-                                    <dd>{formatDataDownlinkGb(getDisplayDataDownlinkMb(option))}</dd>
+                                    <dd>
+                                      {option.isScheduled
+                                        ? formatDataDownlinkGb(getBackendDataDownlinkMb(option))
+                                        : '—'}
+                                    </dd>
                                   </div>
                                 </dl>
 
                                 <div className="tradeoff-option-actions">
-                                  <button
-                                    type="button"
-                                    className="tradeoff-jump-button"
-                                    onClick={() => jumpToTimelineLink(option.linkId, option.optionId)}
+                                  <span
+                                    className="tradeoff-override-controls"
+                                    role="group"
+                                    aria-label={`Override ${option.linkId ?? option.overpassId}`}
                                   >
-                                    Jump to Timeline
-                                  </button>
+                                    {['auto', 'pinned', 'excluded'].map((state) => (
+                                      <button
+                                        key={state}
+                                        type="button"
+                                        className={`tradeoff-override-button ${effectiveOverrideState === state ? 'tradeoff-override-button--active' : ''}`}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          handleLinkOverride(option, state)
+                                        }}
+                                        disabled={Boolean(overridingLinkId)}
+                                        aria-pressed={effectiveOverrideState === state}
+                                        title={getOverviewControlTooltip(state)}
+                                        onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
+                                        onMouseMove={moveWarningTooltip}
+                                        onMouseLeave={hideWarningTooltip}
+                                        onFocus={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
+                                        onBlur={hideWarningTooltip}
+                                      >
+                                        {state === 'auto' ? 'A' : state === 'pinned' ? 'P' : 'X'}
+                                      </button>
+                                    ))}
+                                  </span>
                                   <button
                                     type="button"
                                     className="tradeoff-select-button"
-                                    onClick={() => handleLinkOverride(option, effectiveOverrideState === 'pinned' ? 'auto' : 'pinned')}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      handleLinkOverride(option, getScheduleToggleState(optionScheduled))
+                                    }}
                                     disabled={Boolean(overridingLinkId)}
+                                    aria-pressed={optionScheduled}
+                                    title={getScheduleToggleTitle(optionScheduled)}
                                   >
                                     {optionScheduled ? 'Scheduled' : 'Schedule'}
                                   </button>
@@ -6281,7 +6674,12 @@ export default function App() {
                 </div>
 
                 {isScheduleStaged && finalScheduleRows.length > 0 && (
-                  <div className="schedule-staging-review-panel" role="region" aria-label="Staged Schedule Review">
+                  <div
+                    ref={scheduleStagingReviewRef}
+                    className="schedule-staging-review-panel"
+                    role="region"
+                    aria-label="Staged Schedule Review"
+                  >
                     <div className="staging-review-header">
                       <span className="staging-review-badge">Stage 2 · Staged Review</span>
                       <h3 className="staging-review-title">Staged Communication Schedule & SatOS Commit Review</h3>
@@ -6320,7 +6718,12 @@ export default function App() {
                     <div className="staging-asset-section">
                       <h4 className="staging-section-title">Satellite Allocations & Data Buffer Summaries</h4>
                       <div className="staging-asset-cards-grid">
-                        {commitSummary.satellites.map((sat) => (
+                        {commitSummary.satellites.map((sat) => {
+                          const satLinkIds = sat.links.map((link) => link.backendLinkId || link.linkId)
+                          const satAssetConfirmed = satLinkIds.length > 0
+                            && satLinkIds.every((linkId) => confirmedStagingLinks[`sat:${linkId}`])
+
+                          return (
                           <div key={sat.satId} className="staging-asset-card">
                             <div className="staging-asset-header">
                               <div className="staging-asset-title-group">
@@ -6363,14 +6766,16 @@ export default function App() {
                                     <th>End Event (UTC)</th>
                                     <th>Duration</th>
                                     <th>Expected Data Downlinked</th>
+                                    <th className="staging-confirm-column">Confirm</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {sat.links.map((link) => {
                                     const linkId = link.backendLinkId || link.linkId
                                     const actName = `DOWNLINK_${linkId}_${link.satId}-${link.gsId}`
+                                    const linkConfirmed = Boolean(confirmedStagingLinks[`sat:${linkId}`])
                                     return (
-                                      <tr key={linkId}>
+                                      <tr key={linkId} className={linkConfirmed ? 'staging-link-row--confirmed' : ''}>
                                         <td><strong>{linkId}</strong></td>
                                         <td><code className="staging-code-cell">{actName}</code></td>
                                         <td><span className="staging-initiator-badge">SCOPE_Scheduler</span></td>
@@ -6382,14 +6787,41 @@ export default function App() {
                                           <strong>{(Number(link.usefulDataOffloadedMb ?? 0) / 1000).toFixed(2)} GB</strong>{' '}
                                           <span className="staging-table-subtext">({Number(link.usefulDataOffloadedMb ?? 0).toFixed(1)} MB)</span>
                                         </td>
+                                        <td className="staging-confirm-cell">
+                                          <input
+                                            type="checkbox"
+                                            className="staging-link-confirm-checkbox"
+                                            checked={linkConfirmed}
+                                            onChange={() => toggleStagingLinkConfirmation('sat', linkId)}
+                                            disabled={confirmingSchedule}
+                                            aria-label={`Confirm link ${linkId} on the satellite side`}
+                                          />
+                                        </td>
                                       </tr>
                                     )
                                   })}
                                 </tbody>
                               </table>
                             </div>
+
+                            <div className={`staging-asset-confirm-bar ${satAssetConfirmed ? 'staging-asset-confirm-bar--confirmed' : ''}`}>
+                              <label className="staging-asset-confirm-label">
+                                <input
+                                  type="checkbox"
+                                  checked={satAssetConfirmed}
+                                  onChange={() => toggleStagingAssetConfirmation('sat', sat.links)}
+                                  disabled={confirmingSchedule}
+                                />
+                                <span>
+                                  {satAssetConfirmed
+                                    ? `${sat.satId} schedule reviewed and confirmed`
+                                    : `Confirm ${sat.satId} schedule before commit`}
+                                </span>
+                              </label>
+                            </div>
                           </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     </div>
 
@@ -6397,7 +6829,12 @@ export default function App() {
                     <div className="staging-asset-section">
                       <h4 className="staging-section-title">Ground Station Allocations & Contact Passes</h4>
                       <div className="staging-asset-cards-grid">
-                        {commitSummary.groundStations.map((gs) => (
+                        {commitSummary.groundStations.map((gs) => {
+                          const gsLinkIds = gs.links.map((link) => link.backendLinkId || link.linkId)
+                          const gsAssetConfirmed = gsLinkIds.length > 0
+                            && gsLinkIds.every((linkId) => confirmedStagingLinks[`gs:${linkId}`])
+
+                          return (
                           <div key={gs.gsId} className="staging-asset-card">
                             <div className="staging-asset-header">
                               <div className="staging-asset-title-group">
@@ -6425,14 +6862,16 @@ export default function App() {
                                     <th>End Event (UTC)</th>
                                     <th>Duration</th>
                                     <th>Expected Data Received</th>
+                                    <th className="staging-confirm-column">Confirm</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {gs.links.map((link) => {
                                     const linkId = link.backendLinkId || link.linkId
                                     const actName = `DOWNLINK_${linkId}_${link.satId}-${link.gsId}`
+                                    const linkConfirmed = Boolean(confirmedStagingLinks[`gs:${linkId}`])
                                     return (
-                                      <tr key={linkId}>
+                                      <tr key={linkId} className={linkConfirmed ? 'staging-link-row--confirmed' : ''}>
                                         <td><strong>{linkId}</strong></td>
                                         <td><code className="staging-code-cell">{actName}</code></td>
                                         <td><span className="staging-initiator-badge">SCOPE_Scheduler</span></td>
@@ -6444,14 +6883,41 @@ export default function App() {
                                           <strong>{(Number(link.usefulDataOffloadedMb ?? 0) / 1000).toFixed(2)} GB</strong>{' '}
                                           <span className="staging-table-subtext">({Number(link.usefulDataOffloadedMb ?? 0).toFixed(1)} MB)</span>
                                         </td>
+                                        <td className="staging-confirm-cell">
+                                          <input
+                                            type="checkbox"
+                                            className="staging-link-confirm-checkbox"
+                                            checked={linkConfirmed}
+                                            onChange={() => toggleStagingLinkConfirmation('gs', linkId)}
+                                            disabled={confirmingSchedule}
+                                            aria-label={`Confirm link ${linkId} on the ground station side`}
+                                          />
+                                        </td>
                                       </tr>
                                     )
                                   })}
                                 </tbody>
                               </table>
                             </div>
+
+                            <div className={`staging-asset-confirm-bar ${gsAssetConfirmed ? 'staging-asset-confirm-bar--confirmed' : ''}`}>
+                              <label className="staging-asset-confirm-label">
+                                <input
+                                  type="checkbox"
+                                  checked={gsAssetConfirmed}
+                                  onChange={() => toggleStagingAssetConfirmation('gs', gs.links)}
+                                  disabled={confirmingSchedule}
+                                />
+                                <span>
+                                  {gsAssetConfirmed
+                                    ? `${gs.gsId} schedule reviewed and confirmed`
+                                    : `Confirm ${gs.gsId} schedule before commit`}
+                                </span>
+                              </label>
+                            </div>
                           </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     </div>
 
@@ -6468,17 +6934,42 @@ export default function App() {
                       <button
                         type="button"
                         className="btn-fetch timeline-confirm-button btn-commit-satos"
-                        disabled={confirmingSchedule || !sessionId || finalScheduleRows.length === 0}
+                        disabled={
+                          confirmingSchedule
+                          || !sessionId
+                          || finalScheduleRows.length === 0
+                          || !allStagingLinksConfirmed
+                          || scheduleCommitted
+                        }
                         onClick={handleCommitToSatOS}
                       >
-                        {confirmingSchedule ? 'Committing Activities to SatOS...' : 'Commit SCOPE Communication Activities to SatOS'}
+                        {confirmingSchedule
+                          ? 'Committing Activities to SatOS...'
+                          : scheduleCommitted
+                          ? 'Schedule Already Committed to SatOS'
+                          : 'Commit SCOPE Communication Activities to SatOS'}
                       </button>
+                      {!confirmingSchedule && !scheduleCommitted && !allStagingLinksConfirmed && (
+                        <span className="staging-commit-tooltip">
+                          Every link needs to be confirmed on both its satellite side and its ground station side before committing to SatOS.
+                        </span>
+                      )}
+                      {!confirmingSchedule && scheduleCommitted && (
+                        <span className="staging-commit-tooltip">
+                          This schedule was already committed to SatOS. Change an override or recalculate trade-offs to commit again.
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
 
                 {confirmationSuccess && (
-                  <div className="confirmation-success" role="status" aria-live="polite">
+                  <div
+                    ref={confirmationSuccessRef}
+                    className="confirmation-success"
+                    role="status"
+                    aria-live="polite"
+                  >
                     <span className="confirmation-success-icon" aria-hidden="true">✓</span>
                     <div className="confirmation-success-copy">
                       <strong>Success</strong>
