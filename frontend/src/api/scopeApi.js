@@ -15,48 +15,13 @@ const readErrorMessage = async (response) => {
 }
 
 export const requestJson = async (path, options = {}) => {
-  const {
-    timeoutMs = 15000,
-    signal: externalSignal,
-    ...fetchOptions
-  } = options
-
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
-  const abortExternal = () => controller.abort()
-
-  if (externalSignal?.aborted) {
-    window.clearTimeout(timeoutId)
-    throw makeAbortError()
-  }
-
-  externalSignal?.addEventListener('abort', abortExternal, { once: true })
-
-  let response
-
-  try {
-    response = await fetch(`${BACKEND_BASE_URL}${path}`, {
-      ...fetchOptions,
-      signal: controller.signal,
-      headers: {
-        ...(fetchOptions.body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        ...fetchOptions.headers,
-      },
-    })
-  } catch (error) {
-    if (controller.signal.aborted) {
-      if (externalSignal?.aborted) {
-        throw makeAbortError()
-      }
-
-      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`)
-    }
-
-    throw error
-  } finally {
-    window.clearTimeout(timeoutId)
-    externalSignal?.removeEventListener('abort', abortExternal)
-  }
+  const response = await fetch(`${BACKEND_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...options.headers,
+    },
+  })
 
   if (!response.ok) {
     const message = await readErrorMessage(response)
@@ -97,36 +62,18 @@ const waitForNextPoll = (durationMs, signal) => new Promise((resolve, reject) =>
 
 export const pollTaskResult = async (
   taskId,
-  {
-    onStatusUpdate,
-    signal,
-    pollIntervalMs = 1200,
-    requestTimeoutMs = 5000,
-    maxWaitMs = 90000,
-  } = {},
+  { onStatusUpdate, signal, pollIntervalMs = 1200 } = {},
 ) => {
-  const startedAt = Date.now()
-
   while (true) {
     if (signal?.aborted) {
       throw makeAbortError()
     }
 
-    if (Date.now() - startedAt > maxWaitMs) {
-      throw new Error(`Backend task timed out after ${Math.round(maxWaitMs / 1000)} seconds.`)
-    }
-
-    const taskStatus = await requestJson(`/tasks/status/${encodeURIComponent(taskId)}`, {
-      signal,
-      timeoutMs: requestTimeoutMs,
-    })
+    const taskStatus = await requestJson(`/tasks/status/${encodeURIComponent(taskId)}`, { signal })
     onStatusUpdate?.(taskStatus)
 
     if (taskStatus.status === 'completed') {
-      return requestJson(`/tasks/status/${encodeURIComponent(taskId)}/result`, {
-        signal,
-        timeoutMs: requestTimeoutMs,
-      })
+      return requestJson(`/tasks/status/${encodeURIComponent(taskId)}/result`, { signal })
     }
 
     if (taskStatus.status === 'failed') {
@@ -141,10 +88,9 @@ const postJson = (path, payload, signal) => requestJson(path, {
   method: 'POST',
   body: JSON.stringify(payload),
   signal,
-  timeoutMs: 15000,
 })
 
-export const initializeAssets = () => requestJson('/tasks/initialize', { timeoutMs: 15000 })
+export const initializeAssets = () => requestJson('/tasks/initialize')
 
 export const startOrbitExtraction = (payload, signal) => (
   postJson('/tasks/extract-overpasses', payload, signal)
@@ -171,8 +117,4 @@ export const commitSession = (sessionId, signal) => (
     method: 'POST',
     signal,
   })
-)
-
-export const clearScopeActivities = (payload, signal) => (
-  postJson('/utilities/satos/clear-scope-activities', payload, signal)
 )
