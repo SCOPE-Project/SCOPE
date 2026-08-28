@@ -5,6 +5,10 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from core.models.scheduling import (
+    DEFAULT_BUFFER_CAPACITY_MB,
+    DEFAULT_BUFFER_INITIAL_LEVEL_MB,
+    DEFAULT_DOWNLINK_RATE_MBPS,
+    DEFAULT_PAYLOAD_GENERATION_RATE_MBPS,
     LinkBlock,
     OverrideState,
     SatelliteBufferConfig,
@@ -32,10 +36,10 @@ class SchedulingSessionManager:
         scenario_end: datetime,
         asset_schedules: Optional[Dict[str, List[Activity]]] = None,
         satellite_configs: Optional[Dict[str, SatelliteBufferConfig]] = None,
-        default_capacity_mb: float = 2000.0,
-        default_initial_level_mb: float = 0.0,
-        default_payload_generation_rate_mbps: float = 15.0,
-        default_downlink_rate_mbps: float = 25.0,
+        default_capacity_mb: float = DEFAULT_BUFFER_CAPACITY_MB,
+        default_initial_level_mb: float = DEFAULT_BUFFER_INITIAL_LEVEL_MB,
+        default_payload_generation_rate_mbps: float = DEFAULT_PAYLOAD_GENERATION_RATE_MBPS,
+        default_downlink_rate_mbps: float = DEFAULT_DOWNLINK_RATE_MBPS,
         scoring_strategy: str = "buffer_overflow_avoidance",
         scoring_parameters: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,

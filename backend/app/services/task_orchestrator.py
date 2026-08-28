@@ -8,7 +8,13 @@ from core.scheduling.filter_pipeline import derive_and_filter_links
 from core.scheduling.session_manager import SchedulingSessionManager
 from core.models.assets import SatelliteInformation, GroundStationInformation, TimeInterval
 from core.models.propagation import PropagationResult
-from core.models.scheduling import LinkEligibilityStatus
+from core.models.scheduling import (
+    DEFAULT_BUFFER_CAPACITY_MB,
+    DEFAULT_BUFFER_INITIAL_LEVEL_MB,
+    DEFAULT_DOWNLINK_RATE_MBPS,
+    DEFAULT_PAYLOAD_GENERATION_RATE_MBPS,
+    LinkEligibilityStatus,
+)
 from app.repositories import AssetRepository, PropagationResultRepository, LinkRepository
 from app.models.propagation import PropagationResultDTO
 from app.models.scheduling import (
@@ -180,10 +186,10 @@ def run_process_trade_offs_task(
             for sat_name, dto in satellite_buffer_configs.items():
                 sat_configs[sat_name] = dto.to_domain(sat_name)
 
-        def_cap = default_buffer_config.capacity_mb if default_buffer_config else 2000.0
-        def_init = default_buffer_config.initial_level_mb if default_buffer_config else 0.0
-        def_gen = default_buffer_config.payload_generation_rate_mbps if default_buffer_config else 15.0
-        def_dl = default_buffer_config.downlink_rate_mbps if default_buffer_config else 25.0
+        def_cap = default_buffer_config.capacity_mb if default_buffer_config else DEFAULT_BUFFER_CAPACITY_MB
+        def_init = default_buffer_config.initial_level_mb if default_buffer_config else DEFAULT_BUFFER_INITIAL_LEVEL_MB
+        def_gen = default_buffer_config.payload_generation_rate_mbps if default_buffer_config else DEFAULT_PAYLOAD_GENERATION_RATE_MBPS
+        def_dl = default_buffer_config.downlink_rate_mbps if default_buffer_config else DEFAULT_DOWNLINK_RATE_MBPS
 
         session = SchedulingSessionManager.create_session(
             filter_run_id=filter_run_id,

@@ -1365,13 +1365,6 @@ body {
   z-index: 50;
 }
 
-.time-window-select-empty {
-  padding: 0.5rem 0.6rem;
-  font-size: 0.76rem;
-  font-style: italic;
-  color: var(--text-muted);
-}
-
 .time-window-select-option {
   width: 100%;
   padding: 0.48rem 0.65rem;
@@ -1432,7 +1425,17 @@ body {
   color: var(--text-muted);
 }
 
-.sidebar-block .time-window-error {
+.time-window-error {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--error-text);
+  border-radius: 0.18rem;
+  background: #fdecec;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--error-text);
+}
+
+.time-window-warning {
   padding: 0.55rem 0.7rem;
   border: 1px solid #d7b27a;
   border-radius: 0.18rem;

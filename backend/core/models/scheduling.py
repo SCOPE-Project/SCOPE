@@ -9,6 +9,17 @@ from typing import List, Dict, Set, Optional, Any
 from core.models.propagation import OverpassProfilePoint
 
 
+# Default on-board buffer configuration, in the units the scheduler works in
+# (MB and MB/s). These are the fallback for any caller that does not supply a
+# configuration - the React frontend always sends an explicit
+# default_buffer_config, so in practice these serve the CLI scripts and direct
+# API calls. Keep them in sync with the frontend defaults in App.jsx.
+DEFAULT_BUFFER_CAPACITY_MB = 100_000.0            # 100 GB
+DEFAULT_BUFFER_INITIAL_LEVEL_MB = 5_000.0         # 5 GB
+DEFAULT_PAYLOAD_GENERATION_RATE_MBPS = 4.0
+DEFAULT_DOWNLINK_RATE_MBPS = 25.0
+
+
 class LinkEligibilityStatus(str, Enum):
     ELIGIBLE = "eligible"
     BLOCKED_BY_BASELINE_ACTIVITY = "blocked_by_baseline"
