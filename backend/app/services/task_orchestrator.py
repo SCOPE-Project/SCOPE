@@ -8,13 +8,7 @@ from core.scheduling.filter_pipeline import derive_and_filter_links
 from core.scheduling.session_manager import SchedulingSessionManager
 from core.models.assets import SatelliteInformation, GroundStationInformation, TimeInterval
 from core.models.propagation import PropagationResult
-from core.models.scheduling import (
-    DEFAULT_BUFFER_CAPACITY_MB,
-    DEFAULT_BUFFER_INITIAL_LEVEL_MB,
-    DEFAULT_DOWNLINK_RATE_MBPS,
-    DEFAULT_PAYLOAD_GENERATION_RATE_MBPS,
-    LinkEligibilityStatus,
-)
+from core.models.scheduling import LinkEligibilityStatus
 from app.repositories import AssetRepository, PropagationResultRepository, LinkRepository
 from app.models.propagation import PropagationResultDTO
 from app.models.scheduling import (
@@ -159,37 +153,15 @@ def run_process_trade_offs_task(
 
         asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
 
-        if scoring_config is None:
-            scoring_config = ScoringStrategyConfigDTO()
-
-        scoring_rule = scoring_config.to_domain()
-        strat_name = scoring_config.name
-        strat_params = scoring_config.parameters
-
-        sat_configs = {}
-        if satellite_buffer_configs:
-            for sat_name, dto in satellite_buffer_configs.items():
-                sat_configs[sat_name] = dto.to_domain(sat_name)
-
-        def_cap = default_buffer_config.capacity_mb if default_buffer_config else DEFAULT_BUFFER_CAPACITY_MB
-        def_init = default_buffer_config.initial_level_mb if default_buffer_config else DEFAULT_BUFFER_INITIAL_LEVEL_MB
-        def_gen = default_buffer_config.payload_generation_rate_mbps if default_buffer_config else DEFAULT_PAYLOAD_GENERATION_RATE_MBPS
-        def_dl = default_buffer_config.downlink_rate_mbps if default_buffer_config else DEFAULT_DOWNLINK_RATE_MBPS
-
-        session = SchedulingSessionManager.create_session(
+        session = SchedulingSessionManager.create_session_from_config(
             filter_run_id=filter_run_id,
             candidate_links=candidate_links,
             scenario_start=scenario_start,
             scenario_end=scenario_end,
             asset_schedules=asset_schedules,
-            satellite_configs=sat_configs if sat_configs else None,
-            default_capacity_mb=def_cap,
-            default_initial_level_mb=def_init,
-            default_payload_generation_rate_mbps=def_gen,
-            default_downlink_rate_mbps=def_dl,
-            scoring_strategy=strat_name,
-            scoring_parameters=strat_params,
-            scoring_rule=scoring_rule,
+            scoring_config=scoring_config,
+            satellite_buffer_configs=satellite_buffer_configs,
+            default_buffer_config=default_buffer_config,
             session_id=task_id,
         )
         plan_dto = SessionPlanDTO.from_domain(session)

@@ -128,7 +128,7 @@ def test_schedule_router_endpoints():
     assert strat_data["scoring_config"]["parameters"]["alpha"] == 3.5
 
     # 4. POST commit
-    with patch("app.routers.schedule.push_activities_to_SatOS") as mock_push:
+    with patch("app.repositories.AssetRepository.push_activities_to_satos") as mock_push:
         res_commit = client.post(f"/schedule/session/{session.session_id}/commit")
         assert res_commit.status_code == 200
         assert res_commit.json()["status"] in ["synchronized", "synchronized (empty plan)"]
@@ -404,7 +404,7 @@ def test_apply_override_auto_unpin_conflicts():
     assert "pinned" in rejection.lower()
 
 
-@patch("app.routers.schedule.push_activities_to_SatOS")
+@patch("app.repositories.AssetRepository.push_activities_to_satos")
 def test_commit_schedule_with_user_and_initiators(mock_push):
     filter_id = "test_filt_commit_user"
     t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
