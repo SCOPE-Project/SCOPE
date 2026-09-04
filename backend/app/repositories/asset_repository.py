@@ -185,6 +185,15 @@ class AssetRepository:
         return cls._initialized_assets
 
     @classmethod
+    def invalidate(cls) -> None:
+        """
+        Resets the asset cache so the next call to initialize_repository() re-fetches from SatOS.
+        """
+        cls._satellite_infos.clear()
+        cls._raw_asset_models.clear()
+        cls._initialized = False
+
+    @classmethod
     def get_asset_raw_schedules(cls) -> dict[str, list[ActivityInfoModel]]:
         """
         Retrieves the cached dictionary mapping asset names to their raw activity schedules.

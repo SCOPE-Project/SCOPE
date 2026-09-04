@@ -15,7 +15,8 @@ backend/__pycache__/
 *.env
 
 # Folders
-
+graphify-out/
+*.graphifyignore
 
 # Compiled class file
 *.class
