@@ -4,7 +4,6 @@ from fastapi import APIRouter, HTTPException
 from core.models.scheduling import OverrideState
 from core.scheduling.session_manager import SchedulingSessionManager
 from app.repositories import AssetRepository
-from app.services.satos_connector import push_activities_to_SatOS
 from app.models.scheduling import (
     SessionPlanDTO,
     OverrideRequest,
@@ -98,16 +97,15 @@ def commit_schedule_to_satos(session_id: str, payload: CommitRequestDTO | None =
             created_activities_count=0,
             status="synchronized (empty plan)",
         )
-
     try:
-        # 2. Convert to SatOS Activity and Event models
+        # 2. Convert to SatOS Activity and Event models (preserves user attribution)
         activities = AssetRepository.create_activities_from_link_blocks(
             scheduled_statuses,
             user=user,
         )
 
-        # 3. Push batch activities to SatOS
-        push_activities_to_SatOS(activities)
+        # 3. Push to SatOS and sync the local _schedules cache
+        AssetRepository.push_activities_to_satos(activities)
 
         return CommitResponseDTO(
             session_id=session_id,

@@ -155,22 +155,7 @@ def run_process_trade_offs_task(
         if candidate_links is None:
             raise ValueError(f"No filtered links found for filter_run_id '{filter_run_id}'.")
 
-        # Resolve scenario time window from metadata in LinkRepository
         scenario_start, scenario_end = LinkRepository.get_time_window(filter_run_id)
-        if scenario_start is None or scenario_end is None:
-            meta = LinkRepository.get_metadata(filter_run_id) or {}
-            orbit_id = meta.get("orbit_engine_run_id")
-            if orbit_id:
-                prop_result = PropagationResultRepository.get_result(orbit_id)
-                if prop_result and prop_result.metadata:
-                    scenario_start = prop_result.metadata.start_time
-                    scenario_end = prop_result.metadata.end_time
-
-        if scenario_start is None or scenario_end is None:
-            raise ValueError(
-                f"Scenario time window (start_time, end_time) could not be resolved from metadata for filter_run_id '{filter_run_id}'. "
-                "Ensure orbit propagation and link filtering have completed."
-            )
 
         asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
 

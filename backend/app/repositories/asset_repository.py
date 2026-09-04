@@ -447,8 +447,6 @@ class AssetRepository:
 
         return sat_activity, gs_activity
 
-    create_activities_from_link_block = create_activity_pair_from_link_block
-
     @classmethod
     def create_activities_from_link_blocks(
         cls,
