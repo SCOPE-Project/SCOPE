@@ -1,6 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Response
 
-from app.services import state_manager, task_orchestrator
+from app.services import task_orchestrator
 
 from app.models.tasks import (
     OrbitEngineRequest,
@@ -14,7 +14,7 @@ from app.models.satos import (
     AssetInformation,
     AssetInitializationResponse,
 )
-from app.repositories import AssetRepository
+from app.repositories import AssetRepository, TaskRepository
 
 
 router = APIRouter(prefix="/tasks", tags=["Task Processing Workspace"])
@@ -37,7 +37,7 @@ def trigger_orbit_engine(payload: OrbitEngineRequest, background_tasks: Backgrou
     """
     Triggers the heavy background thread for orbit propagation and returns a receipt handle.
     """
-    task_id = state_manager.create_task_entry()
+    task_id = TaskRepository.create_task_entry()
     background_tasks.add_task(
         task_orchestrator.run_orbit_engine_task, 
         task_id=task_id, 
@@ -53,7 +53,7 @@ def trigger_filter_links(payload: FilterLinksRequest, background_tasks: Backgrou
     """
     Triggers the dedicated link derivation and filtering task against SatOS baseline activities.
     """
-    task_id = state_manager.create_task_entry()
+    task_id = TaskRepository.create_task_entry()
     background_tasks.add_task(
         task_orchestrator.run_filter_links_task,
         task_id=task_id,
@@ -70,7 +70,7 @@ def trigger_process_trade_offs(payload: TradeOffRequest, background_tasks: Backg
     """
     Triggers the trade-off analysis task and initializes the in-memory SchedulingSession.
     """
-    task_id = state_manager.create_task_entry()
+    task_id = TaskRepository.create_task_entry()
     background_tasks.add_task(
         task_orchestrator.run_process_trade_offs_task,
         task_id=task_id,
@@ -86,7 +86,7 @@ def get_task_status(task_id: str):
     """
     Polymorphic polling node utilized globally across all storyboard phases.
     """
-    task = state_manager.get_task(task_id)
+    task = TaskRepository.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task ID not found.")
     return task
@@ -96,7 +96,7 @@ def get_task_result(task_id: str):
     """
     Returns the final computation payload of a completed task.
     """
-    task_result = state_manager.get_task_result(task_id)
+    task_result = TaskRepository.get_task_result(task_id)
     if not task_result:
         raise HTTPException(status_code=404, detail="Task ID not found.")
     

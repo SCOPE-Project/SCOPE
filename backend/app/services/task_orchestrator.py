@@ -2,14 +2,18 @@
 from datetime import datetime
 from typing import Optional, Dict
 
-from app.services import state_manager
 from app.services import scheduling_service
 from core.orbit_engine import orekit_engine
 from core.scheduling.filter_pipeline import derive_and_filter_links
 from core.models.assets import SatelliteInformation, GroundStationInformation, TimeInterval
 from core.models.propagation import PropagationResult
 from core.models.scheduling import LinkEligibilityStatus
-from app.repositories import AssetRepository, PropagationResultRepository, LinkRepository
+from app.repositories import (
+    AssetRepository,
+    PropagationResultRepository,
+    LinkRepository,
+    TaskRepository,
+)
 from app.models.propagation import PropagationResultDTO
 from app.models.scheduling import (
     FilterResultDTO,
@@ -46,7 +50,7 @@ def run_orbit_engine_task(
             progress = 50
         else:
             return
-        state_manager.update_task(task_id, status="processing", message=str(message), progress=int(progress))
+        TaskRepository.update_task(task_id, status="processing", message=str(message), progress=int(progress))
 
     try:
         # Map input to Domain Models
@@ -67,9 +71,9 @@ def run_orbit_engine_task(
         PropagationResultRepository.save_result(propagation_results)
 
         propagation_results_dto = PropagationResultDTO.from_domain(propagation_results)
-        state_manager.complete_task(task_id, payload=propagation_results_dto)
+        TaskRepository.complete_task(task_id, payload=propagation_results_dto)
     except Exception as e:
-        state_manager.update_task(task_id, status="failed", message=str(e), progress=100)
+        TaskRepository.update_task(task_id, status="failed", message=str(e), progress=100)
 
 
 def run_filter_links_task(
@@ -83,7 +87,7 @@ def run_filter_links_task(
     """
     Executes the dedicated link derivation and filtering task.
     """
-    state_manager.update_task(task_id, status="processing", message="Filtering potential communication links...", progress=30)
+    TaskRepository.update_task(task_id, status="processing", message="Filtering potential communication links...", progress=30)
     try:
         propagation_result = PropagationResultRepository.get_result(orbit_engine_run_id)
         if not propagation_result:
@@ -128,9 +132,9 @@ def run_filter_links_task(
             links=[LinkBlockDTO.from_domain(l) for l in links],
         )
 
-        state_manager.complete_task(task_id, payload=dto)
+        TaskRepository.complete_task(task_id, payload=dto)
     except Exception as e:
-        state_manager.update_task(task_id, status="failed", message=str(e), progress=100)
+        TaskRepository.update_task(task_id, status="failed", message=str(e), progress=100)
 
 
 def run_process_trade_offs_task(
@@ -143,7 +147,7 @@ def run_process_trade_offs_task(
     """
     Starts the trade-off analysis task and initializes the in-memory SchedulingSession.
     """
-    state_manager.update_task(task_id, status="processing", message="Computing trade-offs and resolving schedule...", progress=40)
+    TaskRepository.update_task(task_id, status="processing", message="Computing trade-offs and resolving schedule...", progress=40)
     try:
         candidate_links = LinkRepository.get_links(filter_run_id)
         if candidate_links is None:
@@ -165,7 +169,7 @@ def run_process_trade_offs_task(
             session_id=task_id,
         )
         plan_dto = SessionPlanDTO.from_domain(session)
-        state_manager.complete_task(task_id, payload=plan_dto)
+        TaskRepository.complete_task(task_id, payload=plan_dto)
     except Exception as e:
-        state_manager.update_task(task_id, status="failed", message=str(e), progress=100)
+        TaskRepository.update_task(task_id, status="failed", message=str(e), progress=100)
 

@@ -222,7 +222,7 @@ def test_trade_off_request_with_buffer_configs_dto():
     from app.models.tasks import TradeOffRequest
     from app.models.scheduling import SatelliteBufferConfigDTO, SessionPlanDTO
     from app.services.task_orchestrator import run_process_trade_offs_task
-    from app.services import state_manager
+    from app.repositories import TaskRepository
 
     filter_id = "test_dto_filter"
     t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
@@ -249,7 +249,7 @@ def test_trade_off_request_with_buffer_configs_dto():
         ),
     )
 
-    task_id = state_manager.create_task_entry()
+    task_id = TaskRepository.create_task_entry()
 
     run_process_trade_offs_task(
         task_id=task_id,
@@ -259,7 +259,7 @@ def test_trade_off_request_with_buffer_configs_dto():
         scoring_config=req.scoring_config,
     )
 
-    result = state_manager.get_task_result(task_id)
+    result = TaskRepository.get_task_result(task_id)
     assert result is not None
     assert result.status == "completed"
     assert isinstance(result.payload, SessionPlanDTO)
@@ -274,7 +274,7 @@ def test_trade_off_request_with_buffer_configs_dto():
 
 def test_trade_off_processing_fails_hard_without_metadata():
     from app.services.task_orchestrator import run_process_trade_offs_task
-    from app.services import state_manager
+    from app.repositories import TaskRepository
 
     filter_id = "test_no_meta"
     t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
@@ -284,13 +284,13 @@ def test_trade_off_processing_fails_hard_without_metadata():
     # Save links WITHOUT metadata
     LinkRepository.save_links(filter_id, [l1])
 
-    task_id = state_manager.create_task_entry()
+    task_id = TaskRepository.create_task_entry()
     run_process_trade_offs_task(
         task_id=task_id,
         filter_run_id=filter_id,
     )
 
-    task_state = state_manager.get_task(task_id)
+    task_state = TaskRepository.get_task(task_id)
     assert task_state is not None
     assert task_state.status == "failed"
     assert "Scenario time window" in task_state.message
