@@ -15,7 +15,8 @@ from core.models.propagation import (
     OverpassProfilePoint,
 )
 from app.repositories import PropagationResultRepository, LinkRepository, AssetRepository
-from core.scheduling.session_manager import SchedulingSessionManager
+from app.repositories import SchedulingSessionRepository
+from app.services import scheduling_service
 from core.scheduling.filter_pipeline import derive_and_filter_links
 from app.main import app
 
@@ -26,13 +27,13 @@ client = TestClient(app)
 def clean_all():
     PropagationResultRepository.clear()
     LinkRepository.clear()
-    SchedulingSessionManager.clear()
+    SchedulingSessionRepository.clear()
     AssetRepository._schedules.clear()
     AssetRepository._raw_schedules.clear()
     yield
     PropagationResultRepository.clear()
     LinkRepository.clear()
-    SchedulingSessionManager.clear()
+    SchedulingSessionRepository.clear()
     AssetRepository._schedules.clear()
     AssetRepository._raw_schedules.clear()
 
@@ -49,7 +50,7 @@ def test_session_manager_lifecycle():
     LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
 
     # 2. Create Session
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
         scenario_start=t_start,
@@ -68,7 +69,7 @@ def test_session_manager_lifecycle():
     assert session.current_plan["L2"].is_scheduled is True  # Sat-2 higher buffer wins
 
     # 3. Apply Override: Pin L1
-    updated_session = SchedulingSessionManager.apply_override(
+    updated_session = scheduling_service.apply_override(
         session_id="session_01",
         link_id="L1",
         override_state=OverrideState.PINNED,
@@ -88,7 +89,7 @@ def test_schedule_router_endpoints():
     l1 = LinkBlock(link_id="link_01", overpass_id="op1", satellite_name="Sat-A", groundstation_name="GS-A", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=45.0)
     LinkRepository.save_links(filter_id, [l1], start_time=t_start, end_time=t_end)
 
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1],
         scenario_start=t_start,
@@ -197,7 +198,7 @@ def test_session_manager_custom_buffer_configs():
         ),
     }
 
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
         scenario_start=t_start,
@@ -361,7 +362,7 @@ def test_apply_override_auto_unpin_conflicts():
 
     LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
 
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
         scenario_start=t_start,
@@ -378,7 +379,7 @@ def test_apply_override_auto_unpin_conflicts():
     assert session.current_plan["L2"].is_scheduled is False
 
     # 2. Pin L2 (even though Sat-2 has lower buffer)
-    session_after_pin_l2 = SchedulingSessionManager.apply_override(
+    session_after_pin_l2 = scheduling_service.apply_override(
         session_id="sess_auto_unpin_test",
         link_id="L2",
         override_state=OverrideState.PINNED,
@@ -388,7 +389,7 @@ def test_apply_override_auto_unpin_conflicts():
     assert session_after_pin_l2.current_plan["L1"].is_scheduled is False
 
     # 3. Now Pin conflicting L1 -> L2 should be automatically unpinned (reverted to AUTO)
-    session_after_pin_l1 = SchedulingSessionManager.apply_override(
+    session_after_pin_l1 = scheduling_service.apply_override(
         session_id="sess_auto_unpin_test",
         link_id="L1",
         override_state=OverrideState.PINNED,
@@ -415,7 +416,7 @@ def test_commit_schedule_with_user_and_initiators(mock_push):
 
     LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
 
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
         scenario_start=t_start,
@@ -428,7 +429,7 @@ def test_commit_schedule_with_user_and_initiators(mock_push):
     )
 
     # Pin L1, leave L2 in AUTO
-    SchedulingSessionManager.apply_override(
+    scheduling_service.apply_override(
         session_id="sess_commit_user_test",
         link_id="L1",
         override_state=OverrideState.PINNED,

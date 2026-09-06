@@ -591,8 +591,6 @@ class AssetRepository:
         activities = cls.create_activities_from_link_blocks(links)
         return cls.push_activities_to_satos(activities)
 
-    push_link_blocks_to_satos = push_scheduled_links_to_satos
-
     @classmethod
     def delete_activities_from_satos(
         cls, activity_uuids: Sequence[UUID4 | UUID7 | uuid.UUID]

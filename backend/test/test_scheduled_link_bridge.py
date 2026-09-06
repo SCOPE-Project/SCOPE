@@ -63,7 +63,7 @@ def create_sample_scheduled_link(
 
 def test_create_activities_from_single_scheduled_link():
     link = create_sample_scheduled_link()
-    sat_activity, gs_activity = AssetRepository.create_activities_from_link_block(link)
+    sat_activity, gs_activity = AssetRepository.create_activity_pair_from_link_block(link)
 
     expected_name = f"DOWNLINK_{link.link_id}_{link.satellite_name}-{link.groundstation_name}"
 

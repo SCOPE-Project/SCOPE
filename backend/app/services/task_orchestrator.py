@@ -3,9 +3,9 @@ from datetime import datetime
 from typing import Optional, Dict
 
 from app.services import state_manager
+from app.services import scheduling_service
 from core.orbit_engine import orekit_engine
 from core.scheduling.filter_pipeline import derive_and_filter_links
-from core.scheduling.session_manager import SchedulingSessionManager
 from core.models.assets import SatelliteInformation, GroundStationInformation, TimeInterval
 from core.models.propagation import PropagationResult
 from core.models.scheduling import LinkEligibilityStatus
@@ -153,7 +153,7 @@ def run_process_trade_offs_task(
 
         asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
 
-        session = SchedulingSessionManager.create_session_from_config(
+        session = scheduling_service.create_session_from_config(
             filter_run_id=filter_run_id,
             candidate_links=candidate_links,
             scenario_start=scenario_start,
