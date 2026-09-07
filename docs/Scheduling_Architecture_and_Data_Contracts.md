@@ -10,22 +10,24 @@ The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subs
 
 ### 1.2 The High-Level Pipeline
 
+The operational workflow follows 5 operator-centric phases (**Configure** $\rightarrow$ **Inspect** $\rightarrow$ **Resolve** $\rightarrow$ **Steer** $\rightarrow$ **Commit**), supported by the underlying computational pipeline stages below:
+
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ PHASE 1: ASSET & BASELINE INITIALIZATION                                               │
+│ OPERATOR PHASE 1: CONFIGURE (STAGE 1: ASSET & BASELINE INITIALIZATION)                 │
 │ Queries SatOS SDK for asset metadata and existing immutable schedules (AssetRepo).     │
 └───────────────────────────────────────────┬────────────────────────────────────────────┘
                                             │
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ PHASE 2: ORBIT PROPAGATION ENGINE (Orekit Core)                                        │
+│ OPERATOR PHASE 1: CONFIGURE (STAGE 2: ORBIT PROPAGATION ENGINE - Orekit Core)          │
 │ Calculates satellite global trajectories and raw geometric OverpassBlocks.             │
 │ Stores results in PropagationResultRepository (indexed by orbit_engine_run_id).        │
 └───────────────────────────────────────────┬────────────────────────────────────────────┘
                                             │
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ PHASE 3: DEDICATED LINK DERIVATION & FILTERING PIPELINE (Independent Step)             │
+│ OPERATOR PHASE 1: CONFIGURE (STAGE 3: LINK DERIVATION & FILTERING PIPELINE)            │
 │ Endpoint: POST /tasks/filter-links (Asynchronous Background Task)                      │
 │ Ingests: orbit_engine_run_id + Filter Parameters (elevations, downlink rates)          │
 │ Queries: PropagationResultRepository (for Overpasses) & AssetRepository (for Baseline)│
@@ -39,7 +41,16 @@ The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subs
                                             │
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ PHASE 4: IN-MEMORY SCHEDULING SESSION & TRADE-OFF SOLVER                               │
+│ OPERATOR PHASE 2: INSPECT (BASELINE OBSERVATION & SANITY VALIDATION)                   │
+│ Operator enters workspace and surveys "what is now" without network mutations:         │
+│ - Map View: orbital ground tracks & station coverage visibility cones                  │
+│ - Timeline View: pre-existing SatOS baseline schedule & payload operations             │
+│ - Overview Table: candidate link inventory, durations, and elevation profiles          │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │ (Operator clicks "Calculate Trade-Offs")
+                                            ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│ OPERATOR PHASE 3: RESOLVE (IN-MEMORY SCHEDULING SESSION & TRADE-OFF SOLVER)            │
 │ Endpoint: POST /tasks/process-trade-offs                                               │
 │ Ingests: filter_run_id + Initial Buffer Levels + Scoring Strategy                      │
 │ - Builds Conflict Graph on schedulable links (is_eligible & is_available);             │
@@ -51,7 +62,7 @@ The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subs
                         ┌───────────────────┴───────────────────┐
                         ▼                                       ▼
       ┌────────────────────────────────────┐ ┌────────────────────────────────────┐
-      │ PHASE 5: INTERACTIVE STEERING      │ │ DYNAMIC RE-SOLVER (< 5 ms)         │
+      │ OPERATOR PHASE 4: STEER            │ │ DYNAMIC RE-SOLVER (< 5 ms)         │
       │ - Operator Pins / Excludes links   │ │ - Enforces user overrides          │
       │ - Operator tunes scoring strategy  │ │ - Re-simulates buffer curves D(t)  │
       │ - Immediate Gantt / Card re-render │<┼──>- Cascades multi-pass priorities │
@@ -60,8 +71,8 @@ The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subs
                         │
                         ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ PHASE 6: FINALIZATION & COMMIT TO SATOS                                                │
-│ Transforms active scheduled LinkBlocks into SatOS Activity & ScheduleEvent models.     │
+│ OPERATOR PHASE 5: COMMIT (FINALIZATION & COMMIT TO SATOS)                              │
+│ Staged review & acknowledgment -> transforms active LinkBlocks into SatOS models.      │
 │ Pushes batch activities via AssetRepository.push_activities_to_satos().                │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -631,39 +642,37 @@ The React UI differentiates links based on their eligibility and scheduler state
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ PHASE 1: INITIALIZATION                                                                │
-│ 1. React mounts -> GET /tasks/initialize.                                              │
-│ 2. Backend queries SatOS SDK, caches asset models & baseline schedule in AssetRepo.   │
-│ 3. React populates asset selector checklist and draws immutable baseline activities.   │
+│ PHASE 1: CONFIGURE (INITIALIZATION & LAUNCH PIPELINE)                                  │
+│ 1. React mounts -> GET /tasks/initialize loads SatOS assets & schedules to AssetRepo. │
+│ 2. Operator configures window, assets, elevation masks, buffers, and strategy.         │
+│ 3. Operator clicks "Launch SCOPE" -> optional clear-scope-activities purge.           │
+│ 4. POST /tasks/extract-overpasses runs Orekit propagation (cached in repo).            │
+│ 5. POST /tasks/filter-links runs elevation trimming & SatOS baseline conflict check.   │
+│ 6. Derived LinkBlocks stored in LinkRepository; workspace opens.                       │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 2: ORBIT PROPAGATION                                                             │
-│ 1. Operator selects assets, time horizon [T_start, T_end] -> "Launch Engine".          │
-│ 2. POST /tasks/extract-overpasses triggers Orekit propagation background task.          │
-│ 3. React polls /tasks/status/{id} and fetches PropagationResultDTO on completion.      │
-│ 4. PropagationResult stored in PropagationResultRepository (orbit_engine_run_id).     │
+│ PHASE 2: INSPECT (BASELINE OBSERVATION & SANITY VALIDATION)                            │
+│ 1. Operator enters workspace; visually surveys baseline reality ("what is now").       │
+│ 2. Map View: validates satellite orbital tracks, ground stations, and visibility cones.│
+│ 3. Timeline View: reviews pre-existing immutable SatOS schedule blocks & activities.   │
+│ 4. Overview Table: verifies overpass inventory, durations, and candidate links.        │
+│ 5. Operator confirms scenario interval & buffer sanity before solving.                 │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 3: DEDICATED LINK DERIVATION & FILTERING                                         │
-│ 1. Operator sets filter sliders (min elevation, min peak) -> "Apply Filters".          │
-│ 2. POST /tasks/filter-links triggers background filtering task (TaskReceiptResponse). │
-│ 3. React polls /tasks/status/{id} and fetches FilterResultDTO from .../result.         │
-│ 4. Derived LinkBlocks (eligible & blocked) stored in LinkRepository with time window. │
-│ 5. React timeline renders candidate links (with distinct blocked and filtered styles). │
-├────────────────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 4: TRADE-OFF SESSION & INITIAL OPTIMIZATION                                      │
-│ 1. Operator clicks "Calculate Trade-Offs".                                             │
-│ 2. POST /tasks/process-trade-offs queues session task (TaskReceiptResponse).           │
+│ PHASE 3: RESOLVE (TRADE-OFF SESSION & INITIAL OPTIMIZATION)                            │
+│ 1. Operator clicks "Calculate Trade-Offs" in Overview sidebar.                         │
+│ 2. POST /tasks/process-trade-offs queues background solver task (TaskReceiptResponse). │
 │ 3. React polls task result; session saved in SchedulingSessionRepository.              │
 │ 4. Multi-Pass Forward Simulation calculates initial schedule & buffer curves D(t).     │
-│ 5. React renders Trade-off cards, scheduled status badges, and buffer telemetry charts.│
+│ 5. React renders Trade-off cards in drawer, status badges, and buffer charts.          │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 5: INTERACTIVE OPERATOR STEERING                                                 │
+│ PHASE 4: STEER (INTERACTIVE OPERATOR OVERRIDES & RE-SOLVER)                            │
 │ 1. Operator pins/excludes links (/override) or tunes scoring strategy (/strategy).     │
 │ 2. Fast Forward Simulator re-evaluates all unlocked links and buffer state (< 5 ms).    │
 │ 3. React updates Gantt status badges and re-draws storage curves D(t) at 60 FPS.       │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 6: CONFIRMATION & SATOS COMMIT                                                   │
+│ PHASE 5: COMMIT (STAGED REVIEW & SATOS COMMIT)                                         │
 │ 1. Operator reviews buffer performance and clicks "Confirm Schedule".                  │
-│ 2. POST /schedule/session/{id}/commit converts scheduled links into SatOS activities.  │
-│ 3. Batch pushed to SatOS server via AssetRepository; confirmation alert shown in UI.   │
+│ 2. Staged review panel opens; operator individually acknowledges asset links.         │
+│ 3. POST /schedule/session/{id}/commit converts scheduled links into SatOS activities.  │
+│ 4. Batch pushed to SatOS server via AssetRepository; baseline refresh sync.            │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
