@@ -1,149 +1,297 @@
 **Parent:** [[Softwaresysteme Semesterprojekt]]
 
+## 0. Top-Level Swimlane Diagram
+
+High-level user flow across the **Operator**, **React Frontend**, and **FastAPI Backend + SatOS** layers.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  SWIMLANE: OPERATOR                                                                                         │
+│                                                                                                             │
+│   [App Open]  ─── configure ────────────────────────────── [Launch SCOPE] ─── [Calculate Trade-Offs]         │
+│                   assets/window/                                              │                             │
+│                   filters/buffer/                                             ▼                             │
+│                   strategy                                          [Override links / PIN / EXCLUDE]        │
+│                                                                               │                             │
+│                                                                     [Confirm Schedule]                      │
+│                                                                               │                             │
+│                                                                     [Commit to SatOS]                       │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+          │                │                                      │                │               │
+          ▼                ▼                                      ▼                ▼               ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  SWIMLANE: REACT FRONTEND                                                                                   │
+│                                                                                                             │
+│  [Mount]       [Connection   [Asset &         [Transition     [Poll task      [Sync override  [Stage        │
+│  Health poll   Checks]       Sched. Display]  landing→        status]         → update rows,  review,      │
+│  /status       /satos/asset  landing page     workspace]      live progress   cards, timeline] lock UI,    │
+│  /satos/asset  /list]        config form      sequential      logs]           instant redraw]  show KPIs,  │
+│  /list]                                       pipeline:                                        per-asset   │
+│                                               1. clear?                                        tables]     │
+│                                               2. extract                                                   │
+│                                               3. filter                                                    │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+          │                │                           │                │               │               │
+          ▼                ▼                           ▼                ▼               ▼               ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  SWIMLANE: FASTAPI BACKEND + SATOS                                                                          │
+│                                                                                                             │
+│  GET /status   GET /satos/   GET /tasks/      POST /utilities/ POST /tasks/   POST /schedule/  POST        │
+│                asset/list    initialize       satos/clear-     extract-       session/{id}/    /schedule/  │
+│                              (cache or        scope-           overpasses     override         session/    │
+│                              SatOS init)      activities       POST /tasks/   (sync re-sim)    {id}/commit │
+│                                               (optional)       filter-links                               │
+│                                                                POST /tasks/   GET /tasks/                 │
+│                                                                process-       initialize                  │
+│                                                                trade-offs     (refresh)                   │
+│                                                                GET /tasks/                                │
+│                                                                status/{id}                                │
+│                                                                (polling)                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## 1. Operator User Storyboard
 
 The development framework maps directly to the following five operational planning phases outlined by the mission planner's user story:
 
 - **Phase 1: Initialization**
-    The frontend is loaded, the user is presented a list of Satellites and Ground Stations which are available in the SatOS mission (Information from SatOS API `/satellites/list`), and the user is asked to select the relevant satellites and ground stations by making ticks. The user is asked to tick relevant filters for overpass extraction.
+    The frontend loads and immediately begins health-checking the backend (`GET /status`) and SatOS connectivity (`GET /satos/asset/list`). In parallel it triggers `GET /tasks/initialize` to load mission assets (satellites, ground stations, and their current SatOS schedules). The operator is presented with a rich landing-page configuration form covering: operator name, planning window (UTC or local), satellite and ground station selection, optional link-elevation and peak-elevation filters, per-satellite buffer configuration (capacity, start fill, generation rate, downlink rate), and trade-off strategy selection (including scoring parameters). An optional "Clear existing SCOPE activities before launch" toggle is also available.
+
 - **Phase 2: Launch**
-    Under the selection, the user clicks a button 'Launch Communication Scheduler'. The UI updates from the selection window to the 3-windows overview, trade-off, and timeline. The UI should immediately show the currently available SatOS schedule (Information from SatOS API `/schedule`). A slow process shall be initiated for orbital propagation (PROPAGATE Satellite Orbits), overpass extraction (EXTRACT Sat-GS Overpasses), and potential link filtering (FILTER potential Communication Links based on Sat/GS availability and global rules). Continual progress reports shall be presented in text form in the overview window. When the math is done, the Overview UI section shall display all extracted potential communication links.
+    The operator clicks **"Launch SCOPE"** (enabled only when all configuration requirements are met). The view transitions from the landing page to the workspace. The launch sequence runs as a sequential async pipeline with live progress feedback in the Overview panel:
+    1. *(Optional)* Clear existing SCOPE activities via `POST /utilities/satos/clear-scope-activities`, then refresh asset schedules via `GET /tasks/initialize`.
+    2. **Orbit propagation & overpass extraction:** `POST /tasks/extract-overpasses` → poll `GET /tasks/status/{task_id}` → result. Propagation results are cached and reused if the same assets and planning window are launched again.
+    3. **Link derivation & filtering:** `POST /tasks/filter-links` → poll `GET /tasks/status/{task_id}` → result. Filtered links populate the Overview table.
+
 - **Phase 3: Trade-Off**
-    The user clicks a button "Calculate Trade-Offs", starting a slow process where conflicts between the potential links are identified, scoring etc. is done. Continual progress reports shall be presented in text form in the trade-off section. When the math is done, the Overview UI table shall be updated with new trade-off information, and the Trade-Off UI section shall be populated with individual trade-off cards. The proposed system communication schedule based on highest scoring links in the trade-off is written into the Timeline UI section.
+    The operator clicks **"Calculate Trade-Offs"** in the Overview sidebar (requires buffer config and strategy to be valid). A background task runs conflict identification, buffer simulation, and policy scoring: `POST /tasks/process-trade-offs` → poll `GET /tasks/status/{task_id}` → result. On completion the backend returns a full `SessionPlanDTO` containing conflict groups, per-link scheduling decisions, buffer curves, and scoring metadata. The frontend populates the trade-off drawer in the Timeline panel and color-codes the Overview and Timeline.
+
 - **Phase 4: User Interaction**
-    The user might click on a different link within a trade-off card. This triggers a background recalculation of the global scheduling timeline. _Correction: Because updating cascade constraints across the full scheduling horizon requires executing iterative dependency rules, this interaction is classified as a slow background process rather than an instantaneous turnaround._
+    The operator clicks override controls on individual links in the trade-off drawer or Timeline tooltip (PIN / EXCLUDE / AUTO). Each click triggers a **synchronous** `POST /schedule/session/{session_id}/override` which re-runs the forward simulation on the backend and returns an updated `SessionPlanDTO` immediately. The frontend applies the updated plan to rows, cards, and the timeline in a single redraw — no polling loop is needed.
+
+    The operator may also change the active scoring strategy directly from the Timeline toolbar or Sidebar configuration panel via synchronous `POST /schedule/session/{session_id}/strategy`. Existing manual overrides (PIN / EXCLUDE) are preserved and carried over to the new strategy without re-running the full trade-off pipeline.
+
 - **Phase 5: Confirmation & SatOS Commit**
-    The user clicks "Confirm Communication Schedule" to stage the schedule. The UI presents an aggregated review of all scheduled links per satellite and ground station, along with comprehensive data volume and buffer metrics. The operator then clicks "Commit SCOPE Communication Activities to SatOS" to initiate the actual push: the UI locks with an animated progress card, activities are generated and sent to SatOS in batch, the SatOS baseline is refreshed, and a green "Success" element displays the committed activity count.
+    The operator clicks **"Confirm Communication Schedule"** — a client-side state transition that opens the staged review panel showing per-satellite and per-ground-station link tables, data volume KPIs, and buffer profiles. Each asset's links must be individually acknowledged before the commit button unlocks.
+    The operator then clicks **"Commit SCOPE Communication Activities to SatOS"**: `POST /schedule/session/{session_id}/commit`. The UI locks with a progress indicator. On success, the frontend calls `GET /tasks/initialize` to refresh the SatOS ground truth and displays a green success banner with committed link and activity counts.
+
+---
 
 ## 2. Chronological Event Sequence Walkthrough & Visualizations
 
 ### Phase 1: Initialization
 
-Upon loading the browser application, the React frontend builds the workspace configuration.
-
-Plaintext
+Upon loading the browser application, the React frontend immediately checks connectivity and loads mission assets.
 
 ```
 [ Operator Opens Application ]
                │
-               └──> Line 1 (Instant): GET /satos/available-assets ──> Populates Checkbox Matrix
+               ├──> Continuous (2 s interval, landing-page only):
+               │         GET /status                    ──> backendAlive state
+               │         GET /satos/asset/list          ──> satosAlive state
+               │
+               └──> Once (on backend online):
+                         GET /tasks/initialize          ──> Assets + Schedules
+                                                            Populates satellite & GS
+                                                            selection checkboxes,
+                                                            SatOS schedule sidebar
 ```
 
-- **React Frontend Action:** Fires an instant asynchronous network request on component mount.
-- **FastAPI Backend Request:** `GET http://localhost:8000/satos/available-assets`
-- **Internal Python Action:** The FastAPI server catches the request, invokes the SatOS internal SDK session, and queries the remote SatOS asset registry database.
-- **UI Update:** React receives the JSON asset array and dynamically populates the checkbox options for the operator.
+- **React Frontend Action:** On mount, fires connection health checks every 2 s (only while on the landing page and tab is visible). As soon as the backend is reachable, triggers asset initialization.
+- **FastAPI Backend Request:** `GET /tasks/initialize?force_refresh=false`
+- **Internal Python Action:** Checks an in-memory `AssetRepository` cache; if cold, queries the SatOS SDK for the full fleet asset list and active schedule blocks. Returns assets, their SatOS schedules, and a `cached` flag.
+- **UI Update:** Landing page configuration form populates with satellite and ground-station checkboxes. SatOS connection status badge updates. The operator configures the mission planning session.
+
+**Landing-page configuration fields collected before launch:**
+
+| Section | Fields |
+|---|---|
+| Operator | Operator name (required) |
+| Planning Window | Start date/time, End date/time, UTC / Local toggle |
+| Assets | Satellite multi-select, Ground Station multi-select |
+| Link Filters | Minimum AOS/LOS elevation (°), Minimum peak elevation (°) |
+| Buffer Config | Capacity (GB), Initial fill (GB), Payload generation rate (Mb/s), Downlink rate (Mb/s) |
+| Trade-Off Strategy | Strategy dropdown (buffer_overflow_avoidance / max_downlink_throughput / max_pass_duration), Scoring alpha & exponent (when applicable) |
+| Utilities | "Clear existing SCOPE activities" toggle (optional SatOS purge before launch) |
+
+---
 
 ### Phase 2: Launch
 
-The operator clicks the "Launch Communication Scheduler" button. JavaScript asynchronous execution forks this singular interaction into two concurrent tracks to maintain UI responsiveness.
-
-Plaintext
+The operator clicks **"Launch SCOPE"** after completing all configuration fields. The frontend transitions to the workspace view and runs the following sequential pipeline with live progress in the Overview panel.
 
 ```
-[ Operator clicks "Launch Communication Scheduler" ]
-             │
-             ├──> Line 1 (Instant): GET /satos/current-schedule ──> Populates Timeline View
-             │
-             └──> Line 2 (Instant): POST /tasks/orbit-processing ──> Gets Task ID
-                                             │
-                                             └──> Line 3 (Looping): GET /tasks/orbit-processing/{task_id} ──> Progress Text Updates
+[ Operator clicks "Launch SCOPE" ]
+               │
+               │  (view transitions: landing → workspace)
+               │
+               ├──> Step 0 (conditional): POST /utilities/satos/clear-scope-activities
+               │                                    │
+               │                          GET /tasks/initialize   ──> Refresh asset schedules
+               │
+               ├──> Step 1 (conditional - skipped if propagation result cached):
+               │         POST /tasks/extract-overpasses  ──> { task_id }
+               │                    │
+               │                    └──> Poll: GET /tasks/status/{task_id}  ──> Progress logs
+               │                                    │ (completed)
+               │                                    └──> GET /tasks/status/{task_id}/result
+               │                                              ──> propagation result + satellite tracks
+               │
+               └──> Step 2: POST /tasks/filter-links  ──> { task_id }
+                                   │
+                                   └──> Poll: GET /tasks/status/{task_id}  ──> Progress logs
+                                                   │ (completed)
+                                                   └──> GET /tasks/status/{task_id}/result
+                                                             ──> filtered link list  ──> Overview table
 ```
 
-- **Track A (Fetch Existing Baseline):**
-    - **React Frontend Action:** Dispatches a fast synchronous request to map baseline schedules.
-    - **FastAPI Backend Request:** `GET http://localhost:8000/satos/current-schedule`
-    - **Internal Python Action:** Synchronously asks the SatOS API for active `Sat PL-Activity` and `GS Non-Availability Activity` blocks.
-    - **UI Update:** React clears the setup screen, mounts the 3-window panel dashboard, and draws existing operational blocks onto the timeline view immediately so the page is instantly interactive.
-        
-- **Track B (Trigger Heavy Computations):**
-    - **React Frontend Action:** Concurrently issues a `POST` request containing the user's selection parameters.
-    - **FastAPI Backend Request:** `POST http://localhost:8000/tasks/orbit-processing`
-    - **Internal Python Action:** FastAPI delegates the slow orbit propagation and overpass extraction routines to a standalone `BackgroundTask` worker thread and instantly drops a receipt tracking handle back to the client.
-    - **The Polling Loop:** React captures the tracking token `{"task_id": "prop_run_001"}` and initiates a background `setInterval` polling script hitting `GET http://localhost:8000/tasks/orbit-processing/prop_run_001` every 2 seconds.
-    - **UI Update:** The loop feeds live text progress reports (e.g., _"Propagating VLEO-SAT-01..."_) directly into the overview window status logs. Once complete, raw potential communication links populate the interface tables.
+- **Step 0 (optional SatOS purge):**
+    - **FastAPI:** `POST /utilities/satos/clear-scope-activities` with schedule names and time window.
+    - **Internal Python:** Queries SatOS for all SCOPE-originated activities in the window and deletes them in batch.
+    - Then `GET /tasks/initialize` refreshes the schedule cache.
+
+- **Step 1 (orbit propagation + overpass extraction):**
+    - **React Frontend:** `POST /tasks/extract-overpasses` with selected satellites, ground stations, and planning window ISO timestamps. Starts a polling loop on `GET /tasks/status/{task_id}` every 1.2 s.
+    - **FastAPI:** Spawns a `BackgroundTask` that runs TLE propagation (via Orekit) and geometry-based overpass extraction. Returns `{task_id}` immediately.
+    - **UI Update:** Live status messages stream into the Overview panel. Satellite ground tracks are drawn on the Map View on completion. Result is cached so re-launches with identical parameters skip this step.
+
+- **Step 2 (link derivation & filtering):**
+    - **React Frontend:** `POST /tasks/filter-links` referencing the completed `orbit_engine_run_id` and optional elevation thresholds and downlink rate. Polls `GET /tasks/status/{task_id}`.
+    - **FastAPI:** Runs the filter pipeline — derives geometry-valid links, trims overpasses to elevation constraints, screens against SatOS baseline conflicts, and computes estimated data capacity per link.
+    - **UI Update:** Filtered link table populates the Overview. The pipeline is now complete and the trade-off button unlocks.
+
+---
 
 ### Phase 3: Trade-Off
 
-The operator advances the pipeline into the scoring and policy evaluation block by clicking "Calculate Trade-Offs".
-
-Plaintext
+The operator clicks **"Calculate Trade-Offs"** (enabled when filter run exists and buffer/strategy config is valid).
 
 ```
 [ Operator clicks "Calculate Trade-Offs" ]
-             │
-             └──> Line 1 (Instant): POST /tasks/tradeoff-processing ──> Gets Optimization Task ID
-                                             │
-                                             └──> Line 2 (Looping): GET /tasks/tradeoff-processing/{task_id} ──> Trade-Off Logs
+               │
+               └──> POST /tasks/process-trade-offs  ──> { task_id }
+                                   │
+                                   └──> Poll: GET /tasks/status/{task_id}  ──> Scheduling logs
+                                                   │ (completed)
+                                                   └──> GET /tasks/status/{task_id}/result
+                                                             ──> SessionPlanDTO
+                                                                   ├── session_id
+                                                                   ├── conflict groups (trade-off cards)
+                                                                   ├── per-link scheduling decisions
+                                                                   ├── buffer simulation curves
+                                                                   └── scoring metadata
 ```
 
-- **React Frontend Action:** Transmits a run execution request containing active link identifiers.
-- **FastAPI Backend Request:** `POST http://localhost:8000/tasks/tradeoff-processing`
-- **Internal Python Action:** Pushes conflict determination, linear scoring, and rule matching into a background thread, instantly dropping an optimization task tracking ID.
-- **The Polling Loop:** React initializes an execution loop checking `GET http://localhost:8000/tasks/tradeoff-processing/trade_001` to continuously stream optimization telemetry text logs into the trade-off window.
-- **UI Update:** Upon task resolution, the backend dumps a comprehensive JSON packet containing incompatible link groups, policy evaluation metrics, and the baseline optimal path proposition. React displays interactive conflict resolution cards and automatically renders color-coded schedule recommendations directly across the timeline.
+- **React Frontend Action:** `POST /tasks/process-trade-offs` with the active `filter_run_id`, default buffer config, per-satellite buffer config overrides, and scoring strategy/parameters.
+- **FastAPI:** Creates an in-memory `SchedulingSession`. Runs conflict detection (`build_conflict_structure`), buffer simulation (`run_forward_simulation`), and produces a scored and scheduled plan. Returns a task receipt immediately; computation runs in background.
+- **UI Update:** On completion, the backend's `SessionPlanDTO` is applied. Overview rows gain scheduling state and trade-off group IDs. Trade-off cards populate the Timeline's drawer. Links are color-coded by conflict group. The Timeline centers on the first trade-off card.
+
+---
 
 ### Phase 4: User Interaction
 
-The operator clicks on an alternative option within a conflict card to override a specific automated system recommendation. Because checking downstream cascading impacts across the horizon requires computing nested dependency rules, this is structured as a slow asynchronous loop.
-
-Plaintext
+The operator clicks override controls on a link — in the trade-off drawer, the Overview table, or the Timeline tooltip.
 
 ```
-[ Operator Selects Alternative Link Option ]
-             │
-             └──> Line 1 (Instant): POST /tasks/schedule-recalculate ──> Gets Recalculation Task ID
-                                             │
-                                             └──> Line 2 (Looping): GET /tasks/schedule-recalculate/{task_id} ──> Timeline Re-plotting
+[ Operator selects override: PIN / EXCLUDE / AUTO on a link ]
+               │
+               └──> POST /schedule/session/{session_id}/override
+                              ──> { link_id, override_state }
+                                       │
+                                       └──> Returns: updated SessionPlanDTO   (synchronous)
+                                                  ──> Frontend applies: updated rows,
+                                                                        trade-off cards,
+                                                                        timeline, tooltip
 ```
 
-- **React Frontend Action:** Transmits a fast state delta containing the modified manual override decision.
-- **FastAPI Backend Request:** `POST http://localhost:8000/tasks/schedule-recalculate`
-- **Internal Python Action:** FastAPI locks the manual user selection, registers a background thread to recalculate the cascading timeline delta, and quickly provides a unique task ID to the frontend.
-- **The Polling Loop:** React sets an interval to query `GET http://localhost:8000/tasks/schedule-recalculate/recalc_001` every few seconds to safely evaluate the progress of downstream policy checks.
-- **UI Update:** Once the background recalculation completes, the backend transmits the newly revised conflict state and schedule arrays back to React, updating the timeline graph and conflict visualizations across the system within the context of the user choice.
+- **React Frontend Action:** Immediately disables the override control for the link while the request is in flight. `POST /schedule/session/{session_id}/override` with `link_id` and `override_state` (`'pinned'`, `'excluded'`, or `'auto'`).
+- **FastAPI:** Synchronously mutates the `SchedulingSession` in memory, re-runs the forward simulation with the new constraint, and returns the full updated `SessionPlanDTO`.
+- **UI Update:** No polling needed. The returned plan is applied immediately — rows, cards, timeline, and any open tooltip are all redrawn in a single pass.
+
+The operator may also update the active scoring strategy without re-running the full trade-off pipeline:
+
+```
+[ Operator changes strategy (Timeline toolbar or Sidebar) or adjusts parameters ]
+               │
+               ├──> UI temporarily locks: disables override controls & strategy selectors,
+               │    displays in-flight spinner on Timeline toolbar
+               │
+               └──> POST /schedule/session/{session_id}/strategy
+                              ──> { name: strategy_name, parameters: { alpha, exponent } }
+                                       │
+                                       └──> Returns: updated SessionPlanDTO   (synchronous)
+                                                  ──> Frontend applies: updated rows,
+                                                                        trade-off cards,
+                                                                        timeline, buffer curves
+```
+
+- **UI Triggers:**
+  - **Timeline Toolbar Strategy Switcher:** A compact dropdown directly in the left group of the Timeline toolbar allows rapid in-situ switching between `buffer_overflow_avoidance`, `max_downlink_throughput`, and `max_pass_duration` once a session is active (`sessionId && tradeOffsCalculated`). An animated spinner indicates when a strategy update is in flight.
+  - **Sidebar "Trade-Off Configuration" Accordion:** Changing the strategy dropdown in the configuration accordion also immediately triggers `POST /schedule/session/{session_id}/strategy`. For hyperparameter tuning (Urgency $\alpha$ and Urgency exponent under `buffer_overflow_avoidance`), an **"Apply Strategy to Session"** button submits the updated parameters synchronously without recalculating Phase 2.
+- **Shared Override Behavior:**
+  - User overrides (`PINNED`, `EXCLUDED`) are **shared and preserved** across strategy switches. Manual operator decisions are not lost or isolated; the solver reapplies existing constraints to the newly selected scoring objective.
+- **Mutual Lockout:**
+  - While `POST /schedule/session/{session_id}/strategy` is in flight (`updatingStrategy` state), override buttons across the Overview table, Timeline tooltip, and Trade-Off Drawer are disabled to prevent race conditions on the session state.
+- **FastAPI:** Synchronously loads the `SchedulingSession` from `SchedulingSessionRepository`, mutates `active_scoring_strategy` and `scoring_parameters`, re-runs `active_scheduler.solve(...)` with the existing `user_overrides`, updates `current_plan` and `satellite_buffer_profiles`, and returns the updated `SessionPlanDTO`.
+- **UI Update:** No background task or polling needed. The returned plan is applied synchronously via `applyAuthoritativeSessionPlan(...)`, redrawing Overview rows, Trade-Off cards, timeline bars, and buffer curves in a single pass.
+
+---
 
 ### Phase 5: Confirmation & SatOS Commit
 
-The operator reviews the finalized planning timeline, stages the schedule, reviews the aggregated schedule and data volume summary, and approves the SatOS push.
-
-Plaintext
-
 ```
 [ 1. Operator clicks "Confirm Communication Schedule" ]
-             │
-             └──> React Stages Schedule: Displays KPI Summary, Per-Asset Link Tables & Buffer Profiles
-                         │
+               │
+               └──> Client-side state transition (no network request)
+                         ──> Opens staged review panel:
+                               ├── Per-satellite: link tables, buffer profiles,
+                               │   peak fill, final fill, generated/downlinked data
+                               ├── Per-ground-station: contact schedule tables
+                               └── KPI summary: total downlinked data, total contact time
+                                   (each asset's links must be individually acknowledged)
+
 [ 2. Operator clicks "Commit SCOPE Communication Activities to SatOS" ]
-                         │
-                         └──> POST /schedule/session/{session_id}/commit ──> UI Locks ──> Pushes Activities in Batch to SatOS
-                                             │
-                                             └──> GET /tasks/initialize ──> Refreshes SatOS Baseline ──> Green Success Banner
+               │
+               ├──> POST /schedule/session/{session_id}/commit   ──> UI locks, progress bar
+               │              │
+               │              └──> Converts scheduled links → SatOS Activity + ScheduleEvent models
+               │                   Pushes activities in batch to SatOS
+               │                   Returns: { committed_links_count, created_activities_count }
+               │
+               └──> GET /tasks/initialize   ──> Refresh SatOS ground-truth baseline
+                              │
+                              └──> Green success banner: committed links + activities count
 ```
 
-- **Step 1 (Staging & Review):**
-    - **React Frontend Action:** Operator clicks "Confirm Communication Schedule".
-    - **UI Update:** Opens the staged review panel displaying aggregated KPIs (total offloaded data volume, contact time), per-satellite tables with buffer profiles (peak/final levels, generated/downlinked data), and per-ground-station contact schedules.
+- **Step 1 (Staging & Review):** Pure client-side — no network request. The staging review panel renders per-satellite and per-ground-station link tables. Each link (from both the satellite and ground-station perspectives) must be individually acknowledged via checkboxes before the commit button unlocks.
 - **Step 2 (Push to SatOS):**
-    - **React Frontend Action:** Operator clicks "Commit SCOPE Communication Activities to SatOS".
-    - **FastAPI Backend Request:** `POST http://localhost:8000/schedule/session/{session_id}/commit`
-    - **Internal Python Action:** The server processes the approved scheduling matrix, converts scheduled links into SatOS `Activity` and `ScheduleEvent` models, and pushes them in batch to SatOS.
-    - **UI Update:** React locks the workspace with a progress bar, calls `GET /tasks/initialize` to reload the updated SatOS ground truth, and displays a green "Success" banner confirming the committed links and created SatOS activities.
+    - **FastAPI:** `POST /schedule/session/{session_id}/commit` — transforms all scheduled `LinkBlock` objects into SatOS `Activity` and `ScheduleEvent` models and pushes them in batch.
+    - After commit, `GET /tasks/initialize` reloads the fresh SatOS asset schedules into the frontend's state so the new activities appear on the timeline immediately.
 
-## 4. Master API Mapping Table
+---
 
-The interface layout below defines the contract and processing behavior across all application components:
+## 3. Master API Mapping Table
 
-| **Phase**   | **Frontend Action / Element**     | **FastAPI Endpoint**                             | **Execution Pattern** | **Downstream SatOS Interaction**                                |
-| ----------- | --------------------------------- | ------------------------------------------------ | --------------------- | --------------------------------------------------------------- |
-| **Phase 1** | App Mount / Initial Form          | `GET /satos/available-assets`                    | Synchronous REST      | Queries active fleet assets via `SatIOSession` SDK.             |
-| **Phase 2** | Click "Launch Scheduler"          | `GET /satos/current-schedule`                    | Synchronous REST      | Pulls baseline tracking schedules from remote system.           |
-| **Phase 2** | Parallel Background Thread        | `POST /tasks/orbit-processing`                   | Asynchronous Fork     | Triggers background loop for TLE propagation.                   |
-| **Phase 2** | `setInterval` Progress Polling    | `GET /tasks/orbit-processing/{task_id}`          | Polling Loop          | Reads live status fields from Python memory.                    |
-| **Phase 3** | Click "Calculate Trade-Offs"      | `POST /tasks/tradeoff-processing`                | Asynchronous Fork     | Spawns background worker loop for conflict analysis.            |
-| **Phase 3** | `setInterval` Progress Polling    | `GET /tasks/tradeoff-processing/{task_id}`       | Polling Loop          | Reads status strings from local dictionary.                     |
-| **Phase 4** | Click Conflict Card Option        | `POST /tasks/schedule-recalculate`               | Asynchronous Fork     | Initiates background cascade rule calculations across timeline. |
-| **Phase 4** | `setInterval` Progress Polling    | `GET /tasks/schedule-recalculate/{task_id}`      | Polling Loop          | Reads dynamic recalculation progress from memory state.         |
-| **Phase 5** | Click "Confirm Schedule"          | *(Client-side state transition)*                 | Local Staging         | Renders KPI metrics, per-asset tables & buffer profiles.        |
-| **Phase 5** | Click "Commit Activities to SatOS"| `POST /schedule/session/{session_id}/commit`     | Synchronous REST      | Converts links to SatOS Activity models and pushes in batch.    |
-| **Phase 5** | Baseline Synchronization          | `GET /tasks/initialize`                          | Synchronous REST      | Refreshes SatOS ground-truth asset schedules.                   |
+| **Phase** | **Frontend Action / Trigger** | **FastAPI Endpoint** | **Execution Pattern** | **Downstream SatOS Interaction** |
+|---|---|---|---|---|
+| **Phase 1** | App mount — health check | `GET /status` | Synchronous REST (2 s polling) | None (backend self-check) |
+| **Phase 1** | App mount — SatOS probe | `GET /satos/asset/list` | Synchronous REST (2 s polling) | Queries SatOS asset registry |
+| **Phase 1** | Backend online — asset load | `GET /tasks/initialize` | Synchronous REST | Queries SatOS fleet + schedule data; caches result |
+| **Phase 2** | "Launch SCOPE" — optional purge | `POST /utilities/satos/clear-scope-activities` | Synchronous REST | Deletes SCOPE activities from SatOS schedules |
+| **Phase 2** | "Launch SCOPE" — purge done, refresh | `GET /tasks/initialize` | Synchronous REST | Re-loads SatOS baseline after purge |
+| **Phase 2** | "Launch SCOPE" — orbit extraction | `POST /tasks/extract-overpasses` | Asynchronous task fork | Runs Orekit TLE propagation + geometry extraction |
+| **Phase 2** | Progress polling — extraction | `GET /tasks/status/{task_id}` | Polling loop (1.2 s) | Reads live status from Python task store |
+| **Phase 2** | Extraction complete — fetch result | `GET /tasks/status/{task_id}/result` | Synchronous REST | Returns propagation result + satellite tracks |
+| **Phase 2** | "Launch SCOPE" — link filtering | `POST /tasks/filter-links` | Asynchronous task fork | Runs filter pipeline against SatOS baseline |
+| **Phase 2** | Progress polling — filtering | `GET /tasks/status/{task_id}` | Polling loop (1.2 s) | Reads live status from Python task store |
+| **Phase 2** | Filtering complete — fetch result | `GET /tasks/status/{task_id}/result` | Synchronous REST | Returns filtered link list |
+| **Phase 3** | "Calculate Trade-Offs" | `POST /tasks/process-trade-offs` | Asynchronous task fork | Initializes in-memory SchedulingSession |
+| **Phase 3** | Progress polling — scheduling | `GET /tasks/status/{task_id}` | Polling loop (1.2 s) | Reads scheduling progress from Python task store |
+| **Phase 3** | Trade-off complete — fetch result | `GET /tasks/status/{task_id}/result` | Synchronous REST | Returns SessionPlanDTO |
+| **Phase 4** | Override link (PIN / EXCLUDE / AUTO) | `POST /schedule/session/{session_id}/override` | Synchronous REST | Mutates session, re-runs forward simulation |
+| **Phase 4** | Change scoring strategy | `POST /schedule/session/{session_id}/strategy` | Synchronous REST | Mutates session strategy, re-runs forward simulation |
+| **Phase 5** | "Confirm Communication Schedule" | *(Client-side state transition)* | Local staging | Renders KPI summary, per-asset tables & buffer profiles |
+| **Phase 5** | "Commit Activities to SatOS" | `POST /schedule/session/{session_id}/commit` | Synchronous REST | Converts LinkBlocks → Activities + ScheduleEvents, pushes to SatOS |
+| **Phase 5** | Baseline synchronization | `GET /tasks/initialize` | Synchronous REST | Refreshes SatOS ground-truth asset schedules |

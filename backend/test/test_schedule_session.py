@@ -127,6 +127,9 @@ def test_schedule_router_endpoints():
     strat_data = res_strat.json()
     assert strat_data["active_scoring_strategy"] == "buffer_overflow_avoidance"
     assert strat_data["scoring_config"]["parameters"]["alpha"] == 3.5
+    # Verify user overrides persist across strategy update
+    assert strat_data["current_plan"]["link_01"]["override_state"] == "excluded"
+    assert strat_data["current_plan"]["link_01"]["is_scheduled"] is False
 
     # 4. POST commit
     with patch("app.repositories.AssetRepository.push_activities_to_satos") as mock_push:

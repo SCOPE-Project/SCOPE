@@ -16,6 +16,7 @@ import {
   startLinkFiltering,
   startOrbitExtraction,
   startTradeOffProcessing,
+  updateSessionStrategy,
 } from './api/scopeApi.js'
 import {
   applySessionPlanToRows,
@@ -283,6 +284,7 @@ export default function App() {
   const [extractionProgress, setExtractionProgress] = useState(0)
   const [extractionMessages, setExtractionMessages] = useState([])
   const [calculatingTradeOffs, setCalculatingTradeOffs] = useState(false)
+  const [updatingStrategy, setUpdatingStrategy] = useState(false)
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
@@ -1498,6 +1500,7 @@ export default function App() {
     setCreatedActivitiesCount(0)
     setConfirmedStagingLinks({})
     setOverridingLinkId(null)
+    setUpdatingStrategy(false)
   }
 
   const planningDateAndTimeToIso = (dateValue, timeValue, timeMode = planningTimeMode) =>
@@ -1970,6 +1973,15 @@ export default function App() {
         : 0,
     )
     setTradeOffsCalculated(true)
+    if (plan.active_scoring_strategy) {
+      setTradeOffStrategy(plan.active_scoring_strategy)
+    }
+    if (plan.scoring_config?.parameters?.alpha !== undefined) {
+      setScoringAlpha(plan.scoring_config.parameters.alpha)
+    }
+    if (plan.scoring_config?.parameters?.exponent !== undefined) {
+      setScoringExponent(plan.scoring_config.parameters.exponent)
+    }
     setIsScheduleStaged(false)
     setConfirmationSuccess(false)
     setScheduleCommitted(false)
@@ -2322,7 +2334,7 @@ export default function App() {
       : launchingScheduler
         ? 'SCOPE is currently starting.'
         : backendAlive === false
-          ? 'Backend offline \u2014 start the SCOPE backend to load SCOPE.'
+          ? 'Backend offline \u2014 start the SCOPE backend to launch SCOPE.'
           : backendAlive === null
             ? 'Connecting to the SCOPE backend\u2026'
             : !missionAssetsLoaded
@@ -3976,7 +3988,7 @@ export default function App() {
                     optionId: item.optionId ?? item.linkId,
                     tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
                   }, control.state)}
-                  disabled={Boolean(overridingLinkId)}
+                  disabled={Boolean(overridingLinkId) || updatingStrategy}
                   aria-pressed={item.overrideState === control.state}
                   title={getOverviewControlTooltip(control.state)}
                 >
@@ -3991,7 +4003,7 @@ export default function App() {
                   optionId: item.optionId ?? item.linkId,
                   tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
                 }, getScheduleToggleState(item.isScheduled))}
-                disabled={Boolean(overridingLinkId)}
+                disabled={Boolean(overridingLinkId) || updatingStrategy}
                 aria-pressed={item.isScheduled}
                 aria-label={item.isScheduled
                   ? `Scheduled. Click to unschedule ${item.linkId}`
@@ -4361,7 +4373,7 @@ export default function App() {
   )
 
   const handleLinkOverride = async (option, overrideState) => {
-    if (!sessionId || !option?.linkId || overridingLinkId) {
+    if (!sessionId || !option?.linkId || overridingLinkId || updatingStrategy) {
       return
     }
 
@@ -4406,6 +4418,47 @@ export default function App() {
 
     setMarkedTimelineLinkId(option.linkId)
     setMarkedTradeOffOptionId(option.optionId)
+  }
+
+  const handleApplySessionStrategy = async (targetStrategy, alphaVal, exponentVal) => {
+    if (!sessionId || updatingStrategy) {
+      return
+    }
+
+    const nextStrategy = targetStrategy ?? tradeOffStrategy
+    const resolvedAlpha = Number(alphaVal !== undefined ? alphaVal : scoringAlpha)
+    const resolvedExponent = Number(exponentVal !== undefined ? exponentVal : scoringExponent)
+
+    if (nextStrategy === 'buffer_overflow_avoidance') {
+      if (Number.isNaN(resolvedAlpha) || resolvedAlpha < 0 || Number.isNaN(resolvedExponent) || resolvedExponent <= 0) {
+        setError('Alpha must be zero or greater and exponent must be positive.')
+        return
+      }
+    }
+
+    setUpdatingStrategy(true)
+    setError(null)
+
+    try {
+      const payload = {
+        name: nextStrategy,
+        parameters: nextStrategy === 'buffer_overflow_avoidance'
+          ? { alpha: resolvedAlpha, exponent: resolvedExponent }
+          : {},
+      }
+      const updatedPlan = await updateSessionStrategy(sessionId, payload)
+      applyAuthoritativeSessionPlan(updatedPlan, overviewRows, { focusTimeline: false })
+      setTradeOffStrategy(nextStrategy)
+      if (nextStrategy === 'buffer_overflow_avoidance') {
+        setScoringAlpha(resolvedAlpha)
+        setScoringExponent(resolvedExponent)
+      }
+    } catch (err) {
+      console.error(err)
+      setError(err.message || 'Failed to update the scoring strategy.')
+    } finally {
+      setUpdatingStrategy(false)
+    }
   }
 
   const toggleTimelineSection = (sectionId) => {
@@ -4978,61 +5031,88 @@ export default function App() {
     </div>
   )
 
-  const renderTradeOffConfigContent = (disabled = false) => (
-    <div className={`scheduling-config ${disabled ? 'scheduling-config--disabled' : ''}`}>
-      <label className="filter-field">
-        <span>Scoring Strategy</span>
-        <select
-          value={tradeOffStrategy}
-          disabled={disabled}
-          onChange={(event) => setTradeOffStrategy(event.target.value)}
-          className="filter-input scheduling-config-select"
-        >
-          {TRADE_OFF_STRATEGIES.map((strategy) => (
-            <option key={strategy.value} value={strategy.value}>{strategy.label}</option>
-          ))}
-        </select>
-      </label>
-      {tradeOffStrategy === 'buffer_overflow_avoidance' && (
-        <div className="scheduling-config-grid scheduling-config-grid--parameters">
-          <label className="filter-field">
-            <span>Urgency Alpha</span>
-            <input
-              type="number"
-              min="0"
-              step="0.1"
-              inputMode="decimal"
-              value={scoringAlpha}
-              disabled={disabled}
-              aria-invalid={!tradeOffConfigValid}
-              onChange={(event) => setScoringAlpha(event.target.value)}
-              className="filter-input"
-            />
-          </label>
-          <label className="filter-field">
-            <span>Urgency Exponent</span>
-            <input
-              type="number"
-              min="0.001"
-              step="0.1"
-              inputMode="decimal"
-              value={scoringExponent}
-              disabled={disabled}
-              aria-invalid={!tradeOffConfigValid}
-              onChange={(event) => setScoringExponent(event.target.value)}
-              className="filter-input"
-            />
-          </label>
-        </div>
-      )}
-      <p className="scheduling-config-note">
-        Applied by the backend the next time Calculate Trade-Offs runs.
-      </p>
-      {!tradeOffConfigValid && (
-        <p className="filter-error">Alpha must be zero or greater and exponent must be positive.</p>
-      )}
-    </div>
-  )
+  const renderTradeOffConfigContent = (disabled = false) => {
+    const isSessionActive = Boolean(sessionId && tradeOffsCalculated)
+    const isFieldDisabled = disabled || updatingStrategy
+
+    return (
+      <div className={`scheduling-config ${isFieldDisabled ? 'scheduling-config--disabled' : ''}`}>
+        <label className="filter-field">
+          <span>Scoring Strategy</span>
+          <select
+            value={tradeOffStrategy}
+            disabled={isFieldDisabled}
+            onChange={(event) => {
+              const nextVal = event.target.value
+              setTradeOffStrategy(nextVal)
+              if (isSessionActive) {
+                handleApplySessionStrategy(nextVal)
+              }
+            }}
+            className="filter-input scheduling-config-select"
+          >
+            {TRADE_OFF_STRATEGIES.map((strategy) => (
+              <option key={strategy.value} value={strategy.value}>{strategy.label}</option>
+            ))}
+          </select>
+        </label>
+        {tradeOffStrategy === 'buffer_overflow_avoidance' && (
+          <div className="scheduling-config-grid scheduling-config-grid--parameters">
+            <label className="filter-field">
+              <span>Urgency Alpha</span>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                inputMode="decimal"
+                value={scoringAlpha}
+                disabled={isFieldDisabled}
+                aria-invalid={!tradeOffConfigValid}
+                onChange={(event) => setScoringAlpha(event.target.value)}
+                className="filter-input"
+              />
+            </label>
+            <label className="filter-field">
+              <span>Urgency Exponent</span>
+              <input
+                type="number"
+                min="0.001"
+                step="0.1"
+                inputMode="decimal"
+                value={scoringExponent}
+                disabled={isFieldDisabled}
+                aria-invalid={!tradeOffConfigValid}
+                onChange={(event) => setScoringExponent(event.target.value)}
+                className="filter-input"
+              />
+            </label>
+          </div>
+        )}
+        {isSessionActive ? (
+          <div className="scheduling-config-session-action">
+            <button
+              type="button"
+              className="btn-fetch btn-apply-strategy"
+              disabled={isFieldDisabled || !tradeOffConfigValid}
+              onClick={() => handleApplySessionStrategy(tradeOffStrategy, scoringAlpha, scoringExponent)}
+            >
+              {updatingStrategy ? 'Updating Strategy...' : 'Apply Strategy to Session'}
+            </button>
+            <p className="scheduling-config-note">
+              Active session detected. Strategy switches run synchronously without re-running Phase 2.
+            </p>
+          </div>
+        ) : (
+          <p className="scheduling-config-note">
+            Applied by the backend the next time Calculate Trade-Offs runs.
+          </p>
+        )}
+        {!tradeOffConfigValid && (
+          <p className="filter-error">Alpha must be zero or greater and exponent must be positive.</p>
+        )}
+      </div>
+    )
+  }
 
   const renderSatelliteOptionsContent = (configDisabled = false) => (
     <div className="checkbox-list">
@@ -5295,7 +5375,7 @@ export default function App() {
                         onClick={handleLoadScope}
                         disabled={loadScopeDisabled}
                       >
-                        Load SCOPE
+                        Launch SCOPE
                       </button>
                     )}
                     {!launchingScheduler && loadScopeDisabled && (
@@ -5558,7 +5638,7 @@ export default function App() {
                                         type="button"
                                         className={`overview-override-button ${row.overrideState === state ? 'overview-override-button--active' : ''}`}
                                         onClick={() => handleLinkOverride(overrideOption, state)}
-                                        disabled={Boolean(overridingLinkId)}
+                                        disabled={Boolean(overridingLinkId) || updatingStrategy}
                                         aria-pressed={row.overrideState === state}
                                         title={getOverviewControlTooltip(state)}
                                         onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
@@ -5586,7 +5666,7 @@ export default function App() {
                                       overrideOption,
                                       getScheduleToggleState(row.isScheduled),
                                     )}
-                                    disabled={Boolean(overridingLinkId)}
+                                    disabled={Boolean(overridingLinkId) || updatingStrategy}
                                     aria-pressed={row.isScheduled}
                                     aria-label={row.isScheduled
                                       ? `Scheduled. Click to unschedule ${getOverviewDisplayLinkId(row)}`
@@ -5810,7 +5890,7 @@ export default function App() {
                                       event.stopPropagation()
                                       handleLinkOverride(option, state)
                                     }}
-                                    disabled={Boolean(overridingLinkId)}
+                                    disabled={Boolean(overridingLinkId) || updatingStrategy}
                                     aria-pressed={effectiveOverrideState === state}
                                     title={getOverviewControlTooltip(state)}
                                     onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
@@ -5830,7 +5910,7 @@ export default function App() {
                                   event.stopPropagation()
                                   handleLinkOverride(option, getScheduleToggleState(optionScheduled))
                                 }}
-                                disabled={Boolean(overridingLinkId)}
+                                disabled={Boolean(overridingLinkId) || updatingStrategy}
                                 aria-pressed={optionScheduled}
                                 title={getScheduleToggleTitle(optionScheduled)}
                               >
@@ -6185,6 +6265,29 @@ export default function App() {
                             Ground Stations
                           </button>
                         </div>
+                        {sessionId && tradeOffsCalculated && (
+                          <div className="timeline-strategy-control" title="Switch active scoring strategy">
+                            <span className="timeline-strategy-label">Strategy</span>
+                            <select
+                              className="timeline-strategy-select"
+                              value={tradeOffStrategy}
+                              disabled={updatingStrategy}
+                              onChange={(event) => handleApplySessionStrategy(event.target.value)}
+                              aria-label="Active scoring strategy"
+                            >
+                              {TRADE_OFF_STRATEGIES.map((strategy) => (
+                                <option key={strategy.value} value={strategy.value}>
+                                  {strategy.label}
+                                </option>
+                              ))}
+                            </select>
+                            {updatingStrategy && (
+                              <span className="timeline-strategy-spinner" aria-hidden="true" title="Updating strategy...">
+                                ↻
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div className="timeline-toolbar-side timeline-toolbar-side--right">
                         <div className="timeline-toggle-group timeline-toggle-group--playback" role="group" aria-label="Timeline playback">
@@ -6701,7 +6804,7 @@ export default function App() {
                                           event.stopPropagation()
                                           handleLinkOverride(option, state)
                                         }}
-                                        disabled={Boolean(overridingLinkId)}
+                                        disabled={Boolean(overridingLinkId) || updatingStrategy}
                                         aria-pressed={effectiveOverrideState === state}
                                         title={getOverviewControlTooltip(state)}
                                         onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
@@ -6721,7 +6824,7 @@ export default function App() {
                                       event.stopPropagation()
                                       handleLinkOverride(option, getScheduleToggleState(optionScheduled))
                                     }}
-                                    disabled={Boolean(overridingLinkId)}
+                                    disabled={Boolean(overridingLinkId) || updatingStrategy}
                                     aria-pressed={optionScheduled}
                                     title={getScheduleToggleTitle(optionScheduled)}
                                   >
