@@ -1,11 +1,5 @@
 # SCOPE Scheduling Architecture, Data Contracts & Functional Flow
 
-**Document Version:** 2.0  
-**Target Milestone:** Communication Scheduling Session Engine, Dedicated Filtering Pipeline & Interactive Trade-Off Architecture  
-**Scope:** Local Python Backend (FastAPI, Orekit, Asset/Propagation/Link Repositories) and Local React Frontend  
-
----
-
 ## 1. System Overview & Architectural Paradigm
 
 The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subsystem bridges raw orbital geometry calculations from Orekit with operational activity execution in **SatOS**. 
@@ -32,13 +26,15 @@ The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subs
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │ PHASE 3: DEDICATED LINK DERIVATION & FILTERING PIPELINE (Independent Step)             │
-│ Endpoint: POST /tasks/filter-links                                                     │
-│ Ingests: orbit_engine_run_id + Filter Parameters (min_aos_los, min_peak_elevation)     │
+│ Endpoint: POST /tasks/filter-links (Asynchronous Background Task)                      │
+│ Ingests: orbit_engine_run_id + Filter Parameters (elevations, downlink rates)          │
 │ Queries: PropagationResultRepository (for Overpasses) & AssetRepository (for Baseline)│
 │ - Trims head/tail by min_aos_los_elevation                                             │
-│ - Filters passes failing min_peak_elevation                                            │
-│ - Detects collisions with immutable SatOS activities -> marks is_eligible=False        │
-│ Outputs: LinkBlock pool stored in LinkRepository (indexed by filter_run_id).           │
+│ - Filters passes failing min_peak_elevation -> is_eligible=False, link_id=""           │
+│ - Detects collisions with immutable SatOS activities -> is_eligible=True,              │
+│   is_available=False, eligibility_status=BLOCKED_BY_BASELINE_ACTIVITY                  │
+│ Outputs: TaskReceiptResponse; on completion, LinkBlock pool stored in LinkRepository   │
+│ (indexed by filter_run_id = task_id, with scenario start/end time window metadata).    │
 └───────────────────────────────────────────┬────────────────────────────────────────────┘
                                             │
                                             ▼
@@ -46,7 +42,8 @@ The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subs
 │ PHASE 4: IN-MEMORY SCHEDULING SESSION & TRADE-OFF SOLVER                               │
 │ Endpoint: POST /tasks/process-trade-offs                                               │
 │ Ingests: filter_run_id + Initial Buffer Levels + Scoring Strategy                      │
-│ - Builds Conflict Graph on eligible links; partitions into TradeOffGroups (tradeoff_id)│
+│ - Builds Conflict Graph on schedulable links (is_eligible & is_available);             │
+│   partitions into TradeOffGroups (tradeoff_id)                                         │
 │ - Runs Multi-Pass Forward Simulation tracking satellite on-board data buffer D(t)      │
 │ - Resolves initial optimal schedule & detects potential buffer overflows               │
 └───────────────────────────────────────────┬────────────────────────────────────────────┘
@@ -56,15 +53,16 @@ The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subs
       ┌────────────────────────────────────┐ ┌────────────────────────────────────┐
       │ PHASE 5: INTERACTIVE STEERING      │ │ DYNAMIC RE-SOLVER (< 5 ms)         │
       │ - Operator Pins / Excludes links   │ │ - Enforces user overrides          │
-      │ - Immediate Gantt / Card re-render │<┼──>- Re-simulates buffer curves D(t)│
-      │ - Live overflow warning updates    │ │ - Cascades multi-pass priorities   │
+      │ - Operator tunes scoring strategy  │ │ - Re-simulates buffer curves D(t)  │
+      │ - Immediate Gantt / Card re-render │<┼──>- Cascades multi-pass priorities │
+      │ - Live overflow warning updates    │ │ - Instant strategy re-weighting    │
       └─────────────────┬──────────────────┘ └────────────────────────────────────┘
                         │
                         ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │ PHASE 6: FINALIZATION & COMMIT TO SATOS                                                │
 │ Transforms active scheduled LinkBlocks into SatOS Activity & ScheduleEvent models.     │
-│ Pushes batch activities to SatOS server via SatIOSession connector.                   │
+│ Pushes batch activities via AssetRepository.push_activities_to_satos().                │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -73,7 +71,7 @@ The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subs
 ## 2. Core Domain Models & Data Structures
 
 > [!NOTE]
-> **Domain Model Replacement:** The `LinkBlock` domain class defined here **replaces** the previously existing `ScheduledLink` class in `core/models/domain.py`. It is the central object representing candidate communication links across filtering, trade-off, and scheduling.
+> **Domain Model Placement:** The `LinkBlock` domain class defined here is located in [`core/models/scheduling.py`](file:///c:/Users/chris/Documents/Studium/Module_Master/SoftwaresystemeRaumfahrtanwendungen/SCOPE/backend/core/models/scheduling.py). It is the central object representing candidate communication links across filtering, trade-off, and scheduling.
 
 ```
                   ┌────────────────────────────────────────────────┐
@@ -104,15 +102,21 @@ The **SCOPE** (Satellite Communication Overpass Planning Engine) scheduling subs
   └──────────────────┘
 ```
 
-### 2.1 Candidate Link & Eligibility Models
+#### 2.1 Candidate Link & Eligibility Models
 
-`LinkBlock` represents a candidate communication pass. Even if a link overlaps with an immutable SatOS activity, it is **not discarded silently**; it is preserved as an **ineligible link** so the UI can visually render the blocked opportunity with explanatory tooltips.
+`LinkBlock` represents a candidate communication pass. Even if a link overlaps with an immutable SatOS activity, it is **not discarded silently**; it is preserved as an **ineligible for scheduling (unavailable) link** so the UI can visually render the blocked opportunity with explanatory tooltips.
+
+* `is_eligible`: Indicates whether the pass passes geometric elevation thresholds (`True` for both clear links and baseline-colliding links; `False` only for passes below elevation thresholds).
+* `is_available`: Indicates whether the link is free from collisions with immutable baseline activities (`True` for schedulable links; `False` if overlapping a SatOS activity).
+* `link_id`: Contiguous numerical ID (`"L_0001"`); set to empty string `""` only when `is_eligible` is `False`.
 
 ```python
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, List, Dict, Set
+from typing import Optional, List, Dict, Set, Any
+from core.models.propagation import OverpassProfilePoint
+from core.models.activities import Activity
 
 class LinkEligibilityStatus(str, Enum):
     ELIGIBLE = "eligible"                                   # Available for scheduling
@@ -127,20 +131,21 @@ class OverrideState(str, Enum):
 @dataclass
 class LinkBlock:
     link_id: str                                    # Numerical ID, e.g., "L_0001" (empty string "" if is_eligible is False)
-    link_name: str                                  # Elaborate string, e.g., "link__sat1__gs1__filter_filt-998__0001"
-    overpass_id: str                                # Numerical reference, e.g., "OP_0001"
-    overpass_name: str                              # Elaborate overpass reference, e.g., "pass__sat1__gs1__001"
-    satellite_name: str
-    groundstation_name: str
     start_time: datetime
     end_time: datetime
-    duration_seconds: float
-    max_elevation_deg: float
-    estimated_data_capacity_mb: float
+    link_name: str = ""                             # Elaborate string, e.g., "link__sat1__gs1__filter_filt-998__0001"
+    overpass_id: str = ""                           # Numerical reference, e.g., "OP_0001"
+    overpass_name: str = ""                         # Elaborate overpass reference, e.g., "pass__sat1__gs1__001"
+    satellite_name: str = ""
+    groundstation_name: str = ""
+    duration_seconds: float = 0.0
+    max_elevation_deg: float = 0.0
+    estimated_data_capacity_mb: float = 0.0
+    high_res_trajectory: List[OverpassProfilePoint] = field(default_factory=list)
     
     # Eligibility & Baseline Conflict Metadata
-    is_eligible: bool = True                        # True if geometrically sound potential link (passes elevation thresholds)
-    is_available: bool = True                       # True if no conflict with immutable SatOS schedule (schedulable by Trade-Off engine)
+    is_eligible: bool = True                        # True if geometrically sound (passes elevation thresholds)
+    is_available: bool = True                       # True if no conflict with immutable SatOS schedule
     eligibility_status: LinkEligibilityStatus = LinkEligibilityStatus.ELIGIBLE
     ineligibility_reason: Optional[str] = None      # e.g., "Collides with SatOS Imaging Activity 'OBS_01'"
     conflicting_activity_uuid: Optional[str] = None # UUID of blocking SatOS activity
@@ -153,6 +158,8 @@ class ScheduledLinkStatus:
     tradeoff_id: Optional[str] = None               # Assigned TradeOffGroup ID (if eligible)
     score: float = 0.0                              # Computed priority score from scoring rule
     useful_data_offloaded_mb: float = 0.0
+    incoming_buffer_mb: float = 0.0                 # Buffer volume at link start
+    potential_data_downlink_mb: float = 0.0         # Max possible downlink during pass
     rejection_reason: Optional[str] = None          # e.g., "Lost trade-off to Link_Sat2_GS1", "Ineligible link"
 ```
 
@@ -167,33 +174,39 @@ class TradeOffGroup:
     link_ids: List[str]                        # Member eligible candidate links
     participating_satellites: List[str]
     participating_groundstations: List[str]
-    is_trivial: bool                           # True if component size == 1 (No conflict)
+    is_trivial: bool = False                   # True if component size == 1 (No conflict)
 
 @dataclass
 class ConflictStructure:
     # Pairwise mutual exclusions: link_id -> {conflicting_link_ids}
-    adjacency_list: Dict[str, Set[str]]
+    adjacency_list: Dict[str, Set[str]] = field(default_factory=dict)
     
     # Conflict reasoning: (link_a, link_b) -> "GroundStation 'GS-1' overlap"
-    conflict_reasons: Dict[str, str]
+    conflict_reasons: Dict[str, str] = field(default_factory=dict)
     
     # Connected components: tradeoff_id -> TradeOffGroup
-    trade_off_groups: Dict[str, TradeOffGroup]
+    trade_off_groups: Dict[str, TradeOffGroup] = field(default_factory=dict)
     
     # Reverse lookup: link_id -> tradeoff_id
-    link_to_group: Dict[str, str]
+    link_to_group: Dict[str, str] = field(default_factory=dict)
 ```
 
 ### 2.3 Satellite Data Buffer State Model (SSR Lifecycle)
 
 ```python
+# System-wide default fallback values (defined in core.models.scheduling)
+DEFAULT_BUFFER_CAPACITY_MB = 100_000.0            # 100 GB
+DEFAULT_BUFFER_INITIAL_LEVEL_MB = 5_000.0         # 5 GB
+DEFAULT_PAYLOAD_GENERATION_RATE_MBPS = 4.0        # MB/s
+DEFAULT_DOWNLINK_RATE_MBPS = 25.0                 # MB/s
+
 @dataclass(frozen=True)
 class SatelliteBufferConfig:
     satellite_name: str
-    capacity_mb: float                          # Max buffer capacity (e.g., 2000.0 MB)
-    initial_level_mb: float = 0.0               # Initial stored data at scenario start
-    payload_generation_rate_mbps: float = 15.0  # Inflow rate during SatOS payload activity
-    downlink_rate_mbps: float = 25.0            # Outflow rate during scheduled pass
+    capacity_mb: float                          # Max buffer capacity in MB
+    initial_level_mb: float                     # Initial stored data at scenario start in MB
+    payload_generation_rate_mbps: float         # Inflow rate during SatOS payload activity in MB/s
+    downlink_rate_mbps: float                   # Outflow rate during scheduled pass in MB/s
 
 class BufferEventType(str, Enum):
     SCENARIO_START = "start"
@@ -241,44 +254,64 @@ class SatelliteBufferProfile:
 class SchedulingSession:
     session_id: str
     filter_run_id: str                          # Links back to the source LinkRepository pool
-    candidate_links: Dict[str, LinkBlock]       # All links (both eligible and baseline-blocked)
+    candidate_links: Dict[str, LinkBlock]       # All links (keyed by link_id)
     user_overrides: Dict[str, OverrideState]    # link_id -> OverrideState
     satellite_configs: Dict[str, SatelliteBufferConfig]
-    
-    conflict_structure: ConflictStructure       # Built exclusively over eligible links
+    conflict_structure: ConflictStructure       # Built over schedulable links (is_eligible & is_available)
     active_scoring_strategy: str
+    scenario_start: datetime                    # Scenario window start boundary
+    scenario_end: datetime                      # Scenario window end boundary
     
     # Recalculated outputs
-    current_plan: Dict[str, ScheduledLinkStatus]
-    satellite_buffer_profiles: Dict[str, SatelliteBufferProfile]
+    current_plan: Dict[str, ScheduledLinkStatus] = field(default_factory=dict)
+    satellite_buffer_profiles: Dict[str, SatelliteBufferProfile] = field(default_factory=dict)
+    asset_schedules: Dict[str, List[Activity]] = field(default_factory=dict)
+    scoring_parameters: Dict[str, Any] = field(default_factory=dict)
 ```
 
 ---
 
 ## 3. Dedicated Repositories & State Management
 
-To maintain a clean architectural separation, three dedicated in-memory repositories manage data across the pipeline:
+To maintain a clean architectural separation and thread-safe operations, five dedicated in-memory repositories manage data across the pipeline:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ 1. AssetRepository (app.services.asset_repository)                                     │
+│ 1. AssetRepository (app.repositories.asset_repository)                                 │
 │    - Caches SatOS asset definitions (Satellites, Ground Stations)                      │
 │    - Caches SatOS immutable baseline activities & schedules                            │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-                                           │
-                                           ▼
+│    - Encapsulates SatOS push/delete operations                                         │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │
+                                            ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ 2. PropagationResultRepository (core.repository.propagation_repository)                │
+│ 2. PropagationResultRepository (app.repositories.propagation_repository)               │
 │    - Key: orbit_engine_run_id (UUID)                                                   │
-│    - Holds: Raw PropagationResult (OverpassBlocks, SatelliteTrajectory global tracks) │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-                                           │
-                                           ▼ (POST /tasks/filter-links)
+│    - Holds: Raw PropagationResult (OverpassBlocks, SatelliteTrajectory global tracks)  │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │
+                                            ▼ (POST /tasks/filter-links)
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ 3. LinkRepository (core.repository.link_repository) [NEW]                              │
+│ 3. LinkRepository (app.repositories.link_repository)                                   │
 │    - Key: filter_run_id (UUID)                                                         │
 │    - Holds: List[LinkBlock] (Trimmed, quality-filtered, annotated with baseline status)│
-│    - Source for both Timeline visualization and Trade-Off scheduling sessions          │
+│    - Metadata: orbit_engine_run_id, scenario start_time, scenario end_time             │
+│    - Queryable via get_time_window(filter_run_id) for simulator boundary clamping      │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │
+                                            ▼ (POST /tasks/process-trade-offs)
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│ 4. SchedulingSessionRepository (app.repositories.scheduling_session_repository)        │
+│    - Key: session_id (UUID)                                                            │
+│    - Holds: Active in-memory SchedulingSession instances (solver state, overrides,     │
+│             conflict graphs, buffer curves, scoring configurations)                    │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+                                            │
+┌───────────────────────────────────────────┴────────────────────────────────────────────┐
+│ 5. TaskRepository (app.repositories.task_repository)                                   │
+│    - Key: task_id (UUID)                                                               │
+│    - Manages asynchronous task lifecycles, progress polling (0-100%), statuses,        │
+│      and final computation payloads for all background workers                         │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -288,9 +321,9 @@ To maintain a clean architectural separation, three dedicated in-memory reposito
 
 ### 4.1 Detailed Breakdown of the Data-Urgency Score
 
-When evaluating competing candidate links $L_i$ in a trade-off window at time $t$, the scheduler computes:
+When evaluating competing candidate links $L_i$ in a trade-off window at time $t$ under the default `buffer_overflow_avoidance` rule, the scheduler computes:
 
-$$\text{Score}(L_i) = \text{UsefulData}(L_i) \times \left[ 1.0 + \alpha \cdot \left(\frac{D_s(t)}{D_{\text{max}, s}}\right)^2 \right]$$
+$$\text{Score}(L_i) = \text{UsefulData}(L_i) \times \left[ 1.0 + \alpha \cdot \left(\frac{D_s(t)}{D_{\text{max}, s}}\right)^\gamma \right]$$
 
 #### Why this specific mathematical formulation?
 
@@ -302,15 +335,25 @@ $$\text{Score}(L_i) = \text{UsefulData}(L_i) \times \left[ 1.0 + \alpha \cdot \l
 2. **The Buffer Fullness Ratio: $\left(\frac{D_s(t)}{D_{\text{max}, s}}\right) \in [0.0, 1.0]$**
    * Represents the instantaneous fill level of the satellite's Solid State Recorder (SSR).
 
-3. **Why the Quadratic Exponent ($x^2$)?**
-   * **At low buffer levels ($0\%\dots 40\%$):** $\left(\frac{D_s}{D_{\text{max}}}\right)^2 \approx 0.0\dots 0.16$. The multiplier remains close to $1.0$. The scheduler is relaxed and prioritizes links based purely on raw throughput and geometry.
-   * **At critical buffer levels ($80\%\dots 100\%$):** $\left(\frac{D_s}{D_{\text{max}}}\right)^2 \approx 0.64\dots 1.0$. The multiplier sharply accelerates. This creates a non-linear "panic curve" where a nearly full satellite aggressively outbids competitors to dump its data before an overflow occurs.
+3. **Configurable Exponent ($\gamma$, default $2.0$):**
+   * **At low buffer levels ($0\%\dots 40\%$):** $\left(\frac{D_s}{D_{\text{max}}}\right)^\gamma \approx 0.0\dots 0.16$. The multiplier remains close to $1.0$. The scheduler is relaxed and prioritizes links based purely on raw throughput and geometry.
+   * **At critical buffer levels ($80\%\dots 100\%$):** $\left(\frac{D_s}{D_{\text{max}}}\right)^\gamma \approx 0.64\dots 1.0$. The multiplier sharply accelerates. This creates a non-linear "panic curve" where a nearly full satellite aggressively outbids competitors to dump its data before an overflow occurs.
 
-4. **What is the $\alpha$ Parameter (The Urgency Sensitivity Dial)?**
+4. **The $\alpha$ Parameter (The Urgency Sensitivity Dial, default $2.0$):**
    * $\alpha$ is a configurable weighting hyperparameter:
      * **$\alpha = 0.0$ (Throughput-Only Mode):** Ignores buffer fullness completely. Maximizes total megabytes downlinked across the constellation.
      * **$\alpha = 1.0$ (Balanced Mode):** A 100% full satellite receives double ($2.0\times$) the priority of a low-data satellite.
      * **$\alpha = 5.0\dots 10.0$ (Strict Anti-Overflow Mode):** Heavily penalizes any risk of data loss. Full satellites overpower all other scheduling criteria.
+
+#### Pluggable Scoring Strategy Registry (`SCORING_RULE_REGISTRY`)
+
+The engine dynamically instantiates rules registered in `core.scheduling.strategy`:
+
+| Strategy Key | Implementation Class | Description |
+| :--- | :--- | :--- |
+| `buffer_overflow_avoidance` | `BufferUrgencyScoringRule` | Non-linear urgency formula with configurable `alpha` and `exponent`. |
+| `max_downlink_throughput` | `ThroughputScoringRule` | Pure linear data maximization ($\text{Score} = \text{UsefulData}$). |
+| `max_pass_duration` | `DurationScoringRule` | Contact duration maximization ($\text{Score} = \text{DurationSeconds}$). |
 
 ---
 
@@ -347,45 +390,64 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
 ```
 [ FRONTEND ]                                                    [ BACKEND ]
      │                                                               │
-     │── 1. POST /tasks/extract-overpasses ─────────────────────────>│ (Orbit propagation)
+     │── 1. POST /tasks/extract-overpasses ─────────────────────────>│ (Orbit propagation task)
      │<── TaskReceiptResponse { task_id: "orbit_run_01" } ───────────│
+     │    [Poll GET /tasks/status/{id} -> GET /tasks/status/{id}/result]
      │                                                               │
-     │── 2. POST /tasks/filter-links ───────────────────────────────>│ (Dedicated filtering step)
+     │── 2. POST /tasks/filter-links ───────────────────────────────>│ (Queues link filter task)
      │      Payload: { orbit_engine_run_id, min_peak_elevation, ...} │
-     │<── FilterResponseDTO { filter_run_id, links_count, links } ───│ (Saves to LinkRepository)
+     │<── TaskReceiptResponse { task_id: "filter_run_01" } ──────────│
+     │    [Poll GET /tasks/status/{id} -> GET /tasks/status/{id}/result]
+     │<── TaskResultResponse { payload: FilterResultDTO } ───────────│ (Saves to LinkRepository)
      │                                                               │
-     │── 3. POST /tasks/process-trade-offs ─────────────────────────>│ (Builds session & solves)
+     │── 3. POST /tasks/process-trade-offs ─────────────────────────>│ (Queues session build & solve)
      │      Payload: { filter_run_id, satellite_buffer_configs, ...}│
      │<── TaskReceiptResponse { task_id: "session_01" } ─────────────│
+     │    [Poll GET /tasks/status/{id} -> GET /tasks/status/{id}/result]
+     │<── TaskResultResponse { payload: SessionPlanDTO } ────────────│ (Saves to SessionRepository)
      │                                                               │
-     │── 4. POST /schedule/session/{id}/override ───────────────────>│ (Operator pins link)
-     │      Payload: { "link_id": "L1", "state": "pinned" }          │ (Solves in < 2ms)
-     │<── SessionPlanDTO { current_plan, satellite_profiles } ───────│
+     │── 4a. POST /schedule/session/{id}/override ──────────────────>│ (Operator pins / excludes link)
+     │       Payload: { "link_id": "L_0001", "override_state": ... } │ (Fast solve < 5ms)
+     │<─── SessionPlanDTO { current_plan, satellite_profiles, ... } ─│
      │                                                               │
-     │── 5. POST /schedule/session/{id}/commit ─────────────────────>│ (Pushes to SatOS)
-     │<── CommitResponseDTO { committed_links_count } ───────────────│
+     │── 4b. POST /schedule/session/{id}/strategy ──────────────────>│ (Operator updates scoring rule)
+     │       Payload: { "name": "...", "parameters": {...} }         │ (Fast solve < 5ms)
+     │<─── SessionPlanDTO { current_plan, satellite_profiles, ... } ─│
+     │                                                               │
+     │── 4c. GET /schedule/session/{id} ────────────────────────────>│ (Fetches active session state)
+     │<─── SessionPlanDTO { current_plan, satellite_profiles, ... } ─│
+     │                                                               │
+     │── 5. POST /schedule/session/{id}/commit ─────────────────────>│ (Pushes schedule to SatOS)
+     │      Payload: { "user": "operator_name" } (Optional)          │
+     │<─── CommitResponseDTO { session_id, committed_links_count,    │
+     │                         created_activities_count, status } ───│
 ```
 
 ### 5.1 Endpoint Specifications
 
 #### 1. Execute Dedicated Link Derivation & Filtering
-* **Endpoint:** `POST /tasks/filter-links`
-* **Request Body:**
+* **Endpoint:** `POST /tasks/filter-links` (Asynchronous Task)
+* **Request Body (`FilterLinksRequest`):**
   ```json
   {
     "orbit_engine_run_id": "8f2a1b90-4c3e-4f12-a8bc-987654321000",
     "min_aos_los_elevation_deg": 5.0,
-    "min_peak_elevation_deg": 15.0
+    "min_peak_elevation_deg": 15.0,
+    "default_downlink_rate_mbps": 25.0,
+    "satellite_downlink_rates_mbps": {
+      "Sat1": 50.0
+    }
   }
   ```
 * **Internal Action:**
   1. Fetches raw `PropagationResult` from `PropagationResultRepository`.
   2. Fetches immutable baseline activities from `AssetRepository`.
   3. Trims overpass durations by `min_aos_los_elevation_deg`.
-  4. Tags links failing `min_peak_elevation_deg` as `EXCLUDED_BY_PEAK_ELEVATION`.
-  5. Identifies time overlaps with SatOS activities $\rightarrow$ sets `is_eligible = False` and `eligibility_status = BLOCKED_BY_BASELINE_ACTIVITY`.
-  6. Stores all derived `LinkBlock`s in `LinkRepository` under `filter_run_id`.
-* **Response Body (`FilterResultDTO`):**
+  4. Tags passes failing `min_peak_elevation_deg` as `EXCLUDED_BY_PEAK_ELEVATION` (`is_eligible = False`, `is_available = False`, `link_id = ""`).
+  5. Identifies time overlaps with SatOS activities $\rightarrow$ sets `is_eligible = True`, `is_available = False`, and `eligibility_status = BLOCKED_BY_BASELINE_ACTIVITY`.
+  6. Stores all derived `LinkBlock`s and scenario metadata (`orbit_engine_run_id`, `start_time`, `end_time`) in `LinkRepository` under `filter_run_id = task_id`.
+* **Immediate Response:** `TaskReceiptResponse` (`{ "task_id": "filt-9988-7766-5544", "status": "Queued" }`).
+* **Polled Task Result Payload (`FilterResultDTO`):**
   ```json
   {
     "filter_run_id": "filt-9988-7766-5544",
@@ -408,8 +470,10 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
         "max_elevation_deg": 48.5,
         "estimated_data_capacity_mb": 1500.0,
         "is_eligible": true,
+        "is_available": true,
         "eligibility_status": "eligible",
-        "ineligibility_reason": null
+        "ineligibility_reason": null,
+        "conflicting_activity_uuid": null
       },
       {
         "link_id": "L_0002",
@@ -423,9 +487,10 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
         "duration_seconds": 600.0,
         "max_elevation_deg": 32.0,
         "estimated_data_capacity_mb": 1500.0,
-        "is_eligible": false,
+        "is_eligible": true,
+        "is_available": false,
         "eligibility_status": "blocked_by_baseline",
-        "ineligibility_reason": "Collides with SatOS Payload Activity 'OBS_CALVAL_01'",
+        "ineligibility_reason": "Collides with immutable SatOS activity 'OBS_CALVAL_01' on Sat1",
         "conflicting_activity_uuid": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
       }
     ]
@@ -435,8 +500,8 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
 ---
 
 #### 2. Initiate Trade-Off Scheduling Session
-* **Endpoint:** `POST /tasks/process-trade-offs`
-* **Request Body:**
+* **Endpoint:** `POST /tasks/process-trade-offs` (Asynchronous Task)
+* **Request Body (`TradeOffRequest`):**
   ```json
   {
     "filter_run_id": "filt-9988-7766-5544",
@@ -455,9 +520,9 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
       }
     },
     "default_buffer_config": {
-      "capacity_mb": 2000.0,
-      "initial_level_mb": 0.0,
-      "payload_generation_rate_mbps": 15.0,
+      "capacity_mb": 100000.0,
+      "initial_level_mb": 5000.0,
+      "payload_generation_rate_mbps": 4.0,
       "downlink_rate_mbps": 25.0
     },
     "scoring_config": {
@@ -471,37 +536,79 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
   ```
 * **Internal Action:**
   1. Fetches candidate links from `LinkRepository` by `filter_run_id`.
-  2. Resolves per-satellite buffer configurations (`capacity_mb`, `initial_level_mb`, `payload_generation_rate_mbps`, `downlink_rate_mbps`) from user inputs and default fallbacks.
-  3. Builds `ConflictStructure` over eligible links (`is_eligible == True`).
-  4. Spawns `SchedulingSession` with unique `session_id`.
-  5. Executes initial Multi-Pass Forward Simulation.
-* **Response:** `TaskReceiptResponse` (`{ "task_id": "session-uuid-001", "status": "Queued" }`).
+  2. Resolves scenario time window (`start_time`, `end_time`) via `LinkRepository.get_time_window(filter_run_id)`.
+  3. Resolves per-satellite buffer configurations from user inputs and default fallbacks.
+  4. Builds `ConflictStructure` over schedulable candidate links (`is_eligible == True and is_available == True`).
+  5. Spawns `SchedulingSession` with unique `session_id` and saves it in `SchedulingSessionRepository`.
+  6. Executes initial Multi-Pass Forward Simulation.
+* **Immediate Response:** `TaskReceiptResponse` (`{ "task_id": "session-uuid-001", "status": "Queued" }`).
+* **Polled Task Result Payload:** `SessionPlanDTO`.
 
 ---
 
-#### 3. Interactive Steering (Apply Override)
+#### 3. Retrieve Active Scheduling Session
+* **Endpoint:** `GET /schedule/session/{session_id}`
+* **Response Body (`SessionPlanDTO`):**
+  Returns the active plan, satellite configs, trade-off groups, conflict reasons, and simulated storage curves.
+
+---
+
+#### 4. Interactive Steering (Apply Override)
 * **Endpoint:** `POST /schedule/session/{session_id}/override`
 * **Execution:** Synchronous fast path ($< 5\text{ ms}$).
-* **Request Body:**
+* **Request Body (`OverrideRequest`):**
   ```json
   {
-    "link_id": "link_sat1_gs1_001",
+    "link_id": "L_0001",
     "override_state": "pinned"
   }
   ```
 * **Conflict Handling (Auto-Unpin):**
-  - When setting `override_state = "pinned"`, any conflicting candidate links in the same `TradeOffGroup` (e.g. overlapping ground station passes or concurrent satellite contacts) that were previously pinned are **automatically unpinned** and reverted to `"auto"`.
-  - This guarantees physical consistency and prevents multiple concurrent links on single-antenna assets.
+  - When setting `override_state = "pinned"`, any conflicting candidate links in the same `TradeOffGroup` that were previously pinned are **automatically unpinned** and reverted to `"auto"`.
+  - Guarantees single-antenna asset consistency.
 * **Response Body (`SessionPlanDTO`):**
-  - Updated `current_plan` (map of link statuses).
+  - Updated `current_plan` mapping link IDs to `ScheduledLinkStatusDTO` (including `incoming_buffer_mb` and `potential_data_downlink_mb`).
   - Updated `satellite_buffer_profiles` (piecewise curve points + overflow events).
-  - Delta changes (list of links whose scheduled state flipped).
+  - Updated `trade_off_groups`, `conflict_reasons`, and configuration metadata.
 
 ---
 
-#### 4. Commit Schedule to SatOS
+#### 5. Dynamic Scoring Strategy Update
+* **Endpoint:** `POST /schedule/session/{session_id}/strategy`
+* **Execution:** Synchronous fast path ($< 5\text{ ms}$).
+* **Request Body (`StrategyUpdateRequest`):**
+  ```json
+  {
+    "name": "buffer_overflow_avoidance",
+    "parameters": {
+      "alpha": 3.5,
+      "exponent": 2.0
+    }
+  }
+  ```
+* **Internal Action:** Updates active scoring strategy and hyperparameters in session, then triggers immediate forward simulation re-solve.
+* **Response Body (`SessionPlanDTO`):** Recomputed schedule and buffer profiles under the new scoring rule.
+
+---
+
+#### 6. Commit Schedule to SatOS
 * **Endpoint:** `POST /schedule/session/{session_id}/commit`
-* **Processing:** Converts all scheduled links (`is_scheduled == True`) into SatOS `Activity` and `ScheduleEventModel` pairs, pushing them to the SatOS server via `push_activities_to_SatOS()`.
+* **Request Body (`CommitRequestDTO`, Optional):**
+  ```json
+  {
+    "user": "mission_operator_1"
+  }
+  ```
+* **Processing:** Transforms all scheduled links (`is_scheduled == True`) into SatOS `Activity` and `ScheduleEventModel` pairs via `AssetRepository.create_activities_from_link_blocks()`, and pushes them via `AssetRepository.push_activities_to_satos()`.
+* **Response Body (`CommitResponseDTO`):**
+  ```json
+  {
+    "session_id": "session-uuid-001",
+    "committed_links_count": 8,
+    "created_activities_count": 8,
+    "status": "synchronized"
+  }
+  ```
 
 ---
 
@@ -531,30 +638,32 @@ The React UI differentiates links based on their eligibility and scheduler state
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 2: ORBIT PROPAGATION                                                             │
 │ 1. Operator selects assets, time horizon [T_start, T_end] -> "Launch Engine".          │
-│ 2. POST /tasks/extract-overpasses triggers Orekit propagation task.                    │
-│ 3. PropagationResult stored in PropagationResultRepository (orbit_engine_run_id).     │
+│ 2. POST /tasks/extract-overpasses triggers Orekit propagation background task.          │
+│ 3. React polls /tasks/status/{id} and fetches PropagationResultDTO on completion.      │
+│ 4. PropagationResult stored in PropagationResultRepository (orbit_engine_run_id).     │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 3: DEDICATED LINK DERIVATION & FILTERING                                         │
 │ 1. Operator sets filter sliders (min elevation, min peak) -> "Apply Filters".          │
-│ 2. POST /tasks/filter-links trims passes & evaluates SatOS baseline activity overlaps.│
-│ 3. Derived LinkBlocks (both eligible & blocked) saved to LinkRepository.               │
-│ 4. React timeline renders all candidate links (with distinct blocked styles).          │
+│ 2. POST /tasks/filter-links triggers background filtering task (TaskReceiptResponse). │
+│ 3. React polls /tasks/status/{id} and fetches FilterResultDTO from .../result.         │
+│ 4. Derived LinkBlocks (eligible & blocked) stored in LinkRepository with time window. │
+│ 5. React timeline renders candidate links (with distinct blocked and filtered styles). │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 4: TRADE-OFF SESSION & INITIAL OPTIMIZATION                                      │
 │ 1. Operator clicks "Calculate Trade-Offs".                                             │
-│ 2. POST /tasks/process-trade-offs builds Conflict Graph & TradeOffGroups (tradeoff_id). │
-│ 3. Multi-Pass Forward Simulation calculates initial schedule & buffer curves D(t).     │
-│ 4. React renders Trade-off cards, scheduled status badges, and buffer telemetry charts.│
+│ 2. POST /tasks/process-trade-offs queues session task (TaskReceiptResponse).           │
+│ 3. React polls task result; session saved in SchedulingSessionRepository.              │
+│ 4. Multi-Pass Forward Simulation calculates initial schedule & buffer curves D(t).     │
+│ 5. React renders Trade-off cards, scheduled status badges, and buffer telemetry charts.│
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 5: INTERACTIVE OPERATOR STEERING                                                 │
-│ 1. Operator clicks "Pin" or "Exclude" on a candidate link.                             │
-│ 2. POST /schedule/session/{id}/override updates override map.                          │
-│ 3. Fast Forward Simulator re-evaluates all unlocked links and buffer state (< 5 ms).    │
-│ 4. React updates Gantt status badges and re-draws storage curves D(t) at 60 FPS.       │
+│ 1. Operator pins/excludes links (/override) or tunes scoring strategy (/strategy).     │
+│ 2. Fast Forward Simulator re-evaluates all unlocked links and buffer state (< 5 ms).    │
+│ 3. React updates Gantt status badges and re-draws storage curves D(t) at 60 FPS.       │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 6: CONFIRMATION & SATOS COMMIT                                                   │
 │ 1. Operator reviews buffer performance and clicks "Confirm Schedule".                  │
 │ 2. POST /schedule/session/{id}/commit converts scheduled links into SatOS activities.  │
-│ 3. Batch pushed to SatOS server; confirmation alert displayed in UI.                   │
+│ 3. Batch pushed to SatOS server via AssetRepository; confirmation alert shown in UI.   │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
