@@ -32,7 +32,7 @@ if credentials_path.exists():
 
 from app.repositories import LinkRepository, AssetRepository
 from core.models.scheduling import SatelliteBufferConfig
-from core.scheduling.session_manager import SchedulingSessionManager
+from app.services import scheduling_service
 from core.scheduling.strategy import get_scoring_rule
 
 
@@ -178,13 +178,7 @@ def main() -> None:
         print(f"HARD FAIL: Invalid parameter format: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # 3. Instantiate scoring rule and SchedulingSessionManager
-    try:
-        scoring_rule = get_scoring_rule(args.strategy, **strategy_params)
-    except Exception as e:
-        print(f"HARD FAIL: Error configuring strategy '{args.strategy}': {e}", file=sys.stderr)
-        sys.exit(1)
-
+    # 3. Build and run scheduling session
     print(f"Executing forward simulation with strategy='{args.strategy}' (parameters={strategy_params})...")
     asset_scheds = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
 
@@ -213,7 +207,7 @@ def main() -> None:
         print(f"HARD FAIL: Scenario time window (start_time, end_time) could not be resolved from LinkRepository metadata for filter run '{filter_run_id}'.", file=sys.stderr)
         sys.exit(1)
 
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=args.filter_run_id,
         candidate_links=links,
         scenario_start=scenario_start,

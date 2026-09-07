@@ -49,13 +49,13 @@ class LinkRepository:
             return dict(meta) if meta is not None else None
 
     @classmethod
-    def get_time_window(cls, filter_run_id: str) -> Tuple[Optional[datetime], Optional[datetime]]:
-        """Retrieves (start_time, end_time) tuple for a given filter_run_id."""
+    def get_time_window(cls, filter_run_id: str) -> Tuple[datetime, datetime]:
+        """Retrieves (start_time, end_time) for a given filter_run_id. Raises KeyError if not found."""
         with cls._lock:
             meta = cls._metadata_by_run.get(filter_run_id)
-            if meta:
-                return meta.get("start_time"), meta.get("end_time")
-            return None, None
+            if meta is None or "start_time" not in meta or "end_time" not in meta:
+                raise KeyError(f"Scenario time window (start_time, end_time) could not be resolved from LinkRepository metadata for filter run '{filter_run_id}'.")
+            return meta["start_time"], meta["end_time"]
 
     @classmethod
     def get_link(cls, filter_run_id: str, link_id: str) -> Optional[LinkBlock]:

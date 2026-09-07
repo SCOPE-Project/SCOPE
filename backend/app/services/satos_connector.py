@@ -688,14 +688,5 @@ def update_and_post_satellite_states(
                 epoch_utc=state.epoch_utc,
             )
 
-        # Invalidate cached asset data in AssetRepository
-        try:
-            from app.repositories import AssetRepository
-            AssetRepository._satellite_infos.clear()
-            AssetRepository._raw_asset_models.clear()
-            AssetRepository._initialized = False
-        except Exception:
-            pass
-
     return list(states.values())
 

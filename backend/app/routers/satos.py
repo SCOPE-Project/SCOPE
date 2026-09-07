@@ -136,6 +136,7 @@ def satos_update_satellite_states(request: UpdateSatelliteStateRequest | None = 
             config = satos_connector.load_update_state_config()
 
         states = satos_connector.update_and_post_satellite_states(config=config, dry_run=False)
+        AssetRepository.invalidate()
 
         updated_dtos = [
             UpdateSatelliteStateDTO(

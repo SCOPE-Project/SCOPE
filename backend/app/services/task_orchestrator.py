@@ -2,20 +2,18 @@
 from datetime import datetime
 from typing import Optional, Dict
 
-from app.services import state_manager
+from app.services import scheduling_service
 from core.orbit_engine import orekit_engine
 from core.scheduling.filter_pipeline import derive_and_filter_links
-from core.scheduling.session_manager import SchedulingSessionManager
 from core.models.assets import SatelliteInformation, GroundStationInformation, TimeInterval
 from core.models.propagation import PropagationResult
-from core.models.scheduling import (
-    DEFAULT_BUFFER_CAPACITY_MB,
-    DEFAULT_BUFFER_INITIAL_LEVEL_MB,
-    DEFAULT_DOWNLINK_RATE_MBPS,
-    DEFAULT_PAYLOAD_GENERATION_RATE_MBPS,
-    LinkEligibilityStatus,
+from core.models.scheduling import LinkEligibilityStatus
+from app.repositories import (
+    AssetRepository,
+    PropagationResultRepository,
+    LinkRepository,
+    TaskRepository,
 )
-from app.repositories import AssetRepository, PropagationResultRepository, LinkRepository
 from app.models.propagation import PropagationResultDTO
 from app.models.scheduling import (
     FilterResultDTO,
@@ -52,7 +50,7 @@ def run_orbit_engine_task(
             progress = 50
         else:
             return
-        state_manager.update_task(task_id, status="processing", message=str(message), progress=int(progress))
+        TaskRepository.update_task(task_id, status="processing", message=str(message), progress=int(progress))
 
     try:
         # Map input to Domain Models
@@ -73,9 +71,9 @@ def run_orbit_engine_task(
         PropagationResultRepository.save_result(propagation_results)
 
         propagation_results_dto = PropagationResultDTO.from_domain(propagation_results)
-        state_manager.complete_task(task_id, payload=propagation_results_dto)
+        TaskRepository.complete_task(task_id, payload=propagation_results_dto)
     except Exception as e:
-        state_manager.update_task(task_id, status="failed", message=str(e), progress=100)
+        TaskRepository.update_task(task_id, status="failed", message=str(e), progress=100)
 
 
 def run_filter_links_task(
@@ -89,7 +87,7 @@ def run_filter_links_task(
     """
     Executes the dedicated link derivation and filtering task.
     """
-    state_manager.update_task(task_id, status="processing", message="Filtering potential communication links...", progress=30)
+    TaskRepository.update_task(task_id, status="processing", message="Filtering potential communication links...", progress=30)
     try:
         propagation_result = PropagationResultRepository.get_result(orbit_engine_run_id)
         if not propagation_result:
@@ -134,9 +132,9 @@ def run_filter_links_task(
             links=[LinkBlockDTO.from_domain(l) for l in links],
         )
 
-        state_manager.complete_task(task_id, payload=dto)
+        TaskRepository.complete_task(task_id, payload=dto)
     except Exception as e:
-        state_manager.update_task(task_id, status="failed", message=str(e), progress=100)
+        TaskRepository.update_task(task_id, status="failed", message=str(e), progress=100)
 
 
 def run_process_trade_offs_task(
@@ -149,66 +147,29 @@ def run_process_trade_offs_task(
     """
     Starts the trade-off analysis task and initializes the in-memory SchedulingSession.
     """
-    state_manager.update_task(task_id, status="processing", message="Computing trade-offs and resolving schedule...", progress=40)
+    TaskRepository.update_task(task_id, status="processing", message="Computing trade-offs and resolving schedule...", progress=40)
     try:
         candidate_links = LinkRepository.get_links(filter_run_id)
         if candidate_links is None:
             raise ValueError(f"No filtered links found for filter_run_id '{filter_run_id}'.")
 
-        # Resolve scenario time window from metadata in LinkRepository
         scenario_start, scenario_end = LinkRepository.get_time_window(filter_run_id)
-        if scenario_start is None or scenario_end is None:
-            meta = LinkRepository.get_metadata(filter_run_id) or {}
-            orbit_id = meta.get("orbit_engine_run_id")
-            if orbit_id:
-                prop_result = PropagationResultRepository.get_result(orbit_id)
-                if prop_result and prop_result.metadata:
-                    scenario_start = prop_result.metadata.start_time
-                    scenario_end = prop_result.metadata.end_time
-
-        if scenario_start is None or scenario_end is None:
-            raise ValueError(
-                f"Scenario time window (start_time, end_time) could not be resolved from metadata for filter_run_id '{filter_run_id}'. "
-                "Ensure orbit propagation and link filtering have completed."
-            )
 
         asset_schedules = {s.name: s.activities for s in AssetRepository.get_asset_schedules()}
 
-        if scoring_config is None:
-            scoring_config = ScoringStrategyConfigDTO()
-
-        scoring_rule = scoring_config.to_domain()
-        strat_name = scoring_config.name
-        strat_params = scoring_config.parameters
-
-        sat_configs = {}
-        if satellite_buffer_configs:
-            for sat_name, dto in satellite_buffer_configs.items():
-                sat_configs[sat_name] = dto.to_domain(sat_name)
-
-        def_cap = default_buffer_config.capacity_mb if default_buffer_config else DEFAULT_BUFFER_CAPACITY_MB
-        def_init = default_buffer_config.initial_level_mb if default_buffer_config else DEFAULT_BUFFER_INITIAL_LEVEL_MB
-        def_gen = default_buffer_config.payload_generation_rate_mbps if default_buffer_config else DEFAULT_PAYLOAD_GENERATION_RATE_MBPS
-        def_dl = default_buffer_config.downlink_rate_mbps if default_buffer_config else DEFAULT_DOWNLINK_RATE_MBPS
-
-        session = SchedulingSessionManager.create_session(
+        session = scheduling_service.create_session_from_config(
             filter_run_id=filter_run_id,
             candidate_links=candidate_links,
             scenario_start=scenario_start,
             scenario_end=scenario_end,
             asset_schedules=asset_schedules,
-            satellite_configs=sat_configs if sat_configs else None,
-            default_capacity_mb=def_cap,
-            default_initial_level_mb=def_init,
-            default_payload_generation_rate_mbps=def_gen,
-            default_downlink_rate_mbps=def_dl,
-            scoring_strategy=strat_name,
-            scoring_parameters=strat_params,
-            scoring_rule=scoring_rule,
+            scoring_config=scoring_config,
+            satellite_buffer_configs=satellite_buffer_configs,
+            default_buffer_config=default_buffer_config,
             session_id=task_id,
         )
         plan_dto = SessionPlanDTO.from_domain(session)
-        state_manager.complete_task(task_id, payload=plan_dto)
+        TaskRepository.complete_task(task_id, payload=plan_dto)
     except Exception as e:
-        state_manager.update_task(task_id, status="failed", message=str(e), progress=100)
+        TaskRepository.update_task(task_id, status="failed", message=str(e), progress=100)
 

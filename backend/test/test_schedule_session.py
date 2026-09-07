@@ -15,7 +15,8 @@ from core.models.propagation import (
     OverpassProfilePoint,
 )
 from app.repositories import PropagationResultRepository, LinkRepository, AssetRepository
-from core.scheduling.session_manager import SchedulingSessionManager
+from app.repositories import SchedulingSessionRepository
+from app.services import scheduling_service
 from core.scheduling.filter_pipeline import derive_and_filter_links
 from app.main import app
 
@@ -26,13 +27,13 @@ client = TestClient(app)
 def clean_all():
     PropagationResultRepository.clear()
     LinkRepository.clear()
-    SchedulingSessionManager.clear()
+    SchedulingSessionRepository.clear()
     AssetRepository._schedules.clear()
     AssetRepository._raw_schedules.clear()
     yield
     PropagationResultRepository.clear()
     LinkRepository.clear()
-    SchedulingSessionManager.clear()
+    SchedulingSessionRepository.clear()
     AssetRepository._schedules.clear()
     AssetRepository._raw_schedules.clear()
 
@@ -49,7 +50,7 @@ def test_session_manager_lifecycle():
     LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
 
     # 2. Create Session
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
         scenario_start=t_start,
@@ -68,7 +69,7 @@ def test_session_manager_lifecycle():
     assert session.current_plan["L2"].is_scheduled is True  # Sat-2 higher buffer wins
 
     # 3. Apply Override: Pin L1
-    updated_session = SchedulingSessionManager.apply_override(
+    updated_session = scheduling_service.apply_override(
         session_id="session_01",
         link_id="L1",
         override_state=OverrideState.PINNED,
@@ -88,7 +89,7 @@ def test_schedule_router_endpoints():
     l1 = LinkBlock(link_id="link_01", overpass_id="op1", satellite_name="Sat-A", groundstation_name="GS-A", start_time=t_start, end_time=t_end, duration_seconds=600.0, max_elevation_deg=45.0)
     LinkRepository.save_links(filter_id, [l1], start_time=t_start, end_time=t_end)
 
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1],
         scenario_start=t_start,
@@ -126,9 +127,12 @@ def test_schedule_router_endpoints():
     strat_data = res_strat.json()
     assert strat_data["active_scoring_strategy"] == "buffer_overflow_avoidance"
     assert strat_data["scoring_config"]["parameters"]["alpha"] == 3.5
+    # Verify user overrides persist across strategy update
+    assert strat_data["current_plan"]["link_01"]["override_state"] == "excluded"
+    assert strat_data["current_plan"]["link_01"]["is_scheduled"] is False
 
     # 4. POST commit
-    with patch("app.routers.schedule.push_activities_to_SatOS") as mock_push:
+    with patch("app.repositories.AssetRepository.push_activities_to_satos") as mock_push:
         res_commit = client.post(f"/schedule/session/{session.session_id}/commit")
         assert res_commit.status_code == 200
         assert res_commit.json()["status"] in ["synchronized", "synchronized (empty plan)"]
@@ -197,7 +201,7 @@ def test_session_manager_custom_buffer_configs():
         ),
     }
 
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
         scenario_start=t_start,
@@ -221,7 +225,7 @@ def test_trade_off_request_with_buffer_configs_dto():
     from app.models.tasks import TradeOffRequest
     from app.models.scheduling import SatelliteBufferConfigDTO, SessionPlanDTO
     from app.services.task_orchestrator import run_process_trade_offs_task
-    from app.services import state_manager
+    from app.repositories import TaskRepository
 
     filter_id = "test_dto_filter"
     t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
@@ -248,7 +252,7 @@ def test_trade_off_request_with_buffer_configs_dto():
         ),
     )
 
-    task_id = state_manager.create_task_entry()
+    task_id = TaskRepository.create_task_entry()
 
     run_process_trade_offs_task(
         task_id=task_id,
@@ -258,7 +262,7 @@ def test_trade_off_request_with_buffer_configs_dto():
         scoring_config=req.scoring_config,
     )
 
-    result = state_manager.get_task_result(task_id)
+    result = TaskRepository.get_task_result(task_id)
     assert result is not None
     assert result.status == "completed"
     assert isinstance(result.payload, SessionPlanDTO)
@@ -273,7 +277,7 @@ def test_trade_off_request_with_buffer_configs_dto():
 
 def test_trade_off_processing_fails_hard_without_metadata():
     from app.services.task_orchestrator import run_process_trade_offs_task
-    from app.services import state_manager
+    from app.repositories import TaskRepository
 
     filter_id = "test_no_meta"
     t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
@@ -283,13 +287,13 @@ def test_trade_off_processing_fails_hard_without_metadata():
     # Save links WITHOUT metadata
     LinkRepository.save_links(filter_id, [l1])
 
-    task_id = state_manager.create_task_entry()
+    task_id = TaskRepository.create_task_entry()
     run_process_trade_offs_task(
         task_id=task_id,
         filter_run_id=filter_id,
     )
 
-    task_state = state_manager.get_task(task_id)
+    task_state = TaskRepository.get_task(task_id)
     assert task_state is not None
     assert task_state.status == "failed"
     assert "Scenario time window" in task_state.message
@@ -361,7 +365,7 @@ def test_apply_override_auto_unpin_conflicts():
 
     LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
 
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
         scenario_start=t_start,
@@ -378,7 +382,7 @@ def test_apply_override_auto_unpin_conflicts():
     assert session.current_plan["L2"].is_scheduled is False
 
     # 2. Pin L2 (even though Sat-2 has lower buffer)
-    session_after_pin_l2 = SchedulingSessionManager.apply_override(
+    session_after_pin_l2 = scheduling_service.apply_override(
         session_id="sess_auto_unpin_test",
         link_id="L2",
         override_state=OverrideState.PINNED,
@@ -388,7 +392,7 @@ def test_apply_override_auto_unpin_conflicts():
     assert session_after_pin_l2.current_plan["L1"].is_scheduled is False
 
     # 3. Now Pin conflicting L1 -> L2 should be automatically unpinned (reverted to AUTO)
-    session_after_pin_l1 = SchedulingSessionManager.apply_override(
+    session_after_pin_l1 = scheduling_service.apply_override(
         session_id="sess_auto_unpin_test",
         link_id="L1",
         override_state=OverrideState.PINNED,
@@ -404,7 +408,7 @@ def test_apply_override_auto_unpin_conflicts():
     assert "pinned" in rejection.lower()
 
 
-@patch("app.routers.schedule.push_activities_to_SatOS")
+@patch("app.repositories.AssetRepository.push_activities_to_satos")
 def test_commit_schedule_with_user_and_initiators(mock_push):
     filter_id = "test_filt_commit_user"
     t_start = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
@@ -415,7 +419,7 @@ def test_commit_schedule_with_user_and_initiators(mock_push):
 
     LinkRepository.save_links(filter_id, [l1, l2], start_time=t_start, end_time=t_end)
 
-    session = SchedulingSessionManager.create_session(
+    session = scheduling_service.create_session(
         filter_run_id=filter_id,
         candidate_links=[l1, l2],
         scenario_start=t_start,
@@ -428,7 +432,7 @@ def test_commit_schedule_with_user_and_initiators(mock_push):
     )
 
     # Pin L1, leave L2 in AUTO
-    SchedulingSessionManager.apply_override(
+    scheduling_service.apply_override(
         session_id="sess_commit_user_test",
         link_id="L1",
         override_state=OverrideState.PINNED,
