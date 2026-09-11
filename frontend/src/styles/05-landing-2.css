@@ -1,0 +1,121 @@
+.landing-info {
+  width: min(100%, 860px);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.2rem;
+  border: 1px solid #c8d6e4;
+  border-radius: 0.9rem;
+  background: #eef3f7;
+}
+
+.landing-info-icon {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #5aa2ea;
+  border-radius: 999px;
+  color: #1f75c8;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.landing-info-text {
+  color: var(--text-primary);
+  font-size: 0.98rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.landing-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  max-width: 22rem;
+}
+
+.btn-fetch {
+  font-family: var(--font-family);
+  font-size: 1rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-btn);
+  padding: 0.95rem 2.4rem;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  box-shadow: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.landing-actions .btn-fetch {
+  min-width: 18rem;
+}
+
+.workspace-sidebar .btn-fetch {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.88rem;
+  padding: 0.72rem 1rem;
+}
+
+.sidebar-action-wrapper {
+  flex: 0 0 auto;
+  position: relative;
+  margin-top: 1rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.sidebar-action-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.55rem);
+  transform: translateX(-50%);
+  min-width: 16rem;
+  max-width: min(100%, 22rem);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d7b27a;
+  border-radius: 0.18rem;
+  background: #fff7ea;
+  color: #7a4b00;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 18px rgba(31, 42, 51, 0.12);
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 20;
+}
+
+.sidebar-action-wrapper:hover .sidebar-action-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.sidebar-action-note {
+  margin-top: 0.55rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}

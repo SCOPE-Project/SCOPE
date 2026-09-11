@@ -1,0 +1,124 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+
+:root {
+  --font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+  --bg-page: #e6e6e6;
+  --bg-panel: #f5f6f8;
+  --bg-panel-strong: #ffffff;
+  --bg-hover: #f0f4f8;
+  --card-border: #c7d0d9;
+  --line-strong: #bcc6cf;
+  --line-soft: #d9e0e6;
+  --text-primary: #1f2a33;
+  --text-secondary: #4d5c69;
+  --text-muted: #687785;
+  --accent-primary: #003975;
+  --accent-secondary: #aaaaaa;
+  --accent-info: #248eff;
+  --accent-success: #117328;
+  --accent-danger: #d91c2f;
+  --accent-light: #e6e6e6;
+  --btn-hover: #0d4b8f;
+  --error-bg: #f9d9dd;
+  --error-border: #e7a8b1;
+  --error-text: #8e1e2a;
+  --success-bg: #d9efdd;
+  --success-border: #8dc39a;
+  --success-text: #0d5a21;
+  --radius-btn: 0.2rem;
+  --radius-card: 0.3rem;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Numeric values are entered explicitly; browser stepper arrows are hidden
+   consistently in Chromium/WebKit and Firefox. */
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+body {
+  font-family: var(--font-family);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  min-height: 100vh;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+  position: relative;
+  z-index: 1;
+}
+
+.app-shell {
+  min-height: 100vh;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-shell--locked {
+  overflow: hidden;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex: 0 0 auto;
+  padding: 0.75rem 1.5rem 0.85rem;
+  background: var(--accent-primary);
+  border-bottom: 1px solid #0a2d55;
+  color: #fff;
+  font-family: "CascadiaCode", "Cascadia Code", monospace;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+.app-header-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.app-header-title {
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+}
+
+.app-header-subtitle {
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.app-header-status {
+  display: flex;
+  align-items: center;
+}
+
+.app-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}

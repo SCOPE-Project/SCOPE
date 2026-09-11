@@ -1,0 +1,294 @@
+.sidebar-block p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.workspace-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.9fr) minmax(220px, 0.55fr);
+  grid-auto-rows: max-content;
+  gap: 1.2rem;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  align-items: start;
+  align-content: start;
+  padding-right: 0.2rem;
+}
+
+.workspace-panels-split {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  align-items: start;
+}
+
+.panel {
+  background: var(--bg-panel-strong);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  padding: 1.2rem;
+  min-height: 176px;
+  min-width: 0;
+  align-self: start;
+  box-shadow: 0 6px 16px rgba(31, 42, 51, 0.05);
+}
+
+.panel--fullwidth {
+  grid-column: 1 / -1;
+}
+
+.planning-views-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.9rem;
+  align-items: start;
+  min-width: 0;
+}
+
+.planning-views-row > .panel {
+  width: 100%;
+  min-width: 0;
+}
+
+/* The first two slots of the bottom column have a dragged pixel height (only
+   the last slot grows with its content), so whatever panel lands in one has to
+   fill that box exactly and scroll inside it -- otherwise its content would
+   spill past the divider below. Children 1 and 3 are the panels; 2 and 4 are
+   the dividers. */
+.planning-views-row > .panel:nth-child(1),
+.planning-views-row > .panel:nth-child(3) {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.planning-views-row > .panel:nth-child(1) > .panel-collapsible-content,
+.planning-views-row > .panel:nth-child(3) > .panel-collapsible-content {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Collapsed panels shrink to their heading instead of stretching. */
+.planning-views-row > .panel--collapsed:nth-child(1),
+.planning-views-row > .panel--collapsed:nth-child(3) {
+  align-self: start;
+}
+
+/* With the panel body scrolling, the zoom/playback controls would scroll out of
+   reach on the way down the asset rows. Pin them. (The hour axis sits inside
+   the horizontally scrolling canvas and cannot be pinned the same way -- it
+   scrolls with the rows.) */
+.planning-views-row > .panel:nth-child(1) .timeline-toolbar,
+.planning-views-row > .panel:nth-child(3) .timeline-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--bg-panel-strong);
+  padding-top: 0.15rem;
+}
+
+.panel-resizer {
+  position: relative;
+  width: 0.9rem;
+  min-width: 0.9rem;
+  height: var(--top-panels-height, 36rem);
+  min-height: var(--top-panels-height, 36rem);
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  outline: none;
+}
+
+.panel-resizer--collapsed {
+  height: auto;
+  min-height: 0;
+}
+
+.panel-resizer-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--line-strong);
+}
+
+.panel-resizer-grip {
+  position: relative;
+  width: 0.42rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at center, rgba(60, 79, 98, 0.55) 0 1.1px, transparent 1.2px) center 0.25rem / 100% 0.45rem repeat-y,
+    #eef2f6;
+  border: 1px solid #d1d9e1;
+  box-shadow: 0 4px 10px rgba(31, 42, 51, 0.08);
+}
+
+.panel-resizer:hover .panel-resizer-grip,
+.panel-resizer:focus-visible .panel-resizer-grip {
+  background:
+    radial-gradient(circle at center, rgba(37, 68, 102, 0.68) 0 1.1px, transparent 1.2px) center 0.25rem / 100% 0.45rem repeat-y,
+    #f5f8fb;
+  border-color: #b9c6d2;
+}
+
+/* Horizontal variant: the draggable divider between the Map View and
+   Timeline panels, which are stacked rather than side-by-side, so it
+   resizes height instead of width. */
+.panel-resizer--horizontal {
+  grid-column: 1 / -1;
+  width: auto;
+  min-width: 0;
+  height: 0.9rem;
+  min-height: 0.9rem;
+  align-self: stretch;
+  cursor: row-resize;
+}
+
+.panel-resizer-line--horizontal {
+  top: 50%;
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.panel-resizer-grip--horizontal {
+  width: 2.25rem;
+  height: 0.42rem;
+  background:
+    radial-gradient(circle at center, rgba(60, 79, 98, 0.55) 0 1.1px, transparent 1.2px) 0.25rem center / 0.45rem 100% repeat-x,
+    #eef2f6;
+}
+
+.panel-resizer:hover .panel-resizer-grip--horizontal,
+.panel-resizer:focus-visible .panel-resizer-grip--horizontal {
+  background:
+    radial-gradient(circle at center, rgba(37, 68, 102, 0.68) 0 1.1px, transparent 1.2px) 0.25rem center / 0.45rem 100% repeat-x,
+    #f5f8fb;
+}
+
+/* Drag-to-reorder handle shown in every panel's heading. */
+.panel-heading-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.panel-drag-handle {
+  flex: 0 0 auto;
+  width: 1.7rem;
+  height: 1.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
+  cursor: grab;
+}
+
+.panel-drag-handle:hover {
+  background: var(--bg-hover);
+}
+
+.panel-drag-handle:active {
+  cursor: grabbing;
+}
+
+.panel-drag-handle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.panel-drag-handle-icon {
+  width: 0.8rem;
+  height: 0.8rem;
+  background:
+    radial-gradient(circle at center, rgba(60, 79, 98, 0.75) 0 1.1px, transparent 1.2px) 0 0 / 0.4rem 0.4rem repeat;
+}
+
+/* Drag state feedback: the panel being dragged fades slightly, and the
+   panel currently under the pointer is highlighted as the drop target. */
+.panel--dragging {
+  opacity: 0.45;
+}
+
+.panel--drag-over {
+  outline: 2px dashed var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.panel h2 {
+  font-size: 1rem;
+  margin-bottom: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.panel p {
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+  cursor: grab;
+}
+
+.panel-heading:active {
+  cursor: grabbing;
+}
+
+.panel-heading--collapsed {
+  margin-bottom: 0;
+}
+
+.panel-heading .panel-heading-title h2 {
+  margin-bottom: 0;
+}
+
+.panel-heading-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.panel-heading--map {
+  margin-bottom: 0.8rem;
+}
+
+.panel-heading-title {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+
+.panel-intro {
+  margin-bottom: 0;
+}

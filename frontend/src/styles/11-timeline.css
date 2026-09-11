@@ -1,0 +1,371 @@
+.tradeoff-id-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0.14rem 0.42rem;
+  border: 1px solid #9eb2c1;
+  border-radius: 0.14rem;
+  background: #f8fbfd;
+  color: #2f4b60;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.overview-tradeoff-cell {
+  justify-content: flex-start;
+  padding-right: 0.08rem;
+}
+
+.overview-score-cell {
+  justify-content: flex-start;
+  text-align: left;
+  padding-left: 0.08rem;
+}
+
+.panel-action {
+  font-family: var(--font-family);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: #f2f4f6;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-btn);
+  padding: 0.68rem 0.88rem;
+  cursor: not-allowed;
+  width: 100%;
+}
+
+.panel-action:not(:disabled) {
+  background: var(--accent-primary);
+  color: #fff;
+  border-color: var(--accent-primary);
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.panel-action:not(:disabled):hover {
+  background: var(--btn-hover);
+}
+
+.panel-action:disabled {
+  opacity: 0.7;
+}
+
+.panel-action-wrapper {
+  position: relative;
+}
+
+.panel-action-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.55rem);
+  transform: translateX(-50%);
+  min-width: 16rem;
+  max-width: min(100%, 24rem);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d7b27a;
+  border-radius: 0.18rem;
+  background: #fff7ea;
+  color: #7a4b00;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 18px rgba(31, 42, 51, 0.12);
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 20;
+}
+
+.panel-action-wrapper:hover .panel-action-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.tradeoff-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+}
+
+.tradeoff-meta--option {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.32rem;
+  flex: 0 0 auto;
+}
+
+.tradeoff-recommended {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #1f5f31;
+  background: #edf6ef;
+  border: 1px solid #b8d5bf;
+  padding: 0.16rem 0.42rem;
+  border-radius: 0.18rem;
+  white-space: nowrap;
+}
+
+.tradeoff-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #234b79;
+  background: #eaf1f8;
+  border: 1px solid #c6d6e6;
+  padding: 0.18rem 0.45rem;
+  border-radius: 0.18rem;
+  white-space: nowrap;
+}
+
+.tradeoff-option-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.tradeoff-option {
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  background: var(--bg-panel-strong);
+  padding: 0.8rem 0.85rem;
+  min-width: 0;
+  box-shadow: inset 3px 0 0 var(--tradeoff-accent, transparent);
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.tradeoff-option:hover {
+  border-color: #98a3ad;
+}
+
+.tradeoff-option:focus-visible {
+  outline: 2px solid rgba(104, 119, 133, 0.7);
+  outline-offset: 2px;
+}
+
+.tradeoff-option--timeline-drawer {
+  box-shadow: none;
+}
+
+.tradeoff-option-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.tradeoff-option-id {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tradeoff-select-button {
+  width: 100%;
+  font-family: var(--font-family);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-btn);
+  padding: 0.65rem 0.8rem;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.tradeoff-select-button:hover {
+  background: #ebf1f8;
+  border-color: #97b4d3;
+}
+
+.tradeoff-override-controls {
+  display: flex;
+  width: 100%;
+  gap: 0.4rem;
+}
+
+.tradeoff-override-button {
+  flex: 1 1 0;
+  padding: 0.5rem 0.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.tradeoff-override-button:hover:not(:disabled),
+.tradeoff-override-button:focus-visible {
+  background: #ebf1f8;
+  border-color: #97b4d3;
+  color: var(--accent-primary);
+}
+
+.tradeoff-override-button--active {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+}
+
+.tradeoff-override-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.tradeoff-option--selected .tradeoff-select-button {
+  background: #d9f1df;
+  border-color: #5aaf70;
+  color: #176c31;
+}
+
+.tradeoff-option-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+}
+
+.map-panel {
+  min-height: 0;
+  container-type: inline-size;
+}
+
+.map-panel-copy {
+  margin-top: -0.15rem;
+  font-size: 0.84rem;
+}
+
+.map-panel-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.map-panel-toggle,
+.panel-collapse-toggle {
+  width: 1.7rem;
+  height: 1.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.map-panel-toggle:hover,
+.panel-collapse-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.map-panel-toggle:focus-visible,
+.panel-collapse-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.map-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.map-summary-pill {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #234b79;
+  background: #eaf1f8;
+  border: 1px solid #c6d6e6;
+  border-radius: 0.18rem;
+  padding: 0.22rem 0.5rem;
+  white-space: nowrap;
+}
+
+.map-summary-pill--muted {
+  color: var(--text-secondary);
+  background: #f0f3f6;
+  border-color: var(--line-soft);
+}
+
+.map-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 35%);
+  gap: 0.75rem;
+  align-items: start;
+}
+
+@container (max-width: 620px) {
+  .map-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .map-sidebar {
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+}
+
+.map-canvas-shell {
+  min-width: 0;
+}
+
+.mission-map-shell {
+  position: relative;
+  height: 462px;
+  min-height: 48px;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  overflow: hidden;
+  background: #dceaf4;
+}
+
+/* The actual height comes from the heightPx prop (an inline style, set by
+   whichever panel layout is hosting the map — e.g. the draggable divider
+   between Map View and Timeline). Below a height threshold the component
+   also adds --compact, since the overlays below (legend, fit-to-selection
+   buttons, scale bar, grid labels) don't have room to render without
+   overlapping in a strip that thin. The zoom/fullscreen controls stay so a
+   person can still expand the map to inspect it in full via the browser
+   Fullscreen API, exempted below via :not(:fullscreen). */
+.mission-map-shell--compact:not(:fullscreen) .mission-map-wheel-hint,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-fit-controls,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-legend,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-scale-bar,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-attribution,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-coordinate-label,
+.mission-map-shell--compact:not(:fullscreen) .mission-map-coordinate-tick {
+  display: none;
+}

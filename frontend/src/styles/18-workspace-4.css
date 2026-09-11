@@ -1,0 +1,138 @@
+.panel--fullwidth:last-child {
+  min-height: 260px;
+}
+
+.panel--fullwidth:last-child.panel--collapsed {
+  min-height: 0;
+}
+
+.workspace-lock-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(18, 26, 34, 0.28);
+  backdrop-filter: blur(3px);
+}
+
+.workspace-lock-card {
+  width: min(100%, 28rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 1.15rem 1.2rem;
+  border: 1px solid rgba(0, 57, 117, 0.12);
+  border-radius: 0.22rem;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 22px 48px rgba(18, 26, 34, 0.16);
+}
+
+.workspace-lock-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+}
+
+.workspace-lock-card h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.workspace-lock-card p {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.workspace-lock-progress {
+  width: 100%;
+  height: 0.55rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #e6edf4;
+}
+
+.workspace-lock-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #003975 0%, #2e76b8 100%);
+  transition: width 0.32s ease;
+}
+
+/* The Overview took over selection when the Trade-Off panel was deprecated. */
+.overview-select-cell {
+  display: flex;
+  align-items: center;
+}
+
+.overview-offloaded-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.overview-override-controls {
+  display: inline-flex;
+  width: 100%;
+  gap: 0.08rem;
+}
+
+.overview-override-button {
+  flex: 1 1 0;
+  min-width: 1.1rem;
+  padding: 0.24rem 0.08rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.2rem;
+  background: #fff;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.62rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.overview-override-button:hover:not(:disabled),
+.overview-override-button:focus-visible {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.overview-override-button--active {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+}
+
+.overview-override-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.overview-select-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 5.5rem;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 0 0.24rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 0.64rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

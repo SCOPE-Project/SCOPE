@@ -1,3 +1,8 @@
+import {
+  getActivityEndTimestamp,
+  getActivityStartTimestamp,
+} from './format.js'
+
 const toTimestamp = (value) => {
   const timestamp = Date.parse(value)
   return Number.isFinite(timestamp) ? timestamp : 0
@@ -170,65 +175,60 @@ export const buildSelectedOptionsFromPlan = (sessionPlan) => Object.fromEntries(
 export const getScheduledRows = (rows) => rows.filter((row) => row.isScheduled)
 
 export const buildCommitSummary = (finalScheduleRows = [], sessionPlan = null) => {
-  const satelliteMap = new Map()
-  const groundStationMap = new Map()
+  // Rows are grouped twice -- once per satellite, once per ground station --
+  // because the staged review asks the operator to sign off each link from
+  // both sides. The two groupings are built without mutating anything the
+  // caller owns: a row is read, never written, and never stored into a
+  // structure that is later mutated in place.
+  const sortedRows = [...finalScheduleRows].sort((left, right) => (
+    new Date(left.startTime).getTime() - new Date(right.startTime).getTime()
+  ))
 
-  let totalOffloadedMb = 0
-  let totalDurationSeconds = 0
+  const offloadOf = (row) => Number(row.usefulDataOffloadedMb ?? 0)
+  const durationOf = (row) => Number(row.durationSeconds ?? 0)
 
-  const sortedRows = [...finalScheduleRows].sort((a, b) =>
-    new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
-  )
+  const totalOffloadedMb = sortedRows.reduce((total, row) => total + offloadOf(row), 0)
+  const totalDurationSeconds = sortedRows.reduce((total, row) => total + durationOf(row), 0)
 
-  sortedRows.forEach((row) => {
-    const offloadMb = Number(row.usefulDataOffloadedMb ?? 0)
-    const duration = Number(row.durationSeconds ?? 0)
-    totalOffloadedMb += offloadMb
-    totalDurationSeconds += duration
+  const groupBy = (keyOf) => {
+    const order = []
+    const byKey = new Map()
+    sortedRows.forEach((row) => {
+      const key = keyOf(row)
+      if (!byKey.has(key)) {
+        order.push(key)
+        byKey.set(key, [])
+      }
+      byKey.set(key, [...byKey.get(key), row])
+    })
+    return order.map((key) => ({ key, links: byKey.get(key) }))
+  }
 
-    const satId = row.satId || 'Unknown Satellite'
-    if (!satelliteMap.has(satId)) {
-      const profile = sessionPlan?.satellite_buffer_profiles?.[satId]
-      satelliteMap.set(satId, {
-        satId,
-        links: [],
-        totalDurationSeconds: 0,
-        totalOffloadedMb: 0,
+  const totalsFor = (links) => ({
+    totalDurationSeconds: links.reduce((total, row) => total + durationOf(row), 0),
+    totalOffloadedMb: links.reduce((total, row) => total + offloadOf(row), 0),
+  })
+
+  const satellites = groupBy((row) => row.satId || 'Unknown Satellite')
+    .map(({ key, links }) => {
+      const profile = sessionPlan?.satellite_buffer_profiles?.[key]
+      return {
+        satId: key,
+        links,
+        ...totalsFor(links),
         capacityMb: Number(profile?.capacity_mb ?? 0),
         peakBufferMb: Number(profile?.peak_level_mb ?? 0),
         finalBufferMb: Number(profile?.final_level_mb ?? 0),
         totalGeneratedMb: Number(profile?.total_generated_mb ?? 0),
         totalDownlinkedMb: Number(profile?.total_downlinked_mb ?? 0),
         totalLostMb: Number(profile?.total_lost_mb ?? 0),
-      })
-    }
-    const satGroup = satelliteMap.get(satId)
-    satGroup.links.push(row)
-    satGroup.totalDurationSeconds += duration
-    satGroup.totalOffloadedMb += offloadMb
+      }
+    })
+    .sort((left, right) => left.satId.localeCompare(right.satId))
 
-    const gsId = row.gsId || 'Unknown Station'
-    if (!groundStationMap.has(gsId)) {
-      groundStationMap.set(gsId, {
-        gsId,
-        links: [],
-        totalDurationSeconds: 0,
-        totalOffloadedMb: 0,
-      })
-    }
-    const gsGroup = groundStationMap.get(gsId)
-    gsGroup.links.push(row)
-    gsGroup.totalDurationSeconds += duration
-    gsGroup.totalOffloadedMb += offloadMb
-  })
-
-  const satellites = Array.from(satelliteMap.values()).sort((a, b) =>
-    a.satId.localeCompare(b.satId)
-  )
-
-  const groundStations = Array.from(groundStationMap.values()).sort((a, b) =>
-    a.gsId.localeCompare(b.gsId)
-  )
+  const groundStations = groupBy((row) => row.gsId || 'Unknown Station')
+    .map(({ key, links }) => ({ gsId: key, links, ...totalsFor(links) }))
+    .sort((left, right) => left.gsId.localeCompare(right.gsId))
 
   return {
     totalScheduledLinks: finalScheduleRows.length,
@@ -259,4 +259,36 @@ export const filterVisibleTimelineLinks = (links = [], timelineLayers = {}) => {
   }
 
   return links.filter((link) => !link.ineligible)
+}
+
+export const buildCurrentScheduleItems = (schedules, relevantScheduleNames) => {
+  const relevantNames = new Set(relevantScheduleNames)
+
+  return schedules
+    .filter((schedule) => relevantNames.size === 0 || relevantNames.has(schedule.name))
+    .flatMap((schedule) =>
+      (schedule.activities ?? []).map((activity, activityIndex) => {
+        const startTime = getActivityStartTimestamp(activity)
+        const endTime = getActivityEndTimestamp(activity)
+
+        if (!startTime || !endTime) {
+          return null
+        }
+
+        return {
+          id: `current-${schedule.name}-${activity.uuid ?? activityIndex}`,
+          activityUuid: activity.uuid ? String(activity.uuid) : null,
+          label: activity.name?.trim() || 'Scheduled activity',
+          detail: schedule.name,
+          startTime,
+          endTime,
+        }
+      })
+    )
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftTimestamp = toTimestamp(left.startTime) ?? 0
+      const rightTimestamp = toTimestamp(right.startTime) ?? 0
+      return leftTimestamp - rightTimestamp
+    })
 }

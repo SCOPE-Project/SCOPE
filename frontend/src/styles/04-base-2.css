@@ -1,0 +1,129 @@
+.loading-spinner--inline {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
+.filter-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.filter-field span {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.filter-input-shell {
+  position: relative;
+}
+
+.filter-input {
+  width: 100%;
+  border: 1px solid var(--card-border);
+  border-radius: 0.2rem;
+  background: #fff;
+  color: var(--text-primary);
+  padding: 0.66rem 2rem 0.66rem 0.72rem;
+  font: inherit;
+}
+
+.filter-input:focus {
+  outline: none;
+  border-color: #7fa6d0;
+  box-shadow: 0 0 0 3px rgba(36, 142, 255, 0.15);
+}
+
+.filter-input-unit {
+  position: absolute;
+  right: 0.72rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  pointer-events: none;
+}
+
+.filter-error {
+  margin: 0;
+  color: var(--error-text);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.scheduling-config {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.scheduling-config--disabled {
+  opacity: 0.65;
+}
+
+.scheduling-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.scheduling-config-select {
+  appearance: auto;
+  padding-right: 0.65rem;
+}
+
+.scheduling-config .filter-input-shell .filter-input {
+  padding-right: 3.35rem;
+}
+
+.scheduling-config-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.scheduling-config input[aria-invalid="true"],
+.scheduling-config select[aria-invalid="true"] {
+  border-color: var(--error-border);
+}
+
+.workspace-sidebar .scheduling-config-grid {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 1080px) {
+  .landing-content {
+    width: min(100%, 760px);
+  }
+
+  .landing-config-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .landing-config-body--landing,
+  .landing-config-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-config-footer {
+    justify-content: center;
+  }
+
+  .landing-action-wrapper {
+    width: 100%;
+  }
+}

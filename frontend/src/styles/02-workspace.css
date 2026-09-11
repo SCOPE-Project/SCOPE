@@ -1,0 +1,129 @@
+.app-header-user {
+  display: flex;
+  align-items: center;
+}
+
+.app-header-user-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.32rem 0.75rem;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 9999px;
+  font-size: 0.84rem;
+  color: #ffffff;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+  letter-spacing: 0.02em;
+}
+
+.app-header-user-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.app-header-user-label {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.8;
+}
+
+.app-header-user-name {
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.app-header .toggle-switch-track {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.app-header .toggle-switch-thumb {
+  background: #f5f7fa;
+}
+
+.app-header .toggle-switch input:checked + .toggle-switch-track {
+  background: #c56b2d;
+  border-color: #c56b2d;
+}
+
+.app-status-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.app-status {
+  display: grid;
+  grid-template-columns: 0.55rem auto;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.88);
+  justify-items: start;
+}
+
+.app-status-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.app-status-label {
+  letter-spacing: 0.02em;
+}
+
+.app-status--checking {
+  color: #cfe2fb;
+}
+
+.app-status--online {
+  color: #b8e0c1;
+}
+
+.app-status--offline {
+  color: #f0b9c0;
+}
+
+.app-status--idle {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.app-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1.5rem;
+}
+
+.app-content--landing {
+  min-height: 0;
+  padding: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.landing-shell {
+  min-height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 1.5rem 0;
+  background: #dfe4e8;
+}
+
+.landing-content {
+  width: min(100%, 1280px);
+  padding: 2.25rem 1.5rem 2.5rem;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1.75rem;
+  text-align: left;
+}

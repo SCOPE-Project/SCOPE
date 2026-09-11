@@ -1,13 +1,10 @@
-import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { getCountdownNow, subscribeCountdownClock } from './components/countdownClock.js'
-import { formatOverpassCountdown } from './components/overpassCountdown.js'
 import {
   interpolateTrackPosition,
   prepareTrackPoints,
 } from './components/mapGeometry.js'
 import {
-  BACKEND_BASE_URL,
   applySessionOverride,
   clearScopeActivities,
   commitSession,
@@ -19,274 +16,234 @@ import {
 } from './api/scopeApi.js'
 import {
   applySessionPlanToRows,
+  buildCurrentScheduleItems,
   buildCommitSummary,
   buildRowsFromFilteredLinks,
   buildSelectedOptionsFromPlan,
   buildTradeOffCardsFromPlan,
-  filterVisibleTimelineActivities,
-  filterVisibleTimelineLinks,
   getScheduledRows,
-} from './schedulingModel.js'
+} from './domain/schedulingModel.js'
+import {
+  DEFAULT_DATA_CAPACITY_GB,
+  DEFAULT_DATA_GENERATION_MBPS,
+  DEFAULT_DATA_START_FILL_GB,
+  DEFAULT_DOWNLINK_RATE_MBPS,
+  DEFAULT_SCORING_ALPHA,
+  DEFAULT_SCORING_EXPONENT,
+  DEFAULT_TRADE_OFF_STRATEGY,
+  TRADE_OFF_STRATEGIES,
+} from './config/constants.js'
+import {
+  formatBufferLevelGb,
+  formatDataDownlinkGb,
+  formatDurationFromSeconds,
+  formatElevation,
+  formatGb,
+  formatOverviewEndDateTime as formatOverviewEndDateTimeIn,
+  formatOverviewStartDateTime as formatOverviewStartDateTimeIn,
+  formatTimelineDateTime as formatTimelineDateTimeIn,
+  formatTimelineItemDuration,
+  formatTimelinePlayheadDateTime as formatTimelinePlayheadDateTimeIn,
+  getBackendDataDownlinkMb,
+  getOverviewRowStatus,
+  getPassCapacityMb,
+  isUnavailableOverviewRow,
+  shouldHideOverviewRowInAvailableMode,
+  toTimestamp,
+} from './domain/format.js'
+import {
+  getOverviewControlTooltip,
+  getScheduleToggleState,
+  getScheduleToggleTitle,
+} from './domain/assets.js'
+import AppHeader from './features/workspace/AppHeader.jsx'
+import AssetPicker from './features/landing/AssetPicker.jsx'
+import PanelDragHandle from './features/workspace/PanelDragHandle.jsx'
+import TimelineTooltip from './features/timeline/TimelineTooltip.jsx'
+import LandingPage from './features/landing/LandingPage.jsx'
+import WorkspaceLayout from './features/workspace/WorkspaceLayout.jsx'
+import AssetWarning from './components/AssetWarning.jsx'
+import BufferConfig from './features/landing/BufferConfig.jsx'
+import GroundStationOptions from './features/landing/GroundStationOptions.jsx'
+import PlanningWindowForm from './features/landing/PlanningWindowForm.jsx'
+import SatelliteOptions from './features/landing/SatelliteOptions.jsx'
+import SectionChevron from './components/SectionChevron.jsx'
+import TradeOffPill from './components/TradeOffPill.jsx'
+import UnavailableAssets from './features/landing/UnavailableAssets.jsx'
+import PlanningTimeActions from './features/landing/PlanningTimeActions.jsx'
+import TimeInput from './components/TimeInput.jsx'
+import ExtractionProgress from './features/landing/ExtractionProgress.jsx'
+import LinkFilters from './features/landing/LinkFilters.jsx'
+import TradeOffConfig from './features/landing/TradeOffConfig.jsx'
+import MapPanel from './features/map/MapPanel.jsx'
+import OverviewPanel from './features/overview/OverviewPanel.jsx'
+import TimelinePanel from './features/timeline/TimelinePanel.jsx'
+import { usePanelLayout } from './state/usePanelLayout.js'
+import { STAGE_PROGRESS_SPAN, useSchedulerRun } from './state/useSchedulerRun.js'
+import { useSchedulerConfig } from './state/useSchedulerConfig.js'
+import { useMapView } from './state/useMapView.js'
+import { useStagingReview } from './state/useStagingReview.js'
+import { usePlanningWindow } from './state/usePlanningWindow.js'
+import { useSessionPlan } from './state/useSessionPlan.js'
+import { useTimelineGeometry } from './state/useTimelineGeometry.js'
+import { useMissionAssets } from './state/useMissionAssets.js'
 
-const MissionMap = lazy(() => import('./components/MissionMap.jsx'))
-const TRADE_OFF_ACCENT_COLORS = ['#c56b2d', '#5b7cfa', '#2a9d8f', '#9b5de5']
-// Reset View puts the whole planning window back on screen. Everything between
-// 1x and the max multiplier is reached with Ctrl/Cmd + wheel.
-const TIMELINE_DEFAULT_ZOOM_LEVEL = 'fit'
-// The primary schedule layers for the timeline.
-const TIMELINE_LAYERS = [
-  { id: 'payload', label: 'Payload Schedule' },
-  { id: 'communication', label: 'Communication Schedule' },
-]
-const TIMELINE_WHEEL_ZOOM_STEP = 0.6
-const TIMELINE_MIN_ZOOM_MULTIPLIER = 1
-const TIMELINE_FIT_EDGE_INSET_PX = 14
-const TIMELINE_PLAYBACK_SPEEDS = [1, 2, 4, 8, 16, 32, 64, 128]
-const DEFAULT_PLANNING_TIME_MODE = 'utc'
-const MAP_PANEL_CHROME_OVERHEAD_PX = 88
-// Panel identity is separate from panel position: PANEL_LABELS/panelSlotAssignment
-// let every panel (Overview, Trade-Off, Map View, Timeline) be
-// dragged between layout slots, while collapse state etc. stays keyed
-// to the panel itself.
-const PANEL_LABELS = {
-  overview: 'Overview',
-  tradeOff: 'Trade-Off',
-  mapView: 'Map View',
-  timeline: 'Timeline',
-}
 
-// The separate Trade-Off panel is deprecated. Backend-owned scheduling status
-// and override controls live in the Overview; the dormant card view remains
-// available behind this flag for layouts that still need it.
-const TRADE_OFF_PANEL_ENABLED = false
+let extractionMessageSequence = 0
 
-// Values entered in GB are converted to MB at the API boundary. Backend rate
-// fields currently use MB/s semantics despite their historical `_mbps` names.
-// Keep in sync with the backend fallbacks in core/models/scheduling.py
-// (DEFAULT_BUFFER_* / DEFAULT_PAYLOAD_GENERATION_RATE_MBPS). The frontend always
-// sends an explicit default_buffer_config, so these are the values that actually
-// reach the scheduler; the backend constants only cover API/CLI callers.
-const DEFAULT_DATA_START_FILL_GB = 5
-const DEFAULT_DATA_GENERATION_MBPS = 4
-const DEFAULT_DATA_CAPACITY_GB = 100
-const DEFAULT_DOWNLINK_RATE_MBPS = 25
-const DEFAULT_TRADE_OFF_STRATEGY = 'buffer_overflow_avoidance'
-const DEFAULT_SCORING_ALPHA = 2
-const DEFAULT_SCORING_EXPONENT = 2
-const TRADE_OFF_STRATEGIES = [
-  { value: 'buffer_overflow_avoidance', label: 'Buffer overflow avoidance' },
-  { value: 'max_downlink_throughput', label: 'Maximum downlink throughput' },
-  { value: 'max_pass_duration', label: 'Maximum pass duration' },
-]
-
-class MapErrorBoundary extends Component {
-  state = { error: null }
-
-  static getDerivedStateFromError(error) {
-    return { error }
-  }
-
-  render() {
-    if (this.state.error) {
-      return (
-        <div className="mission-map-shell">
-          <div className="mission-map-state mission-map-state--error" role="alert">
-            Map could not be initialized: {this.state.error.message}
-          </div>
-        </div>
-      )
-    }
-
-    return this.props.children
-  }
-}
-
-const padDateTimePart = (value) => String(value).padStart(2, '0')
-
-const formatPlanningDateFields = (date, timeMode) => {
-  const useUtc = timeMode === 'utc'
-  const year = useUtc ? date.getUTCFullYear() : date.getFullYear()
-  const month = (useUtc ? date.getUTCMonth() : date.getMonth()) + 1
-  const day = useUtc ? date.getUTCDate() : date.getDate()
-  const hours = useUtc ? date.getUTCHours() : date.getHours()
-  const minutes = useUtc ? date.getUTCMinutes() : date.getMinutes()
-
-  return {
-    date: `${year}-${padDateTimePart(month)}-${padDateTimePart(day)}`,
-    time: `${padDateTimePart(hours)}:${padDateTimePart(minutes)}`,
-  }
-}
-
-const parsePlanningDateFields = (dateValue, timeValue, timeMode) => {
-  if (!dateValue || !/^\d{2}:\d{2}$/.test(timeValue)) {
-    return null
-  }
-
-  const suffix = timeMode === 'utc' ? 'Z' : ''
-  const parsed = new Date(`${dateValue}T${timeValue}:00${suffix}`)
-  return Number.isFinite(parsed.getTime()) ? parsed : null
-}
-
-// The planning window may never begin in the past. A small tolerance keeps a
-// window the operator just chose from turning invalid because the wall clock
-// advanced a few seconds while they were still typing.
-const PLANNING_PAST_TOLERANCE_MS = 60 * 1000
-
-// Smallest hour boundary strictly after `date`. Adding milliseconds (rather
-// than incrementing the hour field) keeps this correct across DST changes.
-const roundUpToNextHour = (date) => {
-  const rounded = new Date(date)
-  rounded.setMinutes(0, 0, 0)
-  while (rounded.getTime() <= date.getTime()) {
-    rounded.setTime(rounded.getTime() + 60 * 60000)
-  }
-  return rounded
-}
-
-const buildPlanningWindowPreset = (timeMode = DEFAULT_PLANNING_TIME_MODE, start = new Date()) => {
-  const roundedStart = roundUpToNextHour(start)
-  const end = new Date(roundedStart.getTime() + 60 * 60000)
-  const startFields = formatPlanningDateFields(roundedStart, timeMode)
-  const endFields = formatPlanningDateFields(end, timeMode)
-
-  return {
-    startDate: startFields.date,
-    startTime: startFields.time,
-    endDate: endFields.date,
-    endTime: endFields.time,
-    startIso: roundedStart.toISOString(),
-    endIso: end.toISOString(),
-  }
-}
-
-// The stored reset preset was built when the workspace was reset and may have
-// aged into the past. Fall back to a freshly rounded window so Reset always
-// lands on a clean future hour instead of clamping to a ragged "now".
-const resolvePlanningResetDate = (presetIso, timeMode, target) => {
-  const presetDate = new Date(presetIso)
-
-  if (presetDate.getTime() >= Date.now()) {
-    return presetDate
-  }
-
-  const freshPreset = buildPlanningWindowPreset(timeMode)
-  return new Date(target === 'start' ? freshPreset.startIso : freshPreset.endIso)
-}
-
-const DEFAULT_PLANNING_WINDOW_PRESET = buildPlanningWindowPreset()
-
-// Subscribes to the shared ticker instead of lifting a per-second clock into
-// App state: a tick then re-renders only the countdown cells, leaving the
-// timeline, map and the rest of the table untouched.
-//
-// The Overview T- column shows seconds, but re-rendering every single one
-// of them is unnecessary churn -- so it only re-renders every 20 seconds,
-// even though the shared clock underneath still ticks once a second for
-// any other subscriber.
-const COUNTDOWN_REFRESH_INTERVAL_MS = 20000
-
-const usePeriodicCountdownNow = (intervalMs) => {
-  const [nowMs, setNowMs] = useState(getCountdownNow)
-
-  useEffect(() => subscribeCountdownClock((tickNowMs) => {
-    setNowMs((current) => (
-      Math.floor(tickNowMs / intervalMs) === Math.floor(current / intervalMs) ? current : tickNowMs
-    ))
-  }), [intervalMs])
-
-  return nowMs
-}
-
-function OverpassCountdownCell({ startTime, endTime }) {
-  const nowMs = usePeriodicCountdownNow(COUNTDOWN_REFRESH_INTERVAL_MS)
-  const { label, state } = formatOverpassCountdown(startTime, endTime, nowMs, { includeSeconds: true })
-
-  return (
-    <span
-      className={`overview-countdown-cell overview-countdown-cell--${state}`}
-      title={state === 'future' ? `Time until AOS at ${startTime}` : undefined}
-    >
-      {label}
-    </span>
-  )
+// Ids for the extraction log. A monotonic counter rather than Date.now():
+// the timestamp is an impure read the React compiler cannot memoize around,
+// and two messages pushed inside the same millisecond would collide as keys.
+const nextExtractionMessageId = (prefix) => {
+  extractionMessageSequence += 1
+  return `${prefix}-${extractionMessageSequence}`
 }
 
 export default function App() {
-  const splitPanelsRef = useRef(null)
-  const planningRowResizeDragCleanupRef = useRef(null)
-  const topPanelsResizeDragCleanupRef = useRef(null)
-  const splitDragCleanupRef = useRef(null)
-  const timelineScrollRef = useRef(null)
-  const timelineScrollFrameRef = useRef(null)
-  const timelineHorizontalRangeRef = useRef(null)
-  const timelinePlayheadSliderRef = useRef(null)
-  const timelinePlaybackRafRef = useRef(null)
-  const timelinePlaybackFrameTimestampRef = useRef(null)
-  const timelinePlayheadTimeRef = useRef(null)
-  const timelinePlayingRef = useRef(false)
-  const timelinePlayheadDraggingRef = useRef(false)
-  const timelinePlaybackDomRef = useRef({ playhead: null, bars: [], label: null })
-  const timelinePlaybackLastTextSyncRef = useRef(0)
   const missionMapRef = useRef(null)
   const visibleMapAssetListRef = useRef(null)
   const tradeOffCardListRef = useRef(null)
   const timelinePanelRef = useRef(null)
   const scheduleStagingReviewRef = useRef(null)
   const confirmationSuccessRef = useRef(null)
-  const timelineWheelHintRef = useRef(null)
-  const timelineWheelHintTimeoutRef = useRef(null)
-  const timelineWheelHandlerRef = useRef(null)
-  const timelineTradeOffDrawerDragCleanupRef = useRef(null)
-  const timelineTradeOffDrawerRef = useRef(null)
   const schedulerAbortControllerRef = useRef(null)
-  const [assets, setAssets] = useState([])
-  const [assetSchedules, setAssetSchedules] = useState([])
-  const [assetsCached, setAssetsCached] = useState(null)
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [backendAlive, setBackendAlive] = useState(null)
-  const [satosAlive, setSatosAlive] = useState(null)
+  // fetchAssets resets the workspace, but resetWorkspaceState is defined
+  // further down and closes over most of this component. The ref lets the
+  // hook call the latest version without depending on its identity.
+  const resetWorkspaceStateRef = useRef(null)
   const [view, setView] = useState('landing')
-  const [userName, setUserName] = useState('')
-  const [selectedSatellites, setSelectedSatellites] = useState([])
-  const [selectedGroundStations, setSelectedGroundStations] = useState([])
-  const [minimumLinkElevationFilterDeg, setMinimumLinkElevationFilterDeg] = useState('')
-  const [minimumPeakElevationFilterDeg, setMinimumPeakElevationFilterDeg] = useState('')
-  const [planningTimeMode, setPlanningTimeMode] = useState(DEFAULT_PLANNING_TIME_MODE)
-  const [planningWindowStartDate, setPlanningWindowStartDate] = useState(DEFAULT_PLANNING_WINDOW_PRESET.startDate)
-  const [planningWindowStartTime, setPlanningWindowStartTime] = useState(DEFAULT_PLANNING_WINDOW_PRESET.startTime)
-  const [planningWindowEndDate, setPlanningWindowEndDate] = useState(DEFAULT_PLANNING_WINDOW_PRESET.endDate)
-  const [planningWindowEndTime, setPlanningWindowEndTime] = useState(DEFAULT_PLANNING_WINDOW_PRESET.endTime)
-  const [planningWindowResetPreset, setPlanningWindowResetPreset] = useState({
-    startIso: DEFAULT_PLANNING_WINDOW_PRESET.startIso,
-    endIso: DEFAULT_PLANNING_WINDOW_PRESET.endIso,
+  const {
+    assets,
+    assetSchedules,
+    setAssetSchedules,
+    assetsCached,
+    loading,
+    backendAlive,
+    satosAlive,
+    selectedSatellites,
+    setSelectedSatellites,
+    selectedGroundStations,
+    setSelectedGroundStations,
+    setAssets,
+    toggleSatellite,
+    toggleGroundStation,
+    satelliteAssets,
+    groundStationAssets,
+    unavailableAssets,
+    missionAssetsLoaded,
+    fetchAssets,
+  } = useMissionAssets({
+    view,
+    onWorkspaceReset: () => resetWorkspaceStateRef.current?.(),
+    onError: setError,
   })
-  // Re-read the wall clock periodically so the earliest selectable date, the
-  // time dropdown and the validation message stay correct while the landing
-  // page sits open.
-  const [planningNowMs, setPlanningNowMs] = useState(() => Date.now())
-  const [activeTimeMenu, setActiveTimeMenu] = useState(null)
+  const [userName, setUserName] = useState('')
+  const {
+    minimumLinkElevationFilterDeg,
+    setMinimumLinkElevationFilterDeg,
+    minimumPeakElevationFilterDeg,
+    setMinimumPeakElevationFilterDeg,
+    minimumLinkElevationFilterValue,
+    minimumPeakElevationFilterValue,
+    linkFiltersValid,
+    dataStartFillGb,
+    setDataStartFillGb,
+    dataGenerationMbps,
+    setDataGenerationMbps,
+    dataCapacityGb,
+    setDataCapacityGb,
+    dataDownlinkRateMbps,
+    setDataDownlinkRateMbps,
+    tradeOffStrategy,
+    setTradeOffStrategy,
+    scoringAlpha,
+    setScoringAlpha,
+    scoringExponent,
+    setScoringExponent,
+    clearExistingScopeActivities,
+    setClearExistingScopeActivities,
+    resetSchedulerConfig,
+  } = useSchedulerConfig()
+  const {
+    activeMapAssetId,
+    setActiveMapAssetId,
+    showGroundStationVisibilityCircles,
+    setShowGroundStationVisibilityCircles,
+    showSatelliteVisibilityCircles,
+    setShowSatelliteVisibilityCircles,
+    showGroundTracks,
+    setShowGroundTracks,
+    groundTrackWindowHours,
+    setGroundTrackWindowHours,
+    resetMapView,
+  } = useMapView()
+  const {
+    planningTimeMode,
+    planningWindowStartDate,
+    setPlanningWindowStartDate,
+    planningWindowStartTime,
+    setPlanningWindowStartTime,
+    planningWindowEndDate,
+    setPlanningWindowEndDate,
+    planningWindowEndTime,
+    setPlanningWindowEndTime,
+    activeTimeMenu,
+    setActiveTimeMenu,
+    planningDateAndTimeToIso,
+    handlePlanningTimeModeChange,
+    handleSetCurrentPlanningTime,
+    handleShiftPlanningTime,
+    handleResetPlanningTime,
+    planningWindowComplete,
+    planningWindowInPast,
+    planningWindowValid,
+    resetPlanningWindow,
+  } = usePlanningWindow()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [launchingScheduler, setLaunchingScheduler] = useState(false)
-  const [schedulerLaunched, setSchedulerLaunched] = useState(false)
-  const [overviewRows, setOverviewRows] = useState([])
+  const {
+    progress: extractionProgress,
+    statusLabel: extractionStatus,
+    messages: extractionMessages,
+    launchingScheduler,
+    calculatingTradeOffs,
+    schedulerLaunched,
+    tradeOffsCalculated,
+    dispatch: dispatchScheduler,
+    reset: resetSchedulerRun,
+  } = useSchedulerRun()
+  const {
+    satelliteTracks,
+    setSatelliteTracks,
+    orbitEngineRunId,
+    setOrbitEngineRunId,
+    propagationResult,
+    setPropagationResult,
+    propagationRequestKey,
+    setPropagationRequestKey,
+    filterRunId,
+    setFilterRunId,
+    filteredLinks,
+    setFilteredLinks,
+    overviewRows,
+    setOverviewRows,
+    sessionId,
+    setSessionId,
+    sessionPlan,
+    setSessionPlan,
+    tradeOffCards,
+    setTradeOffCards,
+    activeTradeOffCardIndex,
+    setActiveTradeOffCardIndex,
+    selectedTradeOffOption,
+    setSelectedTradeOffOption,
+    overridingLinkId,
+    setOverridingLinkId,
+    clearSession,
+    clearPropagation,
+    resetSessionPlan,
+  } = useSessionPlan()
   const [showUnavailableOverviewRows, setShowUnavailableOverviewRows] = useState(true)
-  const [satelliteTracks, setSatelliteTracks] = useState({})
-  const [orbitEngineRunId, setOrbitEngineRunId] = useState(null)
-  const [propagationResult, setPropagationResult] = useState(null)
-  const [propagationRequestKey, setPropagationRequestKey] = useState(null)
-  const [filterRunId, setFilterRunId] = useState(null)
-  const [filteredLinks, setFilteredLinks] = useState([])
-  const [sessionId, setSessionId] = useState(null)
-  const [sessionPlan, setSessionPlan] = useState(null)
-  const [extractionStatus, setExtractionStatus] = useState('Not started')
-  const [extractionProgress, setExtractionProgress] = useState(0)
-  const [extractionMessages, setExtractionMessages] = useState([])
-  const [calculatingTradeOffs, setCalculatingTradeOffs] = useState(false)
-  const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
-  const [tradeOffCards, setTradeOffCards] = useState([])
-  const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
-  const [selectedTradeOffOption, setSelectedTradeOffOption] = useState({})
   const [timelineTradeOffViewId, setTimelineTradeOffViewId] = useState(null)
   const [timelineTradeOffDrawerOffset, setTimelineTradeOffDrawerOffset] = useState({ x: 0, y: 0 })
   const [warningTooltip, setWarningTooltip] = useState({
@@ -295,117 +252,32 @@ export default function App() {
     x: 0,
     y: 0,
   })
-  const [overviewPanelWidth, setOverviewPanelWidth] = useState(58)
-  // Which panel currently occupies which layout slot. The top row
-  // (topLeft/topRight) sits side by side with a width-resizer between them;
-  // the bottom column (bottomTop/bottomMiddle) is stacked with a
-  // height-resizer between each pair.
-  //
-  // Every divider in this layout obeys the same rule: dragging it moves the
-  // divider itself and resizes the panel BEFORE it (above for horizontal, left
-  // for vertical). For that to hold, each slot that has a divider below it
-  // needs an explicit pixel height -- a slot sized `auto` pins its own bottom
-  // edge to its content, so its divider could never follow the pointer. Hence
-  // bottomTop is pixel-sized and the last slot grows with its content.
-  // Dragging a panel's handle onto another panel swaps their
-  // slots, regardless of row — this does not persist across reloads.
-  const [panelSlotAssignment, setPanelSlotAssignment] = useState(() => ({
-    topLeft: 'overview',
-    ...(TRADE_OFF_PANEL_ENABLED ? { topRight: 'tradeOff' } : {}),
-    bottomTop: 'mapView',
-    bottomMiddle: 'timeline',
-  }))
-  const [draggedPanelId, setDraggedPanelId] = useState(null)
-  const [dragOverPanelId, setDragOverPanelId] = useState(null)
-  // Height (px) of the bottomTop slot -- this is the whole panel's grid
-  // row (heading + padding + content), not just its content area; the
-  // bottomMiddle slot always flows naturally beneath it. 540px is 50%
-  // taller again on top of the previous 360px default (itself 50% taller
-  // than 240px, which was 50% taller than the original 160px default).
-  const [bottomTopHeightPx, setBottomTopHeightPx] = useState(540)
-  // Default buffer configuration sent to the backend session engine.
-  const [dataStartFillGb, setDataStartFillGb] = useState(DEFAULT_DATA_START_FILL_GB)
-  const [dataGenerationMbps, setDataGenerationMbps] = useState(DEFAULT_DATA_GENERATION_MBPS)
-  const [dataCapacityGb, setDataCapacityGb] = useState(DEFAULT_DATA_CAPACITY_GB)
-  const [dataDownlinkRateMbps, setDataDownlinkRateMbps] = useState(DEFAULT_DOWNLINK_RATE_MBPS)
-  const [tradeOffStrategy, setTradeOffStrategy] = useState(DEFAULT_TRADE_OFF_STRATEGY)
-  const [scoringAlpha, setScoringAlpha] = useState(DEFAULT_SCORING_ALPHA)
-  const [scoringExponent, setScoringExponent] = useState(DEFAULT_SCORING_EXPONENT)
-  // Shared height (px) of the top row (Overview/Trade-Off by default);
-  // both panels stretch to this height and scroll their own content
-  // internally. 346px is 60% of the panels' original fixed 36rem (576px)
-  // height.
-  const [topPanelsHeightPx, setTopPanelsHeightPx] = useState(346)
-  const [confirmingSchedule, setConfirmingSchedule] = useState(false)
-  const [confirmationProgress, setConfirmationProgress] = useState(0)
-  const [confirmationStep, setConfirmationStep] = useState('')
-  const [isScheduleStaged, setIsScheduleStaged] = useState(false)
-  // Per-asset "I reviewed this asset's staged links" checkbox, required
-  // before the SatOS commit button unlocks. Reset every time staging is
-  // (re)entered or abandoned so a stale confirmation can never carry over
-  // to a schedule that has since changed.
-  const [confirmedStagingLinks, setConfirmedStagingLinks] = useState({})
-  const [clearExistingScopeActivities, setClearExistingScopeActivities] = useState(false)
-  const [confirmationSuccess, setConfirmationSuccess] = useState(false)
-  const [scheduleCommitted, setScheduleCommitted] = useState(false)
-  const [confirmedScheduleCount, setConfirmedScheduleCount] = useState(0)
-  const [createdActivitiesCount, setCreatedActivitiesCount] = useState(0)
-  const [overridingLinkId, setOverridingLinkId] = useState(null)
-  const [activeMapAssetId, setActiveMapAssetId] = useState(null)
-  const [showGroundStationVisibilityCircles, setShowGroundStationVisibilityCircles] = useState(true)
-  const [showSatelliteVisibilityCircles, setShowSatelliteVisibilityCircles] = useState(true)
-  const [showGroundTracks, setShowGroundTracks] = useState(true)
-  const [groundTrackWindowHours, setGroundTrackWindowHours] = useState(6)
+
+  const {
+    confirmingSchedule,
+    setConfirmingSchedule,
+    confirmationProgress,
+    setConfirmationProgress,
+    confirmationStep,
+    setConfirmationStep,
+    isScheduleStaged,
+    confirmedStagingLinks,
+    setConfirmationSuccess,
+    confirmationSuccess,
+    scheduleCommitted,
+    setScheduleCommitted,
+    confirmedScheduleCount,
+    setConfirmedScheduleCount,
+    createdActivitiesCount,
+    setCreatedActivitiesCount,
+    toggleStagingLinkConfirmation,
+    toggleStagingAssetConfirmation,
+    areAllLinksConfirmed,
+    resetStagingReview,
+    enterStagingReview,
+    leaveStagingReview,
+  } = useStagingReview()
   const [activePlanningWindow, setActivePlanningWindow] = useState(null)
-  const [timelinePlayheadTime, setTimelinePlayheadTime] = useState(() => Date.now())
-  const [timelineLive, setTimelineLive] = useState(false)
-  const [timelinePlaying, setTimelinePlaying] = useState(false)
-  const [timelinePlaybackSpeed, setTimelinePlaybackSpeed] = useState(1)
-  const [timelineZoomLevel, setTimelineZoomLevel] = useState(TIMELINE_DEFAULT_ZOOM_LEVEL)
-  const [timelineViewportWidthPx, setTimelineViewportWidthPx] = useState(0)
-  // null means "use the preset multiplier from timelineZoomLevel"; a number
-  // means the person has zoomed continuously with Ctrl/⌘ + scroll (mirroring
-  // the map's Ctrl-gated wheel zoom) and that exact value overrides the
-  // Fit/Detail preset until they click a preset button again.
-  const [timelineCustomZoomMultiplier, setTimelineCustomZoomMultiplier] = useState(null)
-  const [timelineLayers, setTimelineLayers] = useState({
-    payload: true,
-    communication: true,
-    ineligible: false,
-  })
-  const [timelineAssetVisibility, setTimelineAssetVisibility] = useState({
-    satellites: true,
-    groundStations: false,
-  })
-  // Asset groups start collapsed: the header row already aggregates what is
-  // scheduled for the asset, and selecting a trade-off expands exactly the
-  // groups that matter (see the auto-expand effect below).
-  const [expandedTimelineGroups, setExpandedTimelineGroups] = useState({})
-  // The two section headers (Satellites / Ground Stations) collapse the whole
-  // block. Unlike the asset groups these start OPEN -- collapsed sections would
-  // leave the timeline showing nothing at all after the scheduler run.
-  const [expandedTimelineSections, setExpandedTimelineSections] = useState({
-    satellites: true,
-    groundStations: true,
-  })
-  // Purely navigational: clicking a bar marks a link (both of its instances)
-  // and scrolls the Trade-Off panel to the matching option. It never changes
-  // selectedTradeOffOption -- the timeline shows and navigates, it does not decide.
-  const [markedTimelineLinkId, setMarkedTimelineLinkId] = useState(null)
-  const [markedTradeOffOptionId, setMarkedTradeOffOptionId] = useState(null)
-  const [timelineTooltip, setTimelineTooltip] = useState({
-    visible: false,
-    pinned: false,
-    item: null,
-    anchorItemId: null,
-    x: 0,
-    y: 0,
-  })
-  const [timelineHorizontalControl, setTimelineHorizontalControl] = useState({
-    visible: false,
-    left: 0,
-    width: 0,
-  })
   const [expandedSections, setExpandedSections] = useState({
     timeWindow: true,
     satellites: true,
@@ -416,9 +288,28 @@ export default function App() {
     tradeOffConfig: true,
     mapView: true,
     overview: true,
-    tradeOff: true,
     timeline: true,
   })
+
+  const {
+    splitPanelsRef,
+    overviewPanelWidth,
+    panelSlotAssignment,
+    bottomTopHeightPx,
+    topPanelsHeightPx,
+    mapViewHeightPx,
+    handlePanelResizeStart,
+    handlePanelResizeKeyDown,
+    handlePlanningRowResizeStart,
+    handlePlanningRowResizeKeyDown,
+    handleTopPanelsResizeStart,
+    handleTopPanelsResizeKeyDown,
+    handlePanelDragStart,
+    handlePanelDragEnd,
+    getPanelDropZoneProps,
+    getPanelDragClassName,
+    getPanelHeadingDragProps,
+  } = usePanelLayout({ expandedSections, missionMapRef })
 
   const preparedSatelliteTracks = useMemo(() => Object.fromEntries(
     Object.entries(satelliteTracks).map(([assetName, points]) => [
@@ -426,129 +317,6 @@ export default function App() {
       prepareTrackPoints(points),
     ]),
   ), [satelliteTracks])
-  const timelineTooltipHideTimeoutRef = useRef(null)
-
-  useEffect(() => {
-    let active = true
-    let intervalId = null
-    let checkInFlight = false
-
-    const fetchWithTimeout = async (url, options = {}, timeoutMs = 1500) => {
-      const controller = new AbortController()
-      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
-
-      try {
-        return await fetch(url, {
-          ...options,
-          signal: controller.signal,
-        })
-      } finally {
-        window.clearTimeout(timeoutId)
-      }
-    }
-
-    const checkConnections = async () => {
-      if (checkInFlight) {
-        return
-      }
-
-      checkInFlight = true
-
-      try {
-        const backendResponse = await fetchWithTimeout(`${BACKEND_BASE_URL}/status`, {
-          cache: 'no-store',
-        })
-        if (!active) {
-          return
-        }
-
-        if (backendResponse.ok) {
-          setBackendAlive(true)
-
-          try {
-            const satosResponse = await fetchWithTimeout(`${BACKEND_BASE_URL}/satos/asset/list`, {
-              cache: 'no-store',
-            }, 1500)
-            if (active) {
-              setSatosAlive(satosResponse.ok)
-            }
-          } catch {
-            if (active) {
-              setSatosAlive(false)
-            }
-          }
-        } else {
-          setBackendAlive(false)
-          setSatosAlive(null)
-        }
-      } catch {
-        if (active) {
-          setBackendAlive(false)
-          setSatosAlive(null)
-        }
-      } finally {
-        checkInFlight = false
-      }
-    }
-
-    const stopPolling = () => {
-      if (intervalId !== null) {
-        window.clearInterval(intervalId)
-        intervalId = null
-      }
-    }
-
-    const startPolling = () => {
-      if (
-        intervalId !== null
-        || view !== 'landing'
-        || document.visibilityState !== 'visible'
-      ) {
-        return
-      }
-
-      intervalId = window.setInterval(checkConnections, 2000)
-    }
-
-    checkConnections()
-    const handleVisibilityChange = () => {
-      if (view !== 'landing') {
-        stopPolling()
-        return
-      }
-
-      if (document.visibilityState === 'visible') {
-        checkConnections()
-        startPolling()
-      } else {
-        stopPolling()
-      }
-    }
-
-    startPolling()
-
-    window.addEventListener('focus', handleVisibilityChange)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    return () => {
-      active = false
-      stopPolling()
-      window.removeEventListener('focus', handleVisibilityChange)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-    }
-  }, [view])
-
-  useEffect(() => {
-    const intervalId = window.setInterval(() => setPlanningNowMs(Date.now()), 30000)
-    return () => window.clearInterval(intervalId)
-  }, [])
-
-  useEffect(() => () => {
-    if (timelineTooltipHideTimeoutRef.current !== null) {
-      window.clearTimeout(timelineTooltipHideTimeoutRef.current)
-      timelineTooltipHideTimeoutRef.current = null
-    }
-  }, [])
 
   useEffect(() => {
     const isNumberInput = (target) => (
@@ -573,45 +341,19 @@ export default function App() {
     }
   }, [])
 
-  useEffect(() => () => {
-    if (splitDragCleanupRef.current) {
-      splitDragCleanupRef.current()
-    }
-    if (planningRowResizeDragCleanupRef.current) {
-      planningRowResizeDragCleanupRef.current()
-    }
-    if (topPanelsResizeDragCleanupRef.current) {
-      topPanelsResizeDragCleanupRef.current()
-    }
-  }, [])
-
+  // Any change to the schedule invalidates every staging sign-off: a
+  // confirmation always refers to one specific version of the plan.
+  //
+  // resetStagingReview is deliberately NOT a dependency. It is redefined on
+  // every render, so including it would re-run this effect continuously and
+  // wipe the staging state the moment the operator entered it.
   useEffect(() => {
     const animationFrameId = window.requestAnimationFrame(() => {
-      setIsScheduleStaged(false)
-      setConfirmationSuccess(false)
-      setScheduleCommitted(false)
-      setConfirmedScheduleCount(0)
-      setCreatedActivitiesCount(0)
-      setConfirmedStagingLinks({})
+      resetStagingReview()
     })
     return () => window.cancelAnimationFrame(animationFrameId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTradeOffOption, tradeOffsCalculated, schedulerLaunched])
-
-  const toggleSatellite = (name) => {
-    setSelectedSatellites((current) =>
-      current.includes(name)
-        ? current.filter((item) => item !== name)
-        : [...current, name]
-    )
-  }
-
-  const toggleGroundStation = (name) => {
-    setSelectedGroundStations((current) =>
-      current.includes(name)
-        ? current.filter((item) => item !== name)
-        : [...current, name]
-    )
-  }
 
   const toggleSection = (section) => {
     setExpandedSections((current) => ({
@@ -625,975 +367,6 @@ export default function App() {
       ...current,
       [layer]: !current[layer],
     }))
-  }
-
-  const getEventTimestamp = (event) => {
-    if (!event) {
-      return null
-    }
-
-    if (typeof event === 'string') {
-      return event
-    }
-
-    if (typeof event.timestamp === 'string') {
-      return event.timestamp
-    }
-
-    return null
-  }
-
-  const getActivityStartTimestamp = (activity) =>
-    getEventTimestamp(activity?.start_event)
-    ?? getEventTimestamp(activity?.startEvent)
-    ?? activity?.start_timestamp
-    ?? activity?.startTimestamp
-    ?? null
-
-  const getActivityEndTimestamp = (activity) =>
-    getEventTimestamp(activity?.end_event)
-    ?? getEventTimestamp(activity?.endEvent)
-    ?? activity?.end_timestamp
-    ?? activity?.endTimestamp
-    ?? null
-
-  const toTimestamp = (value) => {
-    if (!value) {
-      return null
-    }
-
-    const timestamp = new Date(value).getTime()
-    return Number.isFinite(timestamp) ? timestamp : null
-  }
-
-  const formatDurationFromSeconds = (seconds) => {
-    if (!Number.isFinite(seconds) || seconds <= 0) {
-      return '—'
-    }
-
-    const totalSeconds = Math.round(seconds)
-    const minutes = Math.floor(totalSeconds / 60)
-    const remainingSeconds = totalSeconds % 60
-
-    return `${minutes}min ${remainingSeconds}s`
-  }
-
-  const formatUtcEventDateTime = (value) => {
-    if (!value) return '—'
-    const date = new Date(value)
-    if (!Number.isFinite(date.getTime())) return '—'
-    const year = date.getUTCFullYear()
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0')
-    const day = String(date.getUTCDate()).padStart(2, '0')
-    const hours = String(date.getUTCHours()).padStart(2, '0')
-    const minutes = String(date.getUTCMinutes()).padStart(2, '0')
-    const seconds = String(date.getUTCSeconds()).padStart(2, '0')
-    return `${year}-${month}-${day}, ${hours}:${minutes}:${seconds}`
-  }
-
-  const getTimeZoneFormatOptions = (timeMode) =>
-    timeMode === 'utc' ? { timeZone: 'UTC' } : {}
-
-  const formatOverviewDateLabel = (date, timeMode) =>
-    date.toLocaleDateString([], {
-      day: '2-digit',
-      month: 'short',
-      ...getTimeZoneFormatOptions(timeMode),
-    })
-
-  const formatOverviewTimeLabel = (date, timeMode) =>
-    date.toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      ...getTimeZoneFormatOptions(timeMode),
-    })
-
-  const getOverviewDayKey = (date, timeMode) =>
-    formatPlanningDateFields(date, timeMode).date
-
-  const getOverviewDayOffset = (startDate, endDate, timeMode) => {
-    if (getOverviewDayKey(startDate, timeMode) === getOverviewDayKey(endDate, timeMode)) {
-      return 0
-    }
-
-    const startDayTimestamp = timeMode === 'utc'
-      ? Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate())
-      : new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime()
-    const endDayTimestamp = timeMode === 'utc'
-      ? Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate())
-      : new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime()
-
-    return Math.max(0, Math.round((endDayTimestamp - startDayTimestamp) / 86400000))
-  }
-
-  const formatOverviewStartDateTime = (
-    value,
-    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
-  ) => {
-    if (!value) {
-      return '—'
-    }
-
-    const parsed = new Date(value)
-    if (!Number.isFinite(parsed.getTime())) {
-      return '—'
-    }
-
-    return `${formatOverviewDateLabel(parsed, timeMode)} ${formatOverviewTimeLabel(parsed, timeMode)}`
-  }
-
-  const formatOverviewEndDateTime = (
-    startValue,
-    endValue,
-    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
-  ) => {
-    if (!startValue || !endValue) {
-      return '—'
-    }
-
-    const startDate = new Date(startValue)
-    const endDate = new Date(endValue)
-    if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime())) {
-      return '—'
-    }
-
-    const dayOffset = getOverviewDayOffset(startDate, endDate, timeMode)
-    const timeLabel = formatOverviewTimeLabel(endDate, timeMode)
-
-    return dayOffset > 0 ? `${timeLabel} +${dayOffset}` : timeLabel
-  }
-
-  const formatElevation = (value) => {
-    if (!Number.isFinite(value)) {
-      return '—'
-    }
-
-    return `${value.toFixed(1)}°`
-  }
-
-  const buildCurrentScheduleItems = (schedules, relevantScheduleNames) => {
-    const relevantNames = new Set(relevantScheduleNames)
-
-    return schedules
-      .filter((schedule) => relevantNames.size === 0 || relevantNames.has(schedule.name))
-      .flatMap((schedule) =>
-        (schedule.activities ?? []).map((activity, activityIndex) => {
-          const startTime = getActivityStartTimestamp(activity)
-          const endTime = getActivityEndTimestamp(activity)
-
-          if (!startTime || !endTime) {
-            return null
-          }
-
-          return {
-            id: `current-${schedule.name}-${activity.uuid ?? activityIndex}`,
-            activityUuid: activity.uuid ? String(activity.uuid) : null,
-            label: activity.name?.trim() || 'Scheduled activity',
-            detail: schedule.name,
-            startTime,
-            endTime,
-          }
-        })
-      )
-      .filter(Boolean)
-      .sort((left, right) => {
-        const leftTimestamp = toTimestamp(left.startTime) ?? 0
-        const rightTimestamp = toTimestamp(right.startTime) ?? 0
-        return leftTimestamp - rightTimestamp
-      })
-  }
-
-  const getOverviewRowStatus = (row) => {
-    if (row.scheduleBlocked || row.availabilityStatus === 'blocked') {
-      return 'blocked'
-    }
-
-    if (
-      row.isEligible === false
-      || row.availabilityStatus === 'filtered'
-      || row.availabilityStatus === 'unavailable'
-    ) {
-      return 'ineligible'
-    }
-
-    return 'eligible'
-  }
-
-  const isUnavailableOverviewRow = (row) => getOverviewRowStatus(row) !== 'eligible'
-
-  const shouldHideOverviewRowInAvailableMode = (row) => getOverviewRowStatus(row) === 'ineligible'
-
-  const getOverviewDisplayLinkId = (row) => {
-    if (getOverviewRowStatus(row) === 'ineligible') {
-      return '—'
-    }
-
-    return row.backendLinkId ?? row.linkId ?? '—'
-  }
-
-  const formatDataDownlinkGb = (valueMb) => {
-    if (!Number.isFinite(valueMb)) {
-      return '—'
-    }
-
-    return formatGb(valueMb / 1000)
-  }
-
-  // The volume the backend scheduler actually offloads over this link
-  // (ScheduledLinkStatus.useful_data_offloaded_mb). It is authoritative and is
-  // never substituted with a locally derived estimate: the backend reports 0.0
-  // for every link it did not schedule, and presenting the theoretical pass
-  // capacity instead made unscheduled links look like they carried data.
-  const getBackendDataDownlinkMb = (item) => {
-    const usefulDataOffloadedMb = Number(item?.usefulDataOffloadedMb)
-    return Number.isFinite(usefulDataOffloadedMb) ? usefulDataOffloadedMb : Number.NaN
-  }
-
-  // What the link could carry if it were scheduled and the buffer were full
-  // (LinkBlock.estimated_data_capacity_mb, produced by the filter pipeline).
-  // A separate quantity from the offloaded volume - never conflate the two.
-  const getPassCapacityMb = (item) => {
-    const estimatedDataCapacityMb = Number(item?.estimatedDataCapacityMb)
-    return Number.isFinite(estimatedDataCapacityMb) ? estimatedDataCapacityMb : Number.NaN
-  }
-
-  const formatBufferLevelGb = (valueMb) => {
-    if (!Number.isFinite(valueMb)) {
-      return '—'
-    }
-
-    return formatGb(valueMb / 1000)
-  }
-
-  const getDayOfYear = (date, timeMode = DEFAULT_PLANNING_TIME_MODE) => {
-    const useUtc = timeMode === 'utc'
-    const year = useUtc ? date.getUTCFullYear() : date.getFullYear()
-    const month = useUtc ? date.getUTCMonth() : date.getMonth()
-    const day = useUtc ? date.getUTCDate() : date.getDate()
-    const start = Date.UTC(year, 0, 0)
-    const current = Date.UTC(year, month, day)
-    return Math.floor((current - start) / 86400000)
-  }
-
-  const formatTimelineHour = (date, timeMode) =>
-    date.toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      ...getTimeZoneFormatOptions(timeMode),
-    })
-
-  const formatTimelineDateTime = (
-    value,
-    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
-  ) => {
-    if (!value) {
-      return '—'
-    }
-
-    const parsed = new Date(value)
-    if (!Number.isFinite(parsed.getTime())) {
-      return '—'
-    }
-
-    return parsed.toLocaleString([], {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      ...getTimeZoneFormatOptions(timeMode),
-    })
-  }
-
-  const formatTimelinePlayheadDateTime = (
-    value,
-    timeMode = activePlanningWindow?.timeMode ?? planningTimeMode,
-  ) => {
-    const parsed = new Date(value)
-    if (!Number.isFinite(parsed.getTime())) {
-      return '—'
-    }
-
-    const formatted = parsed.toLocaleString([], {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      ...getTimeZoneFormatOptions(timeMode),
-    })
-
-    return `${formatted} ${timeMode === 'local' ? 'Local' : 'UTC'}`
-  }
-
-  const formatTimelineDuration = (startValue, endValue) => {
-    const startTimestamp = toTimestamp(startValue)
-    const endTimestamp = toTimestamp(endValue)
-
-    if (
-      startTimestamp === null
-      || endTimestamp === null
-      || endTimestamp <= startTimestamp
-    ) {
-      return '—'
-    }
-
-    const durationSeconds = (endTimestamp - startTimestamp) / 1000
-    return formatDurationFromSeconds(durationSeconds)
-  }
-
-  const formatTimelineItemDuration = (item) => {
-    if (item?.kind === 'link' && Number.isFinite(item.durationSeconds) && item.durationSeconds > 0) {
-      return formatDurationFromSeconds(item.durationSeconds)
-    }
-
-    return formatTimelineDuration(item?.startTime, item?.endTime)
-  }
-
-  const formatTimelineDay = (date, timeMode) =>
-    `${date.toLocaleDateString([], {
-      year: 'numeric',
-      month: 'long',
-      day: '2-digit',
-      ...getTimeZoneFormatOptions(timeMode),
-    })} (DOY ${getDayOfYear(date, timeMode)})`
-
-  const formatPlanningWindow = (startValue, endValue, timeMode = DEFAULT_PLANNING_TIME_MODE) => {
-    const start = startValue ? new Date(startValue) : null
-    const end = endValue ? new Date(endValue) : null
-
-    if (
-      !start
-      || !end
-      || !Number.isFinite(start.getTime())
-      || !Number.isFinite(end.getTime())
-    ) {
-      return '—'
-    }
-
-    const sameDay = formatPlanningDateFields(start, timeMode).date
-      === formatPlanningDateFields(end, timeMode).date
-
-    if (sameDay) {
-      return `${start.toLocaleDateString([], {
-        year: 'numeric',
-        month: 'short',
-        day: '2-digit',
-        ...getTimeZoneFormatOptions(timeMode),
-      })}, ${start.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        ...getTimeZoneFormatOptions(timeMode),
-      })} - ${end.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        ...getTimeZoneFormatOptions(timeMode),
-      })}`
-    }
-
-    return `${formatTimelineDateTime(startValue, timeMode)} - ${formatTimelineDateTime(endValue, timeMode)}`
-  }
-
-  const layoutTimelineItems = (items) => {
-    const lanes = []
-
-    const positionedItems = [...items]
-      .sort((left, right) => left.startMinutes - right.startMinutes)
-      .map((item) => {
-        let laneIndex = lanes.findIndex((laneEnd) => item.startMinutes >= laneEnd)
-
-        if (laneIndex === -1) {
-          laneIndex = lanes.length
-          lanes.push(item.startMinutes + item.durationMinutes)
-        } else {
-          lanes[laneIndex] = item.startMinutes + item.durationMinutes
-        }
-
-        return {
-          ...item,
-          laneIndex,
-        }
-      })
-
-    return {
-      laneCount: Math.max(1, lanes.length),
-      items: positionedItems,
-    }
-  }
-
-  const buildDayBands = (baseDate, totalMinutes, timeMode) => {
-    const bands = []
-    let cursor = new Date(baseDate)
-    if (timeMode === 'utc') {
-      cursor.setUTCHours(0, 0, 0, 0)
-    } else {
-      cursor.setHours(0, 0, 0, 0)
-    }
-
-    while (bands.length === 0 || cursor < new Date(baseDate.getTime() + totalMinutes * 60000)) {
-      const nextDay = new Date(cursor)
-      if (timeMode === 'utc') {
-        nextDay.setUTCDate(cursor.getUTCDate() + 1)
-      } else {
-        nextDay.setDate(cursor.getDate() + 1)
-      }
-
-      const startMinutes = Math.max(0, (cursor.getTime() - baseDate.getTime()) / 60000)
-      const endMinutes = Math.min(totalMinutes, (nextDay.getTime() - baseDate.getTime()) / 60000)
-
-      if (endMinutes > startMinutes) {
-        bands.push({
-          startMinutes,
-          widthMinutes: endMinutes - startMinutes,
-          label: formatTimelineDay(cursor, timeMode),
-          alt: bands.length % 2 === 1,
-        })
-      }
-
-      if (endMinutes >= totalMinutes) {
-        break
-      }
-
-      cursor = nextDay
-    }
-
-    return bands
-  }
-
-  // Timeline rows are asset-centric: one collapsible group per satellite and
-  // per ground station, a header row per group that aggregates what is
-  // actually scheduled for that asset, and one sub-row per counterpart it
-  // actually has overpasses with. Every link therefore appears TWICE (once
-  // under its satellite, once under its ground station); both instances share
-  // a `linkId` so marking one marks the other.
-  const buildTimelineModel = (rows, groups, currentScheduleItems, planningWindow) => {
-    const timeMode = planningWindow?.timeMode ?? DEFAULT_PLANNING_TIME_MODE
-    const optionByOverpassId = new Map(
-      groups
-        .flatMap((group) => group.options)
-        .map((option) => [option.overpassId, option]),
-    )
-
-    // One bar per overpass instead of one bar per layer. With per-counterpart
-    // rows a "potential" and a "proposed" copy of the same overpass would land
-    // on the exact same pixels of the exact same row, so the layer toggles now
-    // filter which KIND of bar is drawn rather than which track exists.
-    const linkSourceItems = rows
-      .map((row) => {
-        const startTimestamp = toTimestamp(row.startTime)
-        const endTimestamp = toTimestamp(row.endTime)
-
-        if (
-          startTimestamp === null
-          || endTimestamp === null
-          || endTimestamp <= startTimestamp
-        ) {
-          return null
-        }
-
-        const linkedOption = optionByOverpassId.get(row.overpassId)
-        const hasTradeOff = Boolean(row.tradeOffId && row.tradeOffId !== '—')
-        const partOfProposal = tradeOffsCalculated && row.isScheduled
-        const dimmed = tradeOffsCalculated && hasTradeOff && !row.isScheduled
-        const ineligible = getOverviewRowStatus(row) === 'ineligible'
-
-        let variant = 'neutral'
-        if (row.scheduleBlocked) {
-          variant = 'blocked'
-        } else if (row.overrideState === 'excluded') {
-          variant = 'excluded'
-        } else if (row.overrideState === 'pinned') {
-          variant = 'pinned'
-        } else if (row.isScheduled) {
-          variant = 'selected'
-        } else if (hasTradeOff) {
-          variant = 'candidate'
-        } else if (tradeOffsCalculated) {
-          variant = 'neutral'
-        }
-
-        const resolvedLinkId = (row.backendLinkId && String(row.backendLinkId).trim().length > 0)
-          ? row.backendLinkId
-          : (row.linkId && String(row.linkId).trim().length > 0)
-            ? row.linkId
-            : row.overpassId
-
-        return {
-          kind: 'link',
-          linkId: resolvedLinkId,
-          overpassId: row.overpassId,
-          satId: row.satId,
-          gsId: row.gsId,
-          durationSeconds: row.durationSeconds,
-          label: resolvedLinkId,
-          detail: hasTradeOff
-            ? `${row.satId} → ${row.gsId} · ${row.tradeOffId}`
-            : `${row.satId} → ${row.gsId}`,
-          startTime: row.startTime,
-          endTime: row.endTime,
-          startTimestamp,
-          endTimestamp,
-          variant,
-          dimmed,
-          ineligible,
-          blocked: Boolean(row.scheduleBlocked),
-          blockMessage: row.scheduleBlocked
-            ? row.rejectionReason
-            : null,
-          tradeOffId: hasTradeOff ? row.tradeOffId : null,
-          tradeOffGroupId: linkedOption?.tradeOffGroupId ?? (hasTradeOff ? row.tradeOffId : null),
-          tradeOffColorIndex: row.tradeOffColorIndex ?? null,
-          optionId: linkedOption?.optionId ?? null,
-          isSchedulable: getOverviewRowStatus(row) === 'eligible',
-          isScheduled: Boolean(row.isScheduled),
-          recommended: row.isScheduled && row.overrideState === 'auto',
-          overrideState: row.overrideState,
-          usefulDataOffloadedMb: row.usefulDataOffloadedMb,
-          score: row.score,
-          rejectionReason: row.rejectionReason,
-        }
-      })
-      .filter(Boolean)
-
-    const blockedRows = rows.filter((row) => row.scheduleBlocked)
-    const currentSourceItems = currentScheduleItems
-      .map((item) => {
-        const startTimestamp = toTimestamp(item.startTime)
-        const endTimestamp = toTimestamp(item.endTime)
-
-        if (
-          startTimestamp === null
-          || endTimestamp === null
-          || endTimestamp <= startTimestamp
-        ) {
-          return null
-        }
-
-        // A SatOS activity that pushes an overpass out of the plan is drawn in
-        // the asset's header row as a blocking bar -- that is the red bar in
-        // the agreed layout sketch.
-        const blocking = blockedRows.some(
-          (row) => row.conflictingActivityUuid && row.conflictingActivityUuid === item.activityUuid,
-        )
-
-        return {
-          kind: 'activity',
-          id: item.id,
-          linkId: null,
-          assetName: item.detail,
-          label: item.label,
-          detail: item.detail,
-          durationSeconds: null,
-          startTime: item.startTime,
-          endTime: item.endTime,
-          startTimestamp,
-          endTimestamp,
-          layer: 'current',
-          variant: blocking ? 'blocking' : 'current',
-          dimmed: false,
-          blocked: false,
-          blockMessage: null,
-          tradeOffId: null,
-          tradeOffScore: null,
-          tradeOffColorIndex: null,
-          optionId: null,
-          recommended: false,
-        }
-      })
-      .filter(Boolean)
-
-    const planningStartTimestamp = toTimestamp(planningWindow?.startTime)
-    const planningEndTimestamp = toTimestamp(planningWindow?.endTime)
-
-    const clampTimelineItemToWindow = (item) => {
-      const clampedStartTimestamp = planningStartTimestamp !== null
-        ? Math.max(item.startTimestamp, planningStartTimestamp)
-        : item.startTimestamp
-      const clampedEndTimestamp = planningEndTimestamp !== null
-        ? Math.min(item.endTimestamp, planningEndTimestamp)
-        : item.endTimestamp
-
-      if (clampedEndTimestamp <= clampedStartTimestamp) {
-        return null
-      }
-
-      return {
-        ...item,
-        startTimestamp: clampedStartTimestamp,
-        endTimestamp: clampedEndTimestamp,
-        startTime: new Date(clampedStartTimestamp).toISOString(),
-        endTime: new Date(clampedEndTimestamp).toISOString(),
-      }
-    }
-
-    const clampedLinkItems = linkSourceItems
-      .map(clampTimelineItemToWindow)
-      .filter(Boolean)
-    const clampedCurrentItems = currentSourceItems
-      .map(clampTimelineItemToWindow)
-      .filter(Boolean)
-    const allTimestampItems = [...clampedCurrentItems, ...clampedLinkItems]
-
-    if (
-      allTimestampItems.length === 0
-      && (planningStartTimestamp === null || planningEndTimestamp === null)
-    ) {
-      return null
-    }
-
-    const minTimestamp = allTimestampItems.length > 0
-      ? Math.min(...allTimestampItems.map((item) => item.startTimestamp))
-      : planningStartTimestamp
-    const maxTimestamp = allTimestampItems.length > 0
-      ? Math.max(...allTimestampItems.map((item) => item.endTimestamp))
-      : planningEndTimestamp
-    const baseTimestamp = planningStartTimestamp ?? (minTimestamp - 30 * 60000)
-    const endTimestamp = planningEndTimestamp ?? (maxTimestamp + 30 * 60000)
-    // When an explicit planning window is active, use its exact (possibly
-    // fractional) duration in minutes instead of flooring/padding it. The
-    // playhead slider above the timeline positions itself as a fraction of
-    // planningWindowStartTimestamp/EndTimestamp directly, while the marker
-    // line drawn inside the scrollable canvas positions itself as a
-    // fraction of this totalMinutes value -- if totalMinutes were rounded
-    // up (Math.ceil) or padded out to a 60-minute floor, the two would be
-    // computing their percentage against slightly different spans and the
-    // timestamp label and its line would visibly drift apart, worse the
-    // shorter the actual planning window is. Only fall back to the
-    // floor/rounding when there's no explicit window to derive exact
-    // bounds from (the timeline is instead sized to whatever schedule data
-    // happens to exist, padded with a 30-minute margin).
-    const totalMinutes = (planningStartTimestamp !== null && planningEndTimestamp !== null)
-      ? Math.max(1, (endTimestamp - baseTimestamp) / 60000)
-      : Math.max(60, Math.ceil((endTimestamp - baseTimestamp) / 60000))
-    const baseDate = new Date(baseTimestamp)
-
-    const mapToTimelineItem = (item) => ({
-      ...item,
-      startMinutes: (item.startTimestamp - baseTimestamp) / 60000,
-      durationMinutes: Math.max(1 / 60, (item.endTimestamp - item.startTimestamp) / 60000),
-    })
-
-    const visibleActivityItems = filterVisibleTimelineActivities(clampedCurrentItems, timelineLayers)
-    const visibleLinkItems = filterVisibleTimelineLinks(clampedLinkItems, timelineLayers)
-
-    const satelliteNames = [...new Set([
-      ...rows.map((row) => row.satId),
-      ...clampedCurrentItems
-        .filter((item) => selectedSatellites.includes(item.assetName))
-        .map((item) => item.assetName),
-    ].filter(Boolean))].sort((left, right) => String(left).localeCompare(String(right)))
-
-    const groundStationNames = [...new Set([
-      ...rows.map((row) => row.gsId),
-      ...clampedCurrentItems
-        .filter((item) => selectedGroundStations.includes(item.assetName))
-        .map((item) => item.assetName),
-    ].filter(Boolean))].sort((left, right) => String(left).localeCompare(String(right)))
-
-    const buildAssetGroup = (kind, assetName) => {
-      const ownLinkItems = visibleLinkItems.filter(
-        (item) => (kind === 'satellite' ? item.satId : item.gsId) === assetName,
-      )
-      const counterpartOf = (item) => (kind === 'satellite' ? item.gsId : item.satId)
-
-      // Q15: a sub-row exists only for counterparts with at least one overpass
-      // in the planning window -- a full cross product of every selected
-      // satellite against every selected ground station would be mostly blank.
-      const counterpartNames = [...new Set(ownLinkItems.map(counterpartOf).filter(Boolean))]
-        .sort((left, right) => String(left).localeCompare(String(right)))
-
-      const headerSource = [
-        ...visibleActivityItems.filter((item) => item.assetName === assetName),
-        // The header aggregates what is actually scheduled for this
-        // asset, so a collapsed group still tells the truth.
-        ...ownLinkItems.filter((item) => item.isScheduled),
-      ]
-      const headerLayout = layoutTimelineItems(headerSource.map(mapToTimelineItem))
-
-      const assetRows = counterpartNames.map((counterpartName) => {
-        const rowItems = ownLinkItems.filter((item) => counterpartOf(item) === counterpartName)
-        const layout = layoutTimelineItems(rowItems.map(mapToTimelineItem))
-
-        return {
-          id: `${kind}:${assetName}|${counterpartName}`,
-          counterpartName,
-          label: `${assetName} – ${counterpartName}`,
-          laneCount: layout.laneCount,
-          items: layout.items.map((item) => ({
-            ...item,
-            id: `${kind}:${assetName}|${counterpartName}|${item.overpassId || item.linkId}`,
-          })),
-          containsSelected: rowItems.some((item) => item.variant === 'selected'),
-        }
-      })
-
-      return {
-        id: `${kind}:${assetName}`,
-        kind,
-        name: assetName,
-        label: assetName,
-        laneCount: headerLayout.laneCount,
-        items: headerLayout.items.map((item) => ({
-          ...item,
-          id: `${kind}:${assetName}|header|${item.overpassId || item.linkId || item.id}`,
-        })),
-        rows: assetRows,
-        linkCount: assetRows.length,
-      }
-    }
-
-    const satelliteGroups = satelliteNames.map((name) => buildAssetGroup('satellite', name))
-    const groundStationGroups = groundStationNames.map((name) => buildAssetGroup('ground_station', name))
-
-    const firstTickDate = new Date(baseDate.getTime())
-    if (timeMode === 'utc') {
-      firstTickDate.setUTCMinutes(0, 0, 0)
-      if (firstTickDate.getTime() < baseDate.getTime()) {
-        firstTickDate.setUTCHours(firstTickDate.getUTCHours() + 1)
-      }
-    } else {
-      firstTickDate.setMinutes(0, 0, 0)
-      if (firstTickDate.getTime() < baseDate.getTime()) {
-        firstTickDate.setHours(firstTickDate.getHours() + 1)
-      }
-    }
-
-    const ticks = []
-    for (
-      let tickDate = new Date(firstTickDate.getTime());
-      tickDate.getTime() <= baseDate.getTime() + totalMinutes * 60000;
-      tickDate = new Date(tickDate.getTime() + 60 * 60000)
-    ) {
-      const offsetMinutes = (tickDate.getTime() - baseDate.getTime()) / 60000
-      if (offsetMinutes >= 0 && offsetMinutes <= totalMinutes) {
-        ticks.push({
-          offsetMinutes,
-          date: tickDate,
-          label: formatTimelineHour(tickDate, timeMode),
-        })
-      }
-    }
-
-    return {
-      baseDate,
-      endDate: new Date(baseDate.getTime() + totalMinutes * 60000),
-      totalMinutes,
-      widthPx: Math.max(980, totalMinutes * 2.2),
-      ticks,
-      dayBands: buildDayBands(baseDate, totalMinutes, timeMode),
-      sections: [
-        timelineAssetVisibility.satellites
-          ? { id: 'satellites', label: 'Satellites', groups: satelliteGroups }
-          : null,
-        timelineAssetVisibility.groundStations
-          ? { id: 'groundStations', label: 'Ground Stations', groups: groundStationGroups }
-          : null,
-      ].filter(Boolean),
-      hasVisibleItems: visibleLinkItems.length > 0 || visibleActivityItems.length > 0,
-    }
-  }
-
-  const normalizeAssetClassification = (asset) => {
-    if (asset.classification === 'satellite') {
-      return 'satellite'
-    }
-
-    if (asset.classification === 'groundstation' || asset.classification === 'ground_station') {
-      return 'ground_station'
-    }
-
-    if (asset.classification === 'ineligible' || asset.eligible === false) {
-      return 'ineligible'
-    }
-
-    return asset.classification ?? 'unknown'
-  }
-
-  const resetWorkspaceState = () => {
-    const planningWindowPreset = buildPlanningWindowPreset()
-
-    setSelectedSatellites([])
-    setSelectedGroundStations([])
-    setMinimumLinkElevationFilterDeg('')
-    setMinimumPeakElevationFilterDeg('')
-    setPlanningTimeMode(DEFAULT_PLANNING_TIME_MODE)
-    setPlanningWindowStartDate(planningWindowPreset.startDate)
-    setPlanningWindowStartTime(planningWindowPreset.startTime)
-    setPlanningWindowEndDate(planningWindowPreset.endDate)
-    setPlanningWindowEndTime(planningWindowPreset.endTime)
-    setPlanningWindowResetPreset({
-      startIso: planningWindowPreset.startIso,
-      endIso: planningWindowPreset.endIso,
-    })
-    setActiveTimeMenu(null)
-    setSidebarCollapsed(false)
-    setLaunchingScheduler(false)
-    setSchedulerLaunched(false)
-    setOverviewRows([])
-    setShowUnavailableOverviewRows(true)
-    setSatelliteTracks({})
-    setOrbitEngineRunId(null)
-    setPropagationResult(null)
-    setPropagationRequestKey(null)
-    setFilterRunId(null)
-    setFilteredLinks([])
-    setSessionId(null)
-    setSessionPlan(null)
-    setExtractionStatus('Not started')
-    setExtractionProgress(0)
-    setExtractionMessages([])
-    setCalculatingTradeOffs(false)
-    setTradeOffsCalculated(false)
-    setTradeOffCards([])
-    setActiveTradeOffCardIndex(0)
-    setSelectedTradeOffOption({})
-    setTimelineTradeOffViewId(null)
-    setActiveMapAssetId(null)
-    setActivePlanningWindow(null)
-    const planningWindowStartTimestamp = new Date(planningWindowPreset.startIso).getTime()
-    setTimelinePlayheadTime(planningWindowStartTimestamp)
-    timelinePlayheadTimeRef.current = planningWindowStartTimestamp
-    setTimelineLive(false)
-    setTimelinePlaying(false)
-    setTimelinePlaybackSpeed(1)
-    setTimelineZoomLevel(TIMELINE_DEFAULT_ZOOM_LEVEL)
-    setExpandedTimelineGroups({})
-    setExpandedTimelineSections({ satellites: true, groundStations: true })
-    setMarkedTimelineLinkId(null)
-    setMarkedTradeOffOptionId(null)
-    setTimelineLayers({
-      payload: true,
-      communication: true,
-      ineligible: false,
-    })
-    setExpandedSections({
-      timeWindow: true,
-      satellites: true,
-      groundStations: true,
-      unavailableAssets: false,
-      linkFilters: true,
-      bufferConfig: true,
-      tradeOffConfig: true,
-      mapView: true,
-      overview: true,
-      tradeOff: true,
-      timeline: true,
-    })
-    setDataStartFillGb(DEFAULT_DATA_START_FILL_GB)
-    setDataGenerationMbps(DEFAULT_DATA_GENERATION_MBPS)
-    setDataCapacityGb(DEFAULT_DATA_CAPACITY_GB)
-    setDataDownlinkRateMbps(DEFAULT_DOWNLINK_RATE_MBPS)
-    setTradeOffStrategy(DEFAULT_TRADE_OFF_STRATEGY)
-    setScoringAlpha(DEFAULT_SCORING_ALPHA)
-    setScoringExponent(DEFAULT_SCORING_EXPONENT)
-    setConfirmingSchedule(false)
-    setConfirmationProgress(0)
-    setConfirmationStep('')
-    setIsScheduleStaged(false)
-    setConfirmationSuccess(false)
-    setScheduleCommitted(false)
-    setConfirmedScheduleCount(0)
-    setCreatedActivitiesCount(0)
-    setConfirmedStagingLinks({})
-    setOverridingLinkId(null)
-  }
-
-  const planningDateAndTimeToIso = (dateValue, timeValue, timeMode = planningTimeMode) =>
-    parsePlanningDateFields(dateValue, timeValue, timeMode)?.toISOString() ?? null
-
-  const setPlanningStartFromDate = (date) => {
-    const fields = formatPlanningDateFields(date, planningTimeMode)
-    setPlanningWindowStartDate(fields.date)
-    setPlanningWindowStartTime(fields.time)
-  }
-
-  const setPlanningEndFromDate = (date) => {
-    const fields = formatPlanningDateFields(date, planningTimeMode)
-    setPlanningWindowEndDate(fields.date)
-    setPlanningWindowEndTime(fields.time)
-  }
-
-  const handlePlanningTimeModeChange = (nextMode) => {
-    if (nextMode === planningTimeMode) {
-      return
-    }
-
-    const start = parsePlanningDateFields(
-      planningWindowStartDate,
-      planningWindowStartTime,
-      planningTimeMode,
-    )
-    const end = parsePlanningDateFields(
-      planningWindowEndDate,
-      planningWindowEndTime,
-      planningTimeMode,
-    )
-
-    setPlanningTimeMode(nextMode)
-
-    if (start) {
-      const startFields = formatPlanningDateFields(start, nextMode)
-      setPlanningWindowStartDate(startFields.date)
-      setPlanningWindowStartTime(startFields.time)
-    }
-
-    if (end) {
-      const endFields = formatPlanningDateFields(end, nextMode)
-      setPlanningWindowEndDate(endFields.date)
-      setPlanningWindowEndTime(endFields.time)
-    }
-  }
-
-  const handleSetCurrentPlanningTime = (target) => {
-    const now = new Date()
-
-    if (target === 'end') {
-      setPlanningEndFromDate(now)
-      return
-    }
-
-    const currentEnd = parsePlanningDateFields(
-      planningWindowEndDate,
-      planningWindowEndTime,
-      planningTimeMode,
-    )
-
-    setPlanningStartFromDate(now)
-
-    if (!currentEnd || currentEnd <= now) {
-      setPlanningEndFromDate(new Date(now.getTime() + 60 * 60000))
-    }
-  }
-
-  const handleShiftPlanningTime = (target, offsetMinutes) => {
-    const isStart = target === 'start'
-    const current = parsePlanningDateFields(
-      isStart ? planningWindowStartDate : planningWindowEndDate,
-      isStart ? planningWindowStartTime : planningWindowEndTime,
-      planningTimeMode,
-    ) ?? new Date()
-    const shifted = new Date(current.getTime() + offsetMinutes * 60000)
-
-    if (isStart) {
-      setPlanningStartFromDate(shifted)
-    } else {
-      setPlanningEndFromDate(shifted)
-    }
-  }
-
-  const handleResetPlanningTime = (target) => {
-    const presetValue = target === 'start'
-      ? planningWindowResetPreset.startIso
-      : planningWindowResetPreset.endIso
-    const presetDate = resolvePlanningResetDate(presetValue, planningTimeMode, target)
-
-    if (target === 'start') {
-      setPlanningStartFromDate(presetDate)
-    } else {
-      setPlanningEndFromDate(presetDate)
-    }
   }
 
   const formatTaskStatusLabel = (status) => {
@@ -1611,82 +384,39 @@ export default function App() {
     }
   }
 
-  const fetchAssets = async ({ forceRefresh = false } = {}) => {
-    setLoading(true)
-    setError(null)
-    setAssets([])
-    setAssetSchedules([])
-    setAssetsCached(null)
-    resetWorkspaceState()
-    try {
-      const data = await initializeAssets({ forceRefresh })
-      if (data && Array.isArray(data.assets)) {
-        setSatosAlive(true)
-        setAssets(data.assets)
-        setAssetSchedules(Array.isArray(data.schedules) ? data.schedules : [])
-        setAssetsCached(Boolean(data.cached))
-      } else {
-        throw new Error("Invalid response format from server")
-      }
-    } catch (err) {
-      console.error(err)
-      setSatosAlive(false)
-      setError(err.message || 'Failed to fetch assets. Verify your backend or SatOS credentials.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Mission assets are loaded automatically as soon as the backend answers its
-  // health check, so the operator never has to trigger the first fetch by hand.
-  // The ref stops a successful load from repeating (fetchAssets resets the
-  // workspace); a failed attempt is retried when the backend comes back, or
-  // manually from the status strip on the landing page.
-  const assetAutoLoadAttemptedRef = useRef(false)
-  const fetchAssetsRef = useRef(fetchAssets)
-
-  // Kept in an effect rather than assigned during render, so the auto-load
-  // effect below can call the latest fetchAssets without taking a dependency
-  // on its identity (which changes on every render).
-  useEffect(() => {
-    fetchAssetsRef.current = fetchAssets
-  })
-
-  useEffect(() => {
-    if (backendAlive !== true) {
-      if (backendAlive === false) {
-        assetAutoLoadAttemptedRef.current = false
-      }
-      return
-    }
-    if (assetAutoLoadAttemptedRef.current || loading || assets.length > 0) {
-      return
-    }
-    assetAutoLoadAttemptedRef.current = true
-    fetchAssetsRef.current()
-  }, [backendAlive, loading, assets.length])
-
   const appendTaskStatus = (taskStatus, stageLabel, progressStart = 0, progressSpan = 100) => {
-    setExtractionStatus(`${stageLabel}: ${formatTaskStatusLabel(taskStatus.status)}`)
     const taskProgress = Number.isFinite(taskStatus.progress) ? taskStatus.progress : 0
-    setExtractionProgress(Math.round(progressStart + (taskProgress / 100) * progressSpan))
+    dispatchScheduler({
+      type: 'progressReported',
+      statusLabel: `${stageLabel}: ${formatTaskStatusLabel(taskStatus.status)}`,
+      progress: Math.round(progressStart + (taskProgress / 100) * progressSpan),
+    })
 
     if (taskStatus.message) {
-      setExtractionMessages((current) => {
-        const text = `${stageLabel}: ${taskStatus.message}`
-        if (current[current.length - 1]?.text === text) {
-          return current
-        }
-        return [
-          ...current,
-          {
-            id: `${stageLabel}-${taskStatus.status}-${taskStatus.progress ?? 0}-${current.length}`,
-            text,
-          },
-        ]
+      // The reducer drops a repeat of the previous line, so a stage that
+      // polls for a minute does not print the same message sixty times.
+      dispatchScheduler({
+        type: 'messageAppended',
+        message: {
+          id: nextExtractionMessageId(`${stageLabel}-${taskStatus.status}-${taskStatus.progress ?? 0}`),
+          text: `${stageLabel}: ${taskStatus.message}`,
+        },
       })
     }
   }
+
+  // The time mode the operator is actually looking at: the window the
+  // scheduler ran with once one exists, otherwise the landing form's setting.
+  // These four formatters defaulted to it before they moved to domain/format.js.
+  const displayTimeMode = activePlanningWindow?.timeMode ?? planningTimeMode
+  const formatOverviewStartDateTime = (value, timeMode = displayTimeMode) =>
+    formatOverviewStartDateTimeIn(value, timeMode)
+  const formatOverviewEndDateTime = (startValue, endValue, timeMode = displayTimeMode) =>
+    formatOverviewEndDateTimeIn(startValue, endValue, timeMode)
+  const formatTimelineDateTime = (value, timeMode = displayTimeMode) =>
+    formatTimelineDateTimeIn(value, timeMode)
+  const formatTimelinePlayheadDateTime = (value, timeMode = displayTimeMode) =>
+    formatTimelinePlayheadDateTimeIn(value, timeMode)
 
   const formatFilteredRows = (links) => buildRowsFromFilteredLinks(links).map((row) => ({
     ...row,
@@ -1729,39 +459,32 @@ export default function App() {
     let nextOrbitEngineRunId = canReusePropagation ? orbitEngineRunId : null
     let activeBackendStage = canReusePropagation ? 'Filtering' : 'Propagation'
 
-    setLaunchingScheduler(true)
     setError(null)
-    setExtractionProgress(0)
 
     const initialMessages = clearExistingScopeActivities
       ? [
           {
-            id: `clear-scope-init-${Date.now()}`,
+            id: nextExtractionMessageId('clear-scope-init'),
             text: 'SatOS: Clearing all existing SCOPE activities from configured schedules...',
           },
         ]
       : [
           {
-            id: `queued-${Date.now()}`,
+            id: nextExtractionMessageId('queued'),
             text: 'Task queued. Waiting for backend processing to start.',
           },
         ]
 
-    setExtractionStatus(clearExistingScopeActivities ? 'SatOS: Purging SCOPE activities' : 'Queued')
-    setExtractionMessages(initialMessages)
+    dispatchScheduler({
+      type: 'runStarted',
+      purging: clearExistingScopeActivities,
+      messages: initialMessages,
+    })
     setOverviewRows([])
     if (!canReusePropagation) {
-      setSatelliteTracks({})
-      setOrbitEngineRunId(null)
-      setPropagationResult(null)
-      setPropagationRequestKey(null)
+      clearPropagation()
     }
-    setFilterRunId(null)
-    setFilteredLinks([])
-    setSessionId(null)
-    setSessionPlan(null)
-    setSchedulerLaunched(true)
-    setTradeOffsCalculated(false)
+    clearSession()
     setTradeOffCards([])
     setActiveTradeOffCardIndex(0)
     setSelectedTradeOffOption({})
@@ -1770,17 +493,8 @@ export default function App() {
     setExpandedTimelineSections({ satellites: true, groundStations: true })
     setMarkedTimelineLinkId(null)
     setMarkedTradeOffOptionId(null)
-    setIsScheduleStaged(false)
-    setConfirmationSuccess(false)
-    setScheduleCommitted(false)
-    setConfirmedScheduleCount(0)
-    setCreatedActivitiesCount(0)
-    setConfirmedStagingLinks({})
-    const schedulerLaunchTime = new Date(planningWindow.startTime).getTime()
-    setTimelinePlayheadTime(schedulerLaunchTime)
-    timelinePlayheadTimeRef.current = schedulerLaunchTime
-    setTimelineLive(false)
-    setTimelinePlaying(false)
+    resetStagingReview()
+    jumpTimelinePlayheadTo(new Date(planningWindow.startTime).getTime())
     setSidebarCollapsed(true)
 
     setActivePlanningWindow(planningWindow)
@@ -1803,17 +517,17 @@ export default function App() {
           ? `SatOS: Purge complete. Successfully cleared ${deletedCount} SCOPE activit${deletedCount === 1 ? 'y' : 'ies'} across ${schedCount} schedule(s).`
           : 'SatOS: Purge complete. No existing SCOPE activities found in the selected schedule interval.'
 
-        setExtractionMessages((current) => [
-          ...current,
-          {
-            id: `clear-scope-done-${Date.now()}`,
-            text: summaryText,
-          },
-          {
-            id: `queued-after-clear-${Date.now()}`,
+        dispatchScheduler({
+          type: 'messageAppended',
+          message: { id: nextExtractionMessageId('clear-scope-done'), text: summaryText },
+        })
+        dispatchScheduler({
+          type: 'messageAppended',
+          message: {
+            id: nextExtractionMessageId('queued-after-clear'),
             text: 'Task queued. Waiting for backend processing to start.',
           },
-        ])
+        })
 
         try {
           const freshAssets = await initializeAssets()
@@ -1846,19 +560,27 @@ export default function App() {
         setPropagationRequestKey(nextPropagationRequestKey)
         setSatelliteTracks(completedPropagationResult?.global_tracks ?? {})
       } else {
-        setExtractionStatus('Filtering: Queued')
-        setExtractionProgress(65)
-        setExtractionMessages((current) => [
-          ...current,
-          { id: `propagation-reused-${nextOrbitEngineRunId}`, text: 'Propagation: Reusing the current orbit-engine result.' },
-        ])
+        dispatchScheduler({
+          type: 'stageEntered',
+          status: 'filtering',
+          statusLabel: 'Filtering: Queued',
+          progress: STAGE_PROGRESS_SPAN.filtering.start,
+        })
+        dispatchScheduler({
+          type: 'messageAppended',
+          message: {
+            id: `propagation-reused-${nextOrbitEngineRunId}`,
+            text: 'Propagation: Reusing the current orbit-engine result.',
+          },
+        })
       }
 
       activeBackendStage = 'Filtering'
-      setExtractionMessages((current) => [
-        ...current,
-        { id: `filter-queued-${nextOrbitEngineRunId}`, text: 'Filtering: Task queued.' },
-      ])
+      dispatchScheduler({ type: 'stageEntered', status: 'filtering' })
+      dispatchScheduler({
+        type: 'messageAppended',
+        message: { id: `filter-queued-${nextOrbitEngineRunId}`, text: 'Filtering: Task queued.' },
+      })
 
       const filterReceipt = await startLinkFiltering({
         orbit_engine_run_id: nextOrbitEngineRunId,
@@ -1875,34 +597,24 @@ export default function App() {
       setFilterRunId(filterResult?.payload?.filter_run_id ?? filterReceipt.task_id)
       setFilteredLinks(nextFilteredLinks)
       setOverviewRows(formatFilteredRows(nextFilteredLinks))
-      setExtractionStatus('Completed')
-      setExtractionProgress(100)
+      dispatchScheduler({ type: 'linksReady' })
       return true
     } catch (err) {
       const wasTerminated = err?.name === 'AbortError'
       if (!wasTerminated) {
         console.error(err)
       }
-      setOverviewRows([])
-      setFilterRunId(null)
-      setFilteredLinks([])
-      setSessionId(null)
-      setSessionPlan(null)
+      clearSession()
       setActivePlanningWindow(null)
-      setSchedulerLaunched(false)
       setSidebarCollapsed(false)
-      setExtractionStatus(wasTerminated ? 'Stopped waiting' : 'Failed')
+      dispatchScheduler({ type: 'runFailed', aborted: wasTerminated })
       if (!completedPropagationResult) {
-        setSatelliteTracks({})
-        setOrbitEngineRunId(null)
-        setPropagationResult(null)
-        setPropagationRequestKey(null)
+        clearPropagation()
       }
       setError(wasTerminated ? null : (err.message || `${activeBackendStage} failed in the backend.`))
       return false
     } finally {
       schedulerAbortControllerRef.current = null
-      setLaunchingScheduler(false)
     }
   }
 
@@ -1915,7 +627,6 @@ export default function App() {
     const schedulerStarted = await handleLaunchScheduler()
 
     if (schedulerStarted) {
-      setSchedulerLaunched(true)
       setView('workspace')
     }
   }
@@ -1963,19 +674,14 @@ export default function App() {
     setOverviewRows(nextRows)
     setTradeOffCards(nextCards)
     setSelectedTradeOffOption(nextSelectedOptions)
+    dispatchScheduler({ type: 'scored' })
     setTimelineTradeOffViewId(preservedTimelineTradeOffCard?.id ?? null)
     setActiveTradeOffCardIndex(
       preservedTimelineTradeOffCard
         ? nextCards.findIndex((card) => card.id === preservedTimelineTradeOffCard.id)
         : 0,
     )
-    setTradeOffsCalculated(true)
-    setIsScheduleStaged(false)
-    setConfirmationSuccess(false)
-    setScheduleCommitted(false)
-    setConfirmedScheduleCount(0)
-    setCreatedActivitiesCount(0)
-    setConfirmedStagingLinks({})
+    resetStagingReview()
     if (focusTimeline && !preservedTimelineTradeOffCard) {
       focusTimelineOnTradeOffCard(nextCards[0])
     }
@@ -1990,7 +696,7 @@ export default function App() {
       || !tradeOffConfigValid
     ) return
 
-    setCalculatingTradeOffs(true)
+    dispatchScheduler({ type: 'scoringStarted' })
     setError(null)
 
     try {
@@ -2019,9 +725,10 @@ export default function App() {
       applyAuthoritativeSessionPlan(plan)
     } catch (err) {
       console.error(err)
+      // Scoring failing leaves the filtered links intact: the operator can
+      // adjust the buffer configuration and score the same run again.
+      dispatchScheduler({ type: 'scoringFailed' })
       setError(err.message || 'Failed to create the backend scheduling session.')
-    } finally {
-      setCalculatingTradeOffs(false)
     }
   }
 
@@ -2030,49 +737,14 @@ export default function App() {
       return
     }
     setError(null)
-    setConfirmationSuccess(false)
-    setIsScheduleStaged(true)
-    setConfirmedStagingLinks({})
+    enterStagingReview()
 
     window.requestAnimationFrame(() => {
       scheduleStagingReviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
 
-  const handleBackToEdit = () => {
-    setIsScheduleStaged(false)
-    setConfirmedStagingLinks({})
-  }
-
-  // A link is reviewed once from its satellite side and, separately, once
-  // from its ground station side -- these keys must never collide, so each
-  // side gets its own namespaced slot in confirmedStagingLinks.
-  const stagingLinkConfirmKey = (side, linkId) => `${side}:${linkId}`
-
-  const toggleStagingLinkConfirmation = (side, linkId) => {
-    const key = stagingLinkConfirmKey(side, linkId)
-    setConfirmedStagingLinks((current) => ({
-      ...current,
-      [key]: !current[key],
-    }))
-  }
-
-  // The alternative to checking each of this asset's links one by one:
-  // confirms every link belonging to it, on this side only, in a single
-  // click -- or, if they are all already confirmed, un-confirms them all
-  // together. Never touches the other side's confirmations for those links.
-  const toggleStagingAssetConfirmation = (side, links) => {
-    const keys = links.map((link) => stagingLinkConfirmKey(side, link.backendLinkId || link.linkId))
-
-    setConfirmedStagingLinks((current) => {
-      const allConfirmed = keys.length > 0 && keys.every((key) => current[key])
-      const next = { ...current }
-      keys.forEach((key) => {
-        next[key] = !allConfirmed
-      })
-      return next
-    })
-  }
+  const handleBackToEdit = leaveStagingReview
 
   const handleCommitToSatOS = async () => {
     if (
@@ -2143,65 +815,16 @@ export default function App() {
         : 'SatOS Access Failed'
 
   const appHeader = (showStatus = true) => (
-    <header className="app-header">
-      <div className="app-header-brand">
-        <div className="app-header-title">SCOPE</div>
-        <div className="app-header-subtitle">Satellite Communication Optimizer and Planning Engine</div>
-      </div>
-      <div className="app-header-controls">
-        {userName.trim() !== '' && (
-          <div className="app-header-user" title={`Logged Mission Operator: ${userName.trim()}`}>
-            <span className="app-header-user-badge">
-              <span className="app-header-user-icon" aria-hidden="true">👤</span>
-              <span className="app-header-user-label">Operator:</span>
-              <strong className="app-header-user-name">{userName.trim()}</strong>
-            </span>
-          </div>
-        )}
-        {showStatus && (
-          <div className="app-header-status">
-            <div className="app-status-stack">
-              <div className={`app-status app-status--${backendStatusClass}`}>
-                <span className="app-status-dot" aria-hidden="true"></span>
-                <span className="app-status-label">{backendStatusLabel}</span>
-              </div>
-              <div className={`app-status app-status--${satosStatusClass}`}>
-                <span className="app-status-dot" aria-hidden="true"></span>
-                <span className="app-status-label">{satosStatusLabel}</span>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </header>
+    <AppHeader
+      showStatus={showStatus}
+      backendStatusClass={backendStatusClass}
+      backendStatusLabel={backendStatusLabel}
+      satosStatusClass={satosStatusClass}
+      satosStatusLabel={satosStatusLabel}
+      userName={userName}
+    />
   )
 
-  const satelliteAssets = useMemo(
-    () => assets.filter((asset) => normalizeAssetClassification(asset) === 'satellite'),
-    [assets],
-  )
-  const groundStationAssets = useMemo(
-    () => assets.filter((asset) => normalizeAssetClassification(asset) === 'ground_station'),
-    [assets],
-  )
-  const unavailableAssets = useMemo(
-    () => assets.filter((asset) => normalizeAssetClassification(asset) === 'ineligible'),
-    [assets],
-  )
-  const missionAssetsLoaded = assets.length > 0
-  const parseOptionalDegreeInput = (value) => {
-    if (value.trim() === '') {
-      return null
-    }
-
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : Number.NaN
-  }
-  const minimumLinkElevationFilterValue = parseOptionalDegreeInput(minimumLinkElevationFilterDeg)
-  const minimumPeakElevationFilterValue = parseOptionalDegreeInput(minimumPeakElevationFilterDeg)
-  const linkFiltersValid = [minimumLinkElevationFilterValue, minimumPeakElevationFilterValue].every((value) => (
-    value === null || (!Number.isNaN(value) && value >= 0 && value <= 90)
-  ))
   const dataCapacityValueGb = Number(dataCapacityGb)
   const dataStartFillValueGb = Number(dataStartFillGb)
   const dataGenerationRateValue = Number(dataGenerationMbps)
@@ -2236,34 +859,6 @@ export default function App() {
         && scoringExponentValue > 0
       )
     )
-  )
-  const planningWindowComplete =
-    planningWindowStartDate !== ''
-    && planningWindowStartTime !== ''
-    && planningWindowEndDate !== ''
-    && planningWindowEndTime !== ''
-  const planningWindowStartInstant = parsePlanningDateFields(
-    planningWindowStartDate,
-    planningWindowStartTime,
-    planningTimeMode,
-  )
-  const planningWindowEndInstant = parsePlanningDateFields(
-    planningWindowEndDate,
-    planningWindowEndTime,
-    planningTimeMode,
-  )
-  const planningEarliestAllowedMs = planningNowMs - PLANNING_PAST_TOLERANCE_MS
-  const planningWindowInPast = (
-    (planningWindowStartInstant !== null
-      && planningWindowStartInstant.getTime() < planningEarliestAllowedMs)
-    || (planningWindowEndInstant !== null
-      && planningWindowEndInstant.getTime() < planningEarliestAllowedMs)
-  )
-  const planningWindowValid = Boolean(
-    planningWindowComplete
-    && planningWindowStartInstant
-    && planningWindowEndInstant
-    && planningWindowEndInstant > planningWindowStartInstant,
   )
   const operatorNameValid = userName.trim().length > 0
   const launchRequirementsMet =
@@ -2377,38 +972,7 @@ export default function App() {
       Math.min(planningWindowEndTimestamp, timestamp),
     )
   }
-  const timelinePlayheadTimestamp = clampToPlanningWindow(timelinePlayheadTime)
 
-  useEffect(() => {
-    timelinePlayingRef.current = timelinePlaying
-  }, [timelinePlaying])
-
-  // Deliberately does not depend on timelinePlaying: this effect resets the
-  // playhead to the window start when the planning window itself changes
-  // (or the scheduler freshly launches), not when playback is merely
-  // paused/resumed. Reading timelinePlayingRef instead of timelinePlaying
-  // lets it still skip the reset while actively playing, without re-running
-  // -- and incorrectly resetting -- every time Play/Pause is toggled.
-  useEffect(() => {
-    if (
-      !schedulerLaunched
-      || planningWindowStartTimestamp === null
-      || timelinePlayingRef.current
-      || timelinePlayheadDraggingRef.current
-    ) {
-      return
-    }
-
-    timelinePlayheadTimeRef.current = planningWindowStartTimestamp
-    setTimelinePlayheadTime((current) => (
-      current === planningWindowStartTimestamp ? current : planningWindowStartTimestamp
-    ))
-    setTimelineLive(false)
-  }, [planningWindowStartTimestamp, schedulerLaunched])
-
-  const getSatelliteTrackCoordinates = useCallback((assetName) => (
-    interpolateTrackPosition(preparedSatelliteTracks[assetName], timelinePlayheadTimestamp)
-  ), [preparedSatelliteTracks, timelinePlayheadTimestamp])
 
   const formatCoordinate = (value, positiveLabel, negativeLabel) => {
     const direction = value >= 0 ? positiveLabel : negativeLabel
@@ -2428,6 +992,261 @@ export default function App() {
     () => satelliteAssets.filter((asset) => selectedSatellites.includes(asset.name)),
     [satelliteAssets, selectedSatellites],
   )
+
+  const currentScheduleItems = useMemo(() => buildCurrentScheduleItems(
+    assetSchedules,
+    [...selectedSatellites, ...selectedGroundStations],
+  // The builder is declared in App because the existing SatOS parsing helpers
+  // are scoped here; its data dependencies are fully listed below.
+  ), [assetSchedules, selectedGroundStations, selectedSatellites])
+  const showOverviewProgress =
+    launchingScheduler
+    || extractionStatus === 'Queued'
+    || extractionStatus === 'Running'
+  const getOverviewAvailabilityLabel = (row) => {
+    const status = getOverviewRowStatus(row)
+    if (status === 'blocked') return 'Blocked'
+    if (status === 'ineligible') return 'Ineligible'
+    return 'Eligible'
+  }
+
+  // Override state a Schedule/Scheduled toggle must send. It keys off whether
+  // the link is currently in the plan, never off its override state: an
+  // auto-scheduled link sits at 'auto', so the old toggle sent 'pinned', the
+  // link stayed scheduled and the button looked dead. 'excluded' is the only
+  // state that removes a link from the plan - 'auto' would just let the solver
+  // pick it straight back up.
+  const isOverviewRowUnavailable = (row) => isUnavailableOverviewRow(row)
+  const schedulableOverviewRows = overviewRows.filter((row) => getOverviewRowStatus(row) === 'eligible')
+  const visibleOverviewRows = showUnavailableOverviewRows
+    ? overviewRows
+    : overviewRows.filter((row) => !shouldHideOverviewRowInAvailableMode(row))
+  const overviewTradeOffBandByOverpassId = useMemo(() => {
+    let bandIndex = 0
+    let previousTradeOffId = null
+    const next = new Map()
+
+    visibleOverviewRows.forEach((row) => {
+      if (!row.tradeOffId || row.tradeOffId === '—') {
+        next.set(row.overpassId, '')
+        previousTradeOffId = null
+        return
+      }
+
+      if (row.tradeOffId !== previousTradeOffId) {
+        bandIndex += 1
+        previousTradeOffId = row.tradeOffId
+      }
+
+      next.set(
+        row.overpassId,
+        bandIndex % 2 === 1
+          ? 'overview-list-row--tradeoff-band-a'
+          : 'overview-list-row--tradeoff-band-b',
+      )
+    })
+
+    return next
+  }, [visibleOverviewRows])
+  const tradeOffAvailable = Boolean(filterRunId)
+    && schedulerLaunched
+    && filteredLinks.some((link) => link.is_eligible)
+    && schedulableOverviewRows.length > 0
+    && bufferConfigValid
+    && tradeOffConfigValid
+  // Memoized so that commitSummary (and every other consumer) sees a stable
+  // reference: getScheduledRows returns a fresh array on every call, which
+  // defeated the memoization below and every dependency array downstream.
+  const finalScheduleRows = useMemo(() => getScheduledRows(overviewRows), [overviewRows])
+  const commitSummary = useMemo(
+    () => buildCommitSummary(finalScheduleRows, sessionPlan),
+    [finalScheduleRows, sessionPlan],
+  )
+  const allScheduledLinkIds = [
+    ...new Set(finalScheduleRows.map((row) => row.backendLinkId || row.linkId)),
+  ]
+  const allStagingLinksConfirmed = areAllLinksConfirmed(allScheduledLinkIds)
+  const overviewRowByLinkId = useMemo(
+    () => new Map(overviewRows.map((row) => [row.backendLinkId ?? row.linkId, row])),
+    [overviewRows],
+  )
+  const bufferLevelBeforeByLinkId = useMemo(() => {
+    const next = new Map()
+    const currentPlan = sessionPlan?.current_plan ?? {}
+
+    Object.entries(currentPlan).forEach(([linkId, status]) => {
+      if (status?.incoming_buffer_mb !== undefined && status?.incoming_buffer_mb !== null) {
+        next.set(linkId, Number(status.incoming_buffer_mb))
+      }
+    })
+
+    const profiles = sessionPlan?.satellite_buffer_profiles ?? {}
+    Object.values(profiles).forEach((profile) => {
+      ;(profile?.profile_points ?? []).forEach((point) => {
+        if (point?.event_type === 'downlink_start' && point?.associated_id && !next.has(point.associated_id)) {
+          next.set(point.associated_id, Number(point.level_mb ?? 0))
+        }
+      })
+    })
+
+    return next
+  }, [sessionPlan])
+  const confirmScheduleAvailable =
+    Boolean(sessionId)
+    && schedulerLaunched
+    && tradeOffsCalculated
+    && finalScheduleRows.length > 0
+  const {
+    jumpTimelinePlayheadTo,
+    toggleTimelineSection,
+    toggleTimelineGroup,
+    toggleTimelineAssetVisibility,
+    handleTimelineItemClick,
+    handleTimelineBackgroundClick,
+    getOptionForLinkId,
+    handleOverviewTradeOffClick,
+    setTimelineLive,
+    timelinePlaying,
+    timelinePlaybackSpeed,
+    setTimelinePlaybackSpeed,
+    timelineZoomLevel,
+    timelineViewportWidthPx,
+    timelineCustomZoomMultiplier,
+    timelineLayers,
+    setTimelineLayers,
+    timelineAssetVisibility,
+    expandedTimelineGroups,
+    setExpandedTimelineGroups,
+    expandedTimelineSections,
+    setExpandedTimelineSections,
+    markedTimelineLinkId,
+    setMarkedTimelineLinkId,
+    markedTradeOffOptionId,
+    setMarkedTradeOffOptionId,
+    timelineTooltip,
+    setTimelineTooltip,
+    timelineHorizontalControl,
+    timelineScrollRef,
+    timelineScrollFrameRef,
+    timelineHorizontalRangeRef,
+    timelinePlayheadSliderRef,
+    resetTimelineView,
+    timelineModel,
+    timelinePlayheadTimestamp,
+    timelineWheelHintRef,
+    timelineTradeOffDrawerRef,
+    activeTimelineTradeOffCard,
+    buildDataVolumePolyline,
+    clearTimelineTooltipHideTimeout,
+    closeTimelineTradeOffView,
+    dataVolumeModel,
+    dataVolumeYMaxGb,
+    focusTimelineOnOption,
+    focusTimelineOnTradeOffCard,
+    focusedTimelineTradeOffId,
+    getTimelineRowHeight,
+    handleResetTimelineView,
+    handleTimelineKeyDown,
+    handleTimelinePlaybackToggle,
+    handleTimelinePlayheadKeyDown,
+    handleTimelinePlayheadPointerDown,
+    handleTimelinePlayheadPointerMove,
+    handleTimelinePlayheadPointerUp,
+    handleTimelineTradeOffDrawerPointerDown,
+    hideTimelineTooltip,
+    hideWarningTooltip,
+    isTimelineItemAtPlayhead,
+    moveTimelineTooltip,
+    moveWarningTooltip,
+    openTimelineTradeOffView,
+    pauseTimelineLiveMode,
+    scheduleTimelineTooltipHide,
+    showTimelineTooltip,
+    showWarningTooltip,
+    timelineIsFit,
+    timelinePlayheadCanvasRatio,
+    timelineRenderRows,
+    timelineWidthPx,
+    visibleTimelineTicks,
+  } = useTimelineGeometry({
+    currentScheduleItems,
+    overviewRows,
+    selectedGroundStations,
+    selectedSatellites,
+    activePlanningWindow,
+    tradeOffsCalculated,
+    activeTradeOffCardIndex,
+    clampToPlanningWindow,
+    expandedSections,
+    finalScheduleRows,
+    formatTimelinePlayheadDateTime,
+    missionMapRef,
+    planningWindowEndTimestamp,
+    planningWindowStartTimestamp,
+    schedulerLaunched,
+    sessionPlan,
+    setActiveTradeOffCardIndex,
+    setWarningTooltip,
+    timelinePanelRef,
+    timelineTradeOffViewId,
+    setTimelineTradeOffViewId,
+    timelineTradeOffDrawerOffset,
+    setTimelineTradeOffDrawerOffset,
+    tradeOffCardListRef,
+    tradeOffCards,
+    view,
+  })
+
+  const resetWorkspaceState = () => {
+    const planningWindowPreset = resetPlanningWindow()
+
+    setSelectedSatellites([])
+    setSelectedGroundStations([])
+    resetSchedulerConfig()
+    setSidebarCollapsed(false)
+    resetSchedulerRun()
+    resetSessionPlan()
+    setShowUnavailableOverviewRows(true)
+    setTimelineTradeOffViewId(null)
+    resetMapView()
+    setActivePlanningWindow(null)
+    resetTimelineView(new Date(planningWindowPreset.startIso).getTime())
+    setExpandedSections({
+      timeWindow: true,
+      satellites: true,
+      groundStations: true,
+      unavailableAssets: false,
+      linkFilters: true,
+      bufferConfig: true,
+      tradeOffConfig: true,
+      mapView: true,
+      overview: true,
+      timeline: true,
+    })
+    setDataStartFillGb(DEFAULT_DATA_START_FILL_GB)
+    setDataGenerationMbps(DEFAULT_DATA_GENERATION_MBPS)
+    setDataCapacityGb(DEFAULT_DATA_CAPACITY_GB)
+    setDataDownlinkRateMbps(DEFAULT_DOWNLINK_RATE_MBPS)
+    setTradeOffStrategy(DEFAULT_TRADE_OFF_STRATEGY)
+    setScoringAlpha(DEFAULT_SCORING_ALPHA)
+    setScoringExponent(DEFAULT_SCORING_EXPONENT)
+    setConfirmingSchedule(false)
+    setConfirmationProgress(0)
+    setConfirmationStep('')
+    resetStagingReview()
+    setOverridingLinkId(null)
+  }
+
+  // Assigned in an effect rather than during render: writing a ref while
+  // rendering is not allowed, and the hook only ever calls it from an event.
+
+  useEffect(() => {
+    resetWorkspaceStateRef.current = resetWorkspaceState
+  })
+
+  const getSatelliteTrackCoordinates = useCallback((assetName) => (
+    interpolateTrackPosition(preparedSatelliteTracks[assetName], timelinePlayheadTimestamp)
+  ), [preparedSatelliteTracks, timelinePlayheadTimestamp])
 
   const selectedMapAssets = useMemo(() => [
     ...selectedGroundStationAssets
@@ -2511,1853 +1330,42 @@ export default function App() {
         inline: 'nearest',
       })
     })
-  }, [])
+  }, [setActiveMapAssetId])
 
-  const currentScheduleItems = useMemo(() => buildCurrentScheduleItems(
-    assetSchedules,
-    [...selectedSatellites, ...selectedGroundStations],
-  // The builder is declared in App because the existing SatOS parsing helpers
-  // are scoped here; its data dependencies are fully listed below.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [assetSchedules, selectedGroundStations, selectedSatellites])
-  const showOverviewProgress =
-    launchingScheduler
-    || extractionStatus === 'Queued'
-    || extractionStatus === 'Running'
-  const getOverviewAvailabilityLabel = (row) => {
-    const status = getOverviewRowStatus(row)
-    if (status === 'blocked') return 'Blocked'
-    if (status === 'ineligible') return 'Ineligible'
-    return 'Eligible'
-  }
-
-  // Override state a Schedule/Scheduled toggle must send. It keys off whether
-  // the link is currently in the plan, never off its override state: an
-  // auto-scheduled link sits at 'auto', so the old toggle sent 'pinned', the
-  // link stayed scheduled and the button looked dead. 'excluded' is the only
-  // state that removes a link from the plan - 'auto' would just let the solver
-  // pick it straight back up.
-  const getScheduleToggleState = (isScheduled) => (isScheduled ? 'excluded' : 'pinned')
-
-  const getScheduleToggleTitle = (isScheduled) => (isScheduled
-    ? 'Scheduled: click to force this link to stay unscheduled.'
-    : 'Unscheduled: click to force this link to stay scheduled.')
-
-  const getOverviewControlTooltip = (state) => {
-    if (state === 'auto') {
-      return 'Auto: keep the backend scheduling decision.'
-    }
-
-    if (state === 'pinned') {
-      return 'Pinned: force this link to stay scheduled.'
-    }
-
-    return 'Excluded: force this link to stay unscheduled.'
-  }
-  const isOverviewRowUnavailable = (row) => isUnavailableOverviewRow(row)
-  const schedulableOverviewRows = overviewRows.filter((row) => getOverviewRowStatus(row) === 'eligible')
-  const visibleOverviewRows = showUnavailableOverviewRows
-    ? overviewRows
-    : overviewRows.filter((row) => !shouldHideOverviewRowInAvailableMode(row))
-  const overviewTradeOffBandByOverpassId = useMemo(() => {
-    let bandIndex = 0
-    let previousTradeOffId = null
-    const next = new Map()
-
-    visibleOverviewRows.forEach((row) => {
-      if (!row.tradeOffId || row.tradeOffId === '—') {
-        next.set(row.overpassId, '')
-        previousTradeOffId = null
-        return
-      }
-
-      if (row.tradeOffId !== previousTradeOffId) {
-        bandIndex += 1
-        previousTradeOffId = row.tradeOffId
-      }
-
-      next.set(
-        row.overpassId,
-        bandIndex % 2 === 1
-          ? 'overview-list-row--tradeoff-band-a'
-          : 'overview-list-row--tradeoff-band-b',
-      )
-    })
-
-    return next
-  }, [visibleOverviewRows])
-  const tradeOffAvailable = Boolean(filterRunId)
-    && schedulerLaunched
-    && filteredLinks.some((link) => link.is_eligible)
-    && schedulableOverviewRows.length > 0
-    && bufferConfigValid
-    && tradeOffConfigValid
-  const finalScheduleRows = getScheduledRows(overviewRows)
-  const commitSummary = useMemo(
-    () => buildCommitSummary(finalScheduleRows, sessionPlan),
-    [finalScheduleRows, sessionPlan],
-  )
-  const allScheduledLinkIds = [
-    ...new Set(finalScheduleRows.map((row) => row.backendLinkId || row.linkId)),
-  ]
-  const allStagingLinksConfirmed =
-    allScheduledLinkIds.length > 0
-    && allScheduledLinkIds.every((linkId) => (
-      confirmedStagingLinks[`sat:${linkId}`] && confirmedStagingLinks[`gs:${linkId}`]
-    ))
-  const overviewRowByLinkId = useMemo(
-    () => new Map(overviewRows.map((row) => [row.backendLinkId ?? row.linkId, row])),
-    [overviewRows],
-  )
-  const bufferLevelBeforeByLinkId = useMemo(() => {
-    const next = new Map()
-    const currentPlan = sessionPlan?.current_plan ?? {}
-
-    Object.entries(currentPlan).forEach(([linkId, status]) => {
-      if (status?.incoming_buffer_mb !== undefined && status?.incoming_buffer_mb !== null) {
-        next.set(linkId, Number(status.incoming_buffer_mb))
-      }
-    })
-
-    const profiles = sessionPlan?.satellite_buffer_profiles ?? {}
-    Object.values(profiles).forEach((profile) => {
-      ;(profile?.profile_points ?? []).forEach((point) => {
-        if (point?.event_type === 'downlink_start' && point?.associated_id && !next.has(point.associated_id)) {
-          next.set(point.associated_id, Number(point.level_mb ?? 0))
-        }
-      })
-    })
-
-    return next
-  }, [sessionPlan])
-  const confirmScheduleAvailable =
-    Boolean(sessionId)
-    && schedulerLaunched
-    && tradeOffsCalculated
-    && finalScheduleRows.length > 0
-  const timelineModel = useMemo(() => buildTimelineModel(
-    overviewRows,
-    tradeOffCards,
-    currentScheduleItems,
-    activePlanningWindow,
-  // buildTimelineModel closes over the UI filters listed in the dependency
-  // array; keeping the builder scoped to App avoids duplicating formatters.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [
-    activePlanningWindow,
-    currentScheduleItems,
-    overviewRows,
-    selectedGroundStations,
-    selectedSatellites,
-    timelineAssetVisibility,
-    selectedTradeOffOption,
-    timelineLayers,
-    tradeOffCards,
-    tradeOffsCalculated,
-  ])
-  const timelineZoomMultiplier = timelineCustomZoomMultiplier ?? 1
-  const timelineFitWidthPx = timelineViewportWidthPx > 0
-    ? timelineViewportWidthPx
-    : timelineModel?.widthPx ?? 0
-  const timelineWidthPx = timelineModel
-    ? Math.max(1, Math.round(timelineFitWidthPx * timelineZoomMultiplier))
-    : 0
-  const timelineIsFit = timelineZoomMultiplier <= TIMELINE_MIN_ZOOM_MULTIPLIER
-  const timelineContentInsetPx = timelineIsFit ? TIMELINE_FIT_EDGE_INSET_PX : 0
-  const timelineDrawableWidthPx = Math.max(1, timelineWidthPx - (timelineContentInsetPx * 2))
-  const visibleTimelineTicks = useMemo(() => {
-    if (!timelineModel || timelineWidthPx <= 0 || timelineModel.totalMinutes <= 0) {
-      return []
-    }
-
-    const minLabelSpacingPx = 64
-    const visibleTicks = []
-
-    timelineModel.ticks.forEach((tick, index) => {
-      const positionPx = timelineContentInsetPx
-        + ((tick.offsetMinutes / timelineModel.totalMinutes) * timelineDrawableWidthPx)
-      const isFirst = index === 0
-      const isLast = index === timelineModel.ticks.length - 1
-
-      if (isFirst) {
-        visibleTicks.push({ ...tick, positionPx })
-        return
-      }
-
-      if (isLast) {
-        const previousTick = visibleTicks[visibleTicks.length - 1]
-        if (previousTick && positionPx - previousTick.positionPx < minLabelSpacingPx) {
-          visibleTicks.pop()
-        }
-        visibleTicks.push({ ...tick, positionPx })
-        return
-      }
-
-      const previousTick = visibleTicks[visibleTicks.length - 1]
-      if (!previousTick || positionPx - previousTick.positionPx >= minLabelSpacingPx) {
-        visibleTicks.push({ ...tick, positionPx })
-      }
-    })
-
-    return visibleTicks.map(({ positionPx, ...tick }) => tick)
-  }, [timelineContentInsetPx, timelineDrawableWidthPx, timelineModel, timelineWidthPx])
-  const activeTimelineTradeOffCard = useMemo(() => {
-    if (!timelineTradeOffViewId) {
-      return null
-    }
-
-    return tradeOffCards.find((card) => card.id === timelineTradeOffViewId) ?? null
-  }, [timelineTradeOffViewId, tradeOffCards])
-  const focusedTimelineTradeOffId = useMemo(() => {
-    if (timelineTradeOffViewId) {
-      return timelineTradeOffViewId
-    }
-
-    if (!markedTimelineLinkId) {
-      return null
-    }
-
-    return tradeOffCards.find((card) => (
-      card.options.some((option) => option.linkId === markedTimelineLinkId)
-    ))?.id ?? null
-  }, [timelineTradeOffViewId, markedTimelineLinkId, tradeOffCards])
-  const timelineSections = useMemo(
-    () => (timelineModel?.sections ?? []).filter((section) => section.groups.length > 0),
-    [timelineModel],
-  )
-  // A single flat row list drives BOTH the label column and the scrollable
-  // canvas, so the two halves of the grid cannot drift apart vertically.
-  const baseTimelineRenderRows = useMemo(() => timelineSections.flatMap((section) => {
-    const sectionRenderRow = {
-      type: 'section',
-      key: `section-${section.id}`,
-      section,
-      label: section.label,
-    }
-
-    if (!expandedTimelineSections[section.id]) {
-      return [sectionRenderRow]
-    }
-
-    return [
-      sectionRenderRow,
-      ...section.groups.flatMap((group) => {
-        const groupRenderRow = { type: 'group', key: `group-${group.id}`, group }
-
-        if (!expandedTimelineGroups[group.id]) {
-          return [groupRenderRow]
-        }
-
-        return [
-          groupRenderRow,
-          ...group.rows.map((row) => ({ type: 'link', key: `link-${row.id}`, group, row })),
-        ]
-      }),
-    ]
-  }), [expandedTimelineGroups, expandedTimelineSections, timelineSections])
-
-  // --- Data Volume -----------------------------------------------------
-  // Curves and KPIs are rendered from the authoritative backend session
-  // profiles. The frontend only converts units and positions returned points.
-  const dataVolumeModel = useMemo(() => {
-    if (!timelineModel || !sessionPlan) {
-      return null
-    }
-
-    const startTimestamp = timelineModel.baseDate.getTime()
-    const endTimestamp = timelineModel.endDate.getTime()
-    const satelliteGroups = expandedTimelineSections.satellites
-      ? (timelineModel.sections.find((section) => section.id === 'satellites')?.groups ?? [])
-        .filter((group) => expandedTimelineGroups[group.id])
-      : []
-
-    const series = satelliteGroups.map((group) => {
-      const profile = sessionPlan.satellite_buffer_profiles?.[group.name]
-      if (!profile) {
-        return null
-      }
-
-      const profilePoints = (profile.profile_points ?? []).map((point) => ({
-        timestamp: toTimestamp(point.timestamp),
-        level: Number(point.level_mb ?? 0) / 1000,
-        eventType: point.event_type,
-        associatedId: point.associated_id,
-      })).filter((point) => point.timestamp !== null)
-      const pointsByLinkAndEvent = new Map(
-        profilePoints.map((point) => [`${point.associatedId}:${point.eventType}`, point]),
-      )
-      const payloadWindows = profilePoints
-        .filter((point) => point.eventType === 'payload_start' && point.associatedId)
-        .map((startPoint) => {
-          const endPoint = pointsByLinkAndEvent.get(`${startPoint.associatedId}:payload_end`)
-          if (!endPoint) {
-            return null
-          }
-
-          const visibleStartTimestamp = Math.max(startTimestamp, startPoint.timestamp)
-          const visibleEndTimestamp = Math.min(endTimestamp, endPoint.timestamp)
-          if (visibleEndTimestamp <= visibleStartTimestamp) {
-            return null
-          }
-
-          return {
-            id: startPoint.associatedId,
-            startTimestamp: visibleStartTimestamp,
-            endTimestamp: visibleEndTimestamp,
-          }
-        })
-        .filter(Boolean)
-      const downlinkRateMbps = sessionPlan.satellite_configs?.[group.name]?.downlink_rate_mbps ?? 0
-      const steps = finalScheduleRows
-        .filter((row) => row.satId === group.name)
-        .map((row) => {
-          const startPoint = pointsByLinkAndEvent.get(`${row.backendLinkId}:downlink_start`)
-          const endPoint = pointsByLinkAndEvent.get(`${row.backendLinkId}:downlink_end`)
-          return {
-            id: row.backendLinkId,
-            label: row.overpassId,
-            gsId: row.gsId,
-            maxElevation: row.maxElevation,
-            startTimestamp: toTimestamp(row.startTime),
-            endTimestamp: toTimestamp(row.endTime),
-            downlinkMbps: downlinkRateMbps,
-            transferredGb: Number(row.usefulDataOffloadedMb ?? 0) / 1000,
-            levelBefore: startPoint?.level ?? 0,
-            levelAfter: endPoint?.level ?? 0,
-          }
-        })
-        .filter((step) => step.startTimestamp !== null && step.endTimestamp !== null)
-
-      return {
-        id: group.id,
-        name: group.name,
-        capacityGb: Number(profile.capacity_mb ?? 0) / 1000,
-        points: profilePoints,
-        payloadWindows,
-        steps,
-        overflowed: (profile.overflow_events ?? []).length > 0,
-        totalGeneratedGb: Number(profile.total_generated_mb ?? 0) / 1000,
-        totalDownlinkedGb: Number(profile.total_downlinked_mb ?? 0) / 1000,
-        totalLostGb: Number(profile.total_lost_mb ?? 0) / 1000,
-        finalLevelGb: Number(profile.final_level_mb ?? 0) / 1000,
-        peakLevelGb: Number(profile.peak_level_mb ?? 0) / 1000,
-      }
-    }).filter(Boolean)
-
-    return {
-      startTimestamp,
-      endTimestamp,
-      durationMs: Math.max(1, endTimestamp - startTimestamp),
-      capacityGb: Math.max(1, ...series.map((item) => item.capacityGb)),
-      series,
-      expandedSatelliteCount: satelliteGroups.length,
-    }
-  }, [
-    expandedTimelineGroups,
-    expandedTimelineSections.satellites,
-    finalScheduleRows,
-    sessionPlan,
-    timelineModel,
-  ])
-
-  const dataVolumeSeriesByGroupId = useMemo(
-    () => new Map((dataVolumeModel?.series ?? []).map((series) => [series.id, series])),
-    [dataVolumeModel],
-  )
-
-  // Expanded satellites render their data budget immediately below the main
-  // asset/schedule row and before the counterpart link rows. Ground stations
-  // do not get a synthetic data row because the backend profiles are owned by
-  // satellites.
-  const timelineRenderRows = useMemo(() => baseTimelineRenderRows.flatMap((renderRow) => {
-    if (
-      renderRow.type !== 'group'
-      || renderRow.group.kind !== 'satellite'
-      || !expandedTimelineGroups[renderRow.group.id]
-    ) {
-      return [renderRow]
-    }
-
-    return [
-      renderRow,
-      {
-        type: 'dataVolume',
-        key: `data-volume-${renderRow.group.id}`,
-        group: renderRow.group,
-        series: dataVolumeSeriesByGroupId.get(renderRow.group.id) ?? null,
-      },
-    ]
-  }), [baseTimelineRenderRows, dataVolumeSeriesByGroupId, expandedTimelineGroups])
-
-  // Expanding a group changes the row count but nothing about the horizontal
-  // scale, so scroll recentering keys off whether any rows exist at all.
-  const timelineHasRows = timelineRenderRows.length > 0
-
-  useLayoutEffect(() => {
-    const frame = timelineScrollFrameRef.current
-    if (!frame || !expandedSections.timeline || !timelineHasRows) {
-      return undefined
-    }
-
-    const updateViewportWidth = () => {
-      const nextWidth = Math.floor(frame.clientWidth)
-      if (nextWidth > 0) {
-        setTimelineViewportWidthPx((current) => (current === nextWidth ? current : nextWidth))
-      }
-    }
-
-    updateViewportWidth()
-
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', updateViewportWidth)
-      return () => window.removeEventListener('resize', updateViewportWidth)
-    }
-
-    const observer = new ResizeObserver(updateViewportWidth)
-    observer.observe(frame)
-    return () => observer.disconnect()
-  }, [expandedSections.timeline, timelineHasRows, view])
-
-  useLayoutEffect(() => {
-    const scrollContainer = timelineScrollRef.current
-    const range = timelineHorizontalRangeRef.current
-    if (!scrollContainer || !range) {
-      return undefined
-    }
-
-    const syncHorizontalRange = () => {
-      const maxScrollLeft = timelineIsFit
-        ? 0
-        : Math.max(0, scrollContainer.scrollWidth - scrollContainer.clientWidth)
-      range.max = String(maxScrollLeft)
-      range.disabled = timelineIsFit || maxScrollLeft <= 0
-      range.value = String(Math.min(maxScrollLeft, scrollContainer.scrollLeft))
-      range.setAttribute('aria-valuemax', String(Math.round(maxScrollLeft)))
-      range.setAttribute('aria-valuenow', String(Math.round(scrollContainer.scrollLeft)))
-    }
-
-    syncHorizontalRange()
-    scrollContainer.addEventListener('scroll', syncHorizontalRange, { passive: true })
-    return () => scrollContainer.removeEventListener('scroll', syncHorizontalRange)
-  }, [
-    expandedSections.timeline,
-    timelineHasRows,
-    timelineHorizontalControl.visible,
-    timelineIsFit,
-    timelineWidthPx,
-  ])
-
-  useLayoutEffect(() => {
-    const panel = timelinePanelRef.current
-    const scrollContainer = panel?.closest('.workspace-main')
-    if (!panel || !scrollContainer || !schedulerLaunched || !expandedSections.timeline || timelineIsFit) {
-      setTimelineHorizontalControl((current) => (
-        current.visible ? { ...current, visible: false } : current
-      ))
-      return undefined
-    }
-
-    const updateHorizontalControl = () => {
-      const panelRect = panel.getBoundingClientRect()
-      const headerBottom = document.querySelector('.app-header')?.getBoundingClientRect().bottom ?? 0
-      const visible = panelRect.bottom > headerBottom && panelRect.top < window.innerHeight
-
-      if (!visible) {
-        setTimelineHorizontalControl((current) => (
-          current.visible ? { ...current, visible: false } : current
-        ))
-        return
-      }
-
-      const labelRect = panel.querySelector('.timeline-label-column')?.getBoundingClientRect()
-      const left = Math.max(panelRect.left + 16, labelRect?.right ?? panelRect.left + 16)
-      const right = Math.min(window.innerWidth - 16, panelRect.right - 16)
-      const width = Math.max(180, right - left)
-
-      setTimelineHorizontalControl((current) => (
-        current.visible && Math.abs(current.left - left) < 0.5 && Math.abs(current.width - width) < 0.5
-          ? current
-          : { visible: true, left, width }
-      ))
-    }
-
-    updateHorizontalControl()
-    scrollContainer.addEventListener('scroll', updateHorizontalControl, { passive: true })
-    window.addEventListener('resize', updateHorizontalControl)
-
-    const observer = typeof ResizeObserver === 'undefined'
-      ? null
-      : new ResizeObserver(updateHorizontalControl)
-    observer?.observe(panel)
-
-    return () => {
-      scrollContainer.removeEventListener('scroll', updateHorizontalControl)
-      window.removeEventListener('resize', updateHorizontalControl)
-      observer?.disconnect()
-    }
-  }, [expandedSections.timeline, schedulerLaunched, timelineHasRows, timelineIsFit, view])
-
-  const getTimelineRowHeight = (renderRow) => {
-    if (renderRow.type === 'section') {
-      return '1.85rem'
-    }
-
-    if (renderRow.type === 'dataVolume') {
-      return '7.2rem'
-    }
-
-    const laneCount = renderRow.type === 'group'
-      ? renderRow.group.laneCount
-      : renderRow.row.laneCount
-
-    if (renderRow.type === 'group') {
-      return `${Math.max(4.3, (laneCount ?? 1) * 3.1 + 0.82)}rem`
-    }
-
-    return `${Math.max(3.0, (laneCount ?? 1) * 2.36 + 0.42)}rem`
-  }
-
-  const dataVolumeYMaxGb = (dataVolumeModel?.capacityGb ?? 1) * 1.06
-
-  const buildDataVolumePolyline = (points) => {
-    if (!dataVolumeModel || points.length === 0) {
-      return ''
-    }
-
-    return points
-      .map((point) => {
-        const x = ((point.timestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 1000
-        const y = 100 - ((point.level / dataVolumeYMaxGb) * 100)
-        return `${x.toFixed(2)},${y.toFixed(2)}`
-      })
-      .join(' ')
-  }
-
-  const timelineBaseTimestamp = timelineModel?.baseDate.getTime() ?? null
-  const timelineDurationMs = timelineModel ? timelineModel.totalMinutes * 60000 : 0
-  const timelinePlayheadOffsetMinutes = timelineBaseTimestamp !== null
-    ? (timelinePlayheadTimestamp - timelineBaseTimestamp) / 60000
-    : null
-  const timelinePlayheadCanvasRatio = (
-    timelinePlayheadOffsetMinutes !== null
-    && timelineModel?.totalMinutes > 0
-  )
-    ? timelinePlayheadOffsetMinutes / timelineModel.totalMinutes
-    : null
-
-  const refreshTimelinePlaybackDom = () => {
-    const root = timelinePanelRef.current
-    if (!root) {
-      timelinePlaybackDomRef.current = { playhead: null, bars: [], label: null }
-      return
-    }
-
-    timelinePlaybackDomRef.current = {
-      playhead: root.querySelector('[data-timeline-playhead]'),
-      bars: [...root.querySelectorAll('[data-playback-start][data-playback-end]')],
-      label: root.querySelector('[data-playback-label]'),
-    }
-  }
-
-  const positionTimelinePlayhead = (timestamp) => {
-    const playhead = timelinePlaybackDomRef.current.playhead
-    const scrollContainer = timelineScrollRef.current
-    if (!playhead || !scrollContainer) {
-      return
-    }
-
-    const ratio = (
-      timelineBaseTimestamp !== null
-      && timelineDurationMs > 0
-    )
-      ? (timestamp - timelineBaseTimestamp) / timelineDurationMs
-      : null
-    const visible = ratio !== null && ratio >= 0 && ratio <= 1
-
-    playhead.hidden = !visible
-    if (visible) {
-      // Label, handle and dashed line are one viewport overlay. This is the
-      // only X-coordinate used for rendering and pointer input, so zoom and
-      // horizontal scrolling cannot separate those pieces.
-      playhead.style.left = `${timelineContentInsetPx + (ratio * timelineDrawableWidthPx) - scrollContainer.scrollLeft}px`
-    }
-  }
-
-  const syncTimelinePlaybackDom = (timestamp, syncText = false) => {
-    if (!Number.isFinite(timestamp)) {
-      return
-    }
-
-    const { bars, label } = timelinePlaybackDomRef.current
-    positionTimelinePlayhead(timestamp)
-    timelinePlayheadSliderRef.current?.setAttribute('aria-valuenow', String(Math.round(timestamp)))
-
-    bars.forEach((bar) => {
-      const startTimestamp = Number(bar.dataset.playbackStart)
-      const endTimestamp = Number(bar.dataset.playbackEnd)
-      bar.classList.toggle(
-        'timeline-bar--playhead-active',
-        Number.isFinite(startTimestamp)
-          && Number.isFinite(endTimestamp)
-          && timestamp >= startTimestamp
-          && timestamp <= endTimestamp,
-      )
-    })
-
-    if (syncText && label) {
-      const formatted = formatTimelinePlayheadDateTime(timestamp)
-      label.textContent = formatted
-      timelinePlayheadSliderRef.current?.setAttribute('aria-valuetext', formatted)
-    }
-
-    missionMapRef.current?.setPlayheadTime(timestamp)
-  }
-
-  // Maps a timestamp ratio to the scroll position used by playback/live
-  // follow. The canvas has no horizontal padding, so this is also the same
-  // coordinate space used by the playhead overlay.
-  const getTimelineScrollLeftForTimestamp = (timestamp) => {
-    if (timelineBaseTimestamp === null || timelineDurationMs <= 0 || timelineWidthPx <= 0) {
-      return 0
-    }
-
-    const viewportWidthPx = timelineScrollRef.current?.clientWidth ?? 0
-    const ratio = Math.max(
-      0,
-      Math.min(1, (timestamp - timelineBaseTimestamp) / timelineDurationMs),
-    )
-    return ratio * Math.max(0, timelineWidthPx - viewportWidthPx)
-  }
-
-  const syncTimelinePlaybackViewport = (timestamp) => {
-    const scrollContainer = timelineScrollRef.current
-    if (!scrollContainer) {
-      return
-    }
-
-    scrollContainer.scrollLeft = getTimelineScrollLeftForTimestamp(timestamp)
-  }
-
-  const pauseTimelineLiveMode = (event) => {
-    if (!event?.target?.closest?.('button')) {
-      setTimelineLive(false)
-    }
-  }
-
-  // Opening a trade-off exposes all involved assets, but does not reposition
-  // the timeline horizontally. The current viewport is user-owned.
-  const focusTimelineOnTradeOffCard = (card) => {
-    if (!card) {
-      return
-    }
-
-    setExpandedTimelineSections((current) => (
-      (current.satellites && current.groundStations)
-        ? current
-        : { satellites: true, groundStations: true }
-    ))
-
-    setExpandedTimelineGroups((current) => {
-      let changed = false
-      const next = { ...current }
-
-      card.options.forEach((option) => {
-        const groupIds = [
-          option.satId ? `satellite:${option.satId}` : null,
-          option.gsId ? `ground_station:${option.gsId}` : null,
-        ].filter(Boolean)
-
-        groupIds.forEach((groupId) => {
-          if (!next[groupId]) {
-            next[groupId] = true
-            changed = true
-          }
-        })
-      })
-
-      return changed ? next : current
-    })
-  }
-
-  const showTradeOffCard = (index) => {
-    setActiveTradeOffCardIndex(index)
-    focusTimelineOnTradeOffCard(tradeOffCards[index])
-  }
-
-  const openTimelineTradeOffView = (tradeOffId, optionId = null, linkId = null, scrollToPanel = false) => {
-    if (!tradeOffId) {
-      return
-    }
-
-    const cardIndex = tradeOffCards.findIndex((card) => card.id === tradeOffId)
-    if (cardIndex === -1) {
-      return
-    }
-
-    const card = tradeOffCards[cardIndex]
-    setTimelineTradeOffViewId(tradeOffId)
-    setTimelineTradeOffDrawerOffset({ x: 0, y: 0 })
-    setActiveTradeOffCardIndex(cardIndex)
-    if (scrollToPanel) {
-      timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-    focusTimelineOnTradeOffCard(card)
-
-    if (optionId) {
-      setMarkedTradeOffOptionId(optionId)
-    } else {
-      setMarkedTradeOffOptionId(null)
-    }
-
-    if (linkId) {
-      setMarkedTimelineLinkId(linkId)
-    }
-  }
-
-  const closeTimelineTradeOffView = () => {
-    timelineTradeOffDrawerDragCleanupRef.current?.()
-    timelineTradeOffDrawerDragCleanupRef.current = null
-    setTimelineTradeOffViewId(null)
-    setTimelineTradeOffDrawerOffset({ x: 0, y: 0 })
-    setMarkedTradeOffOptionId(null)
-    setMarkedTimelineLinkId(null)
-    hideTimelineTooltip(true)
-  }
-
-  const handleTimelineTradeOffDrawerPointerDown = (event) => {
-    if (
-      event.button !== 0
-      || event.target.closest('button')
-    ) {
-      return
-    }
-
-    const container = timelinePanelRef.current
-    const drawer = timelineTradeOffDrawerRef.current
-    if (!container || !drawer) {
-      return
-    }
-
-    const startX = event.clientX
-    const startY = event.clientY
-    const startOffset = { ...timelineTradeOffDrawerOffset }
-
-    // Figure out how far the drawer can move, in offset space, before it
-    // would cross the timeline panel's edge. The panel clips its contents
-    // (overflow: hidden), so dragging the drawer past this range is what
-    // was making it appear to vanish instead of just stopping at the edge.
-    const containerRect = container.getBoundingClientRect()
-    const drawerRect = drawer.getBoundingClientRect()
-    const naturalLeft = drawerRect.left - startOffset.x
-    const naturalTop = drawerRect.top - startOffset.y
-    const minX = containerRect.left - naturalLeft
-    const maxX = Math.max(minX, containerRect.right - naturalLeft - drawerRect.width)
-    const minY = containerRect.top - naturalTop
-    const maxY = Math.max(minY, containerRect.bottom - naturalTop - drawerRect.height)
-    const clampRange = (value, min, max) => Math.min(Math.max(value, min), max)
-
-    const handlePointerMove = (moveEvent) => {
-      setTimelineTradeOffDrawerOffset({
-        x: clampRange(startOffset.x + (moveEvent.clientX - startX), minX, maxX),
-        y: clampRange(startOffset.y + (moveEvent.clientY - startY), minY, maxY),
-      })
-    }
-
-    const stopDragging = () => {
-      window.removeEventListener('pointermove', handlePointerMove)
-      window.removeEventListener('pointerup', stopDragging)
-      window.removeEventListener('pointercancel', stopDragging)
-      timelineTradeOffDrawerDragCleanupRef.current = null
-    }
-
-    timelineTradeOffDrawerDragCleanupRef.current = stopDragging
-
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', stopDragging)
-    window.addEventListener('pointercancel', stopDragging)
-  }
-
-  // Clicking an option card marks (or, if already marked, unmarks -- same
-  // toggle the timeline bars themselves use) its link and, only when the
-  // click just turned marking on, scrolls the timeline so the newly marked
-  // block is actually visible instead of marking something off-screen.
-  const focusTimelineOnOption = (option) => {
-    if (!option?.linkId) {
-      return
-    }
-
-    const wasMarked = markedTimelineLinkId === option.linkId
-    markLinkForNavigation(option.linkId, option.optionId)
-
-    if (wasMarked) {
-      return
-    }
-
-    timelinePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-
-    window.requestAnimationFrame(() => {
-      const node = timelinePanelRef.current?.querySelector(`[data-link-id="${option.linkId}"]`)
-      node?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-        inline: 'center',
-      })
-    })
-  }
-
-  // All cards now sit side by side in a horizontal band, so activating one
-  // from outside (Overview pill, timeline click) has to bring it into view --
-  // the card is the scroll target, the marked option inside it the fallback.
-  useEffect(() => {
-    const cardList = tradeOffCardListRef.current
-
-    if (!cardList) {
-      return
-    }
-
-    const optionNode = markedTradeOffOptionId
-      ? cardList.querySelector(`[data-option-id="${markedTradeOffOptionId}"]`)
-      : null
-    const cardNode = cardList.querySelector(`[data-card-index="${activeTradeOffCardIndex}"]`)
-    const target = optionNode ?? cardNode
-
-    target?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
-  }, [markedTradeOffOptionId, activeTradeOffCardIndex])
-
-  // Pointer drags and playback animate only the playhead/map nodes each frame;
-  // React receives the committed value at the end of a drag. This keeps the
-  // map responsive without allowing an unrelated render to snap the handle
-  // back to an older timestamp.
-  const previewTimelinePlayheadTime = (timestamp, syncText = true) => {
-    const clampedTimestamp = clampToPlanningWindow(timestamp)
-    timelinePlayheadTimeRef.current = clampedTimestamp
-    syncTimelinePlaybackDom(clampedTimestamp, syncText)
-    return clampedTimestamp
-  }
-
-  const commitTimelinePlayheadTime = () => {
-    if (Number.isFinite(timelinePlayheadTimeRef.current)) {
-      setTimelinePlayheadTime(timelinePlayheadTimeRef.current)
-    }
-  }
-
-  const handleTimelinePlayheadPointerDown = (event) => {
-    if (event.button !== undefined && event.button !== 0) {
-      return
-    }
-
-    event.preventDefault()
-    event.stopPropagation()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    timelinePlayheadDraggingRef.current = true
-    setTimelineLive(false)
-    setTimelinePlaying(false)
-
-    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
-    if (nextTimestamp !== null) {
-      setTimelinePlayheadTime(previewTimelinePlayheadTime(nextTimestamp))
-    }
-  }
-
-  const handleTimelinePlayheadPointerMove = (event) => {
-    if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      return
-    }
-
-    const nextTimestamp = computeTimelineTimestampFromCanvasClientX(event.clientX)
-    if (nextTimestamp !== null) {
-      previewTimelinePlayheadTime(nextTimestamp)
-    }
-  }
-
-  const handleTimelinePlayheadPointerUp = (event) => {
-    event.stopPropagation()
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    timelinePlayheadDraggingRef.current = false
-    commitTimelinePlayheadTime()
-  }
-
-  // Convert the pointer's screen X through the canvas's current scroll and
-  // zoom. Rendering uses this exact coordinate in reverse.
-  const computeTimelineRatioFromCanvasClientX = (clientX) => {
-    const scrollContainer = timelineScrollRef.current
-    if (!scrollContainer || timelineWidthPx <= 0) {
-      return null
-    }
-
-    const rect = scrollContainer.getBoundingClientRect()
-    const canvasPositionPx = (
-      scrollContainer.scrollLeft
-      + (clientX - rect.left)
-    )
-    const drawablePositionPx = canvasPositionPx - timelineContentInsetPx
-    return Math.max(0, Math.min(1, drawablePositionPx / timelineDrawableWidthPx))
-  }
-
-  const computeTimelineTimestampFromCanvasClientX = (clientX) => {
-    if (timelineBaseTimestamp === null || timelineDurationMs <= 0) {
-      return null
-    }
-
-    const ratio = computeTimelineRatioFromCanvasClientX(clientX)
-    if (ratio === null) {
-      return null
-    }
-
-    return timelineBaseTimestamp + (ratio * timelineDurationMs)
-  }
-
-  // Mirrors the map's Ctrl/⌘ + scroll-to-zoom gesture: a plain wheel event
-  // still just pans the timeline (via the browser's native scroll) and
-  // pauses live mode as before, while holding Ctrl/⌘ zooms in/out instead.
-  // The existing "layout changed" effect below already re-centers the
-  // scroll position on the current playhead time whenever timelineWidthPx
-  // changes (the same effect the Fit/Detail preset buttons already drive),
-  // so continuous wheel-zoom gets that same recentering for free.
-  const handleTimelineWheel = (event) => {
-    if (!event.ctrlKey && !event.metaKey) {
-      pauseTimelineLiveMode(event)
-      if (timelineWheelHintRef.current) {
-        timelineWheelHintRef.current.classList.add('timeline-wheel-hint--visible')
-        window.clearTimeout(timelineWheelHintTimeoutRef.current)
-        timelineWheelHintTimeoutRef.current = window.setTimeout(() => {
-          timelineWheelHintRef.current?.classList.remove('timeline-wheel-hint--visible')
-        }, 1400)
-      }
-      return
-    }
-
-    event.preventDefault()
-    const direction = event.deltaY > 0 ? -1 : 1
-    setTimelineCustomZoomMultiplier((current) => {
-      const base = current ?? timelineZoomMultiplier
-      const next = base + (direction * TIMELINE_WHEEL_ZOOM_STEP)
-      return Math.max(TIMELINE_MIN_ZOOM_MULTIPLIER, next)
-    })
-  }
-
-  // React's synthetic onWheel is attached as a passive listener by default,
-  // so event.preventDefault() inside handleTimelineWheel would silently
-  // fail there (Ctrl+wheel would zoom AND still scroll the page) -- same
-  // reasoning as MissionMap's handleWheel, which registers a native
-  // { passive: false } listener instead of using JSX onWheel. A ref keeps the
-  // native listener stable while still giving it the latest React state.
-  useLayoutEffect(() => {
-    timelineWheelHandlerRef.current = handleTimelineWheel
-  })
-
-  useEffect(() => {
-    const scrollContainer = timelineScrollRef.current
-    if (!scrollContainer) {
-      return undefined
-    }
-
-    const onWheel = (event) => timelineWheelHandlerRef.current?.(event)
-    scrollContainer.addEventListener('wheel', onWheel, { passive: false })
-    return () => scrollContainer.removeEventListener('wheel', onWheel)
-  }, [expandedSections.timeline, view])
-
-  const handleTimelinePlayheadKeyDown = (event) => {
-    if (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null) {
-      return
-    }
-
-    let nextTimestamp
-    const currentTimestamp = timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-      const direction = event.key === 'ArrowLeft' ? -1 : 1
-      const stepMilliseconds = event.shiftKey ? 60000 : 10000
-      nextTimestamp = currentTimestamp + (direction * stepMilliseconds)
-    } else if (event.key === 'Home') {
-      nextTimestamp = planningWindowStartTimestamp
-    } else if (event.key === 'End') {
-      nextTimestamp = planningWindowEndTimestamp
-    } else {
-      return
-    }
-
-    event.preventDefault()
-    setTimelineLive(false)
-    setTimelinePlaying(false)
-    setTimelinePlayheadTime(clampToPlanningWindow(nextTimestamp))
-  }
-
-  const handleTimelineKeyDown = (event) => {
-    if (
-      event.target.closest('button')
-      || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
-    ) {
-      return
-    }
-
-    event.preventDefault()
-    const direction = event.key === 'ArrowLeft' ? -1 : 1
-    const stepMilliseconds = event.shiftKey ? 60000 : 10000
-    const nextTimestamp = clampToPlanningWindow(
-      (timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp)
-        + (direction * stepMilliseconds),
-    )
-    setTimelineLive(false)
-    setTimelinePlaying(false)
-    setTimelinePlayheadTime(nextTimestamp)
-  }
-
-  // Plays the timeline forward from wherever the playhead currently sits, at
-  // `timelinePlaybackSpeed`x real time -- independent of the actual wall-clock
-  // "now" (unlike Live/"Now" mode, which breaks/stalls when the planning
-  // window doesn't contain the real current time). See the playback useEffect
-  // below for the actual per-frame stepping.
-  // Back to the whole planning window at 1x.
-  const handleResetTimelineView = () => {
-    setTimelineZoomLevel(TIMELINE_DEFAULT_ZOOM_LEVEL)
-    setTimelineCustomZoomMultiplier(null)
-  }
-
-  const handleTimelinePlaybackToggle = () => {
-    if (timelinePlaying) {
-      commitTimelinePlayheadTime()
-      setTimelinePlaying(false)
-      return
-    }
-
-    if (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null) {
-      return
-    }
-
-    setTimelineLive(false)
-    timelinePlaybackFrameTimestampRef.current = null
-    timelinePlaybackLastTextSyncRef.current = 0
-    const currentPlayheadTimestamp = timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp
-    if (currentPlayheadTimestamp >= planningWindowEndTimestamp) {
-      timelinePlayheadTimeRef.current = planningWindowStartTimestamp
-      setTimelinePlayheadTime(planningWindowStartTimestamp)
-    }
-    setTimelinePlaying(true)
-  }
-
-  const isTimelineItemAtPlayhead = (item) => {
-    const startTimestamp = toTimestamp(item.startTime)
-    const endTimestamp = toTimestamp(item.endTime)
-    return (
-      startTimestamp !== null
-      && endTimestamp !== null
-      && timelinePlayheadTimestamp >= startTimestamp
-      && timelinePlayheadTimestamp <= endTimestamp
-    )
-  }
-
-  useEffect(() => {
-    if (
-      !timelineLive
-      || !expandedSections.timeline
-      || timelineBaseTimestamp === null
-      || timelineDurationMs <= 0
-      || !timelineHasRows
-    ) {
-      return undefined
-    }
-
-    const animationFrameId = window.requestAnimationFrame(() => {
-      const scrollContainer = timelineScrollRef.current
-      if (!scrollContainer || timelineWidthPx <= 0) {
-        return
-      }
-
-      const ratio = Math.max(
-        0,
-        Math.min(
-          1,
-          (timelinePlayheadTimestamp - timelineBaseTimestamp) / timelineDurationMs,
-        ),
-      )
-      const scrollableWidthPx = Math.max(0, timelineWidthPx - scrollContainer.clientWidth)
-      scrollContainer.scrollTo({
-        left: ratio * scrollableWidthPx,
-        behavior: 'auto',
-      })
-    })
-
-    return () => window.cancelAnimationFrame(animationFrameId)
-  }, [
-    expandedSections.timeline,
-    timelineBaseTimestamp,
-    timelineDurationMs,
-    timelineLive,
-    timelinePlayheadTimestamp,
-    timelineWidthPx,
-    timelineHasRows,
-  ])
-
-  // React owns the committed playhead value, while playback and pointer drags
-  // update the small set of animated DOM nodes through this ref. Refresh the
-  // node cache after commits so an unrelated render cannot leave those nodes
-  // displaying the older committed timestamp.
-  useLayoutEffect(() => {
-    if (!timelinePlaying && !timelinePlayheadDraggingRef.current) {
-      timelinePlayheadTimeRef.current = timelinePlayheadTimestamp
-    }
-    refreshTimelinePlaybackDom()
-    syncTimelinePlaybackDom(
-      timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp,
-      true,
-    )
-  // The DOM synchronizer closes over the timeline bounds represented below.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    dataVolumeModel,
-    timelinePlayheadTimestamp,
-    timelinePlaying,
-    timelineRenderRows,
-    timelineWidthPx,
-  ])
-
-  // Horizontal scrolling changes the playhead's viewport X without changing
-  // its timestamp. Keep the one combined playhead overlay on the same canvas
-  // coordinate whenever the native scrollbar, range control or trackpad pans.
-  useLayoutEffect(() => {
-    const scrollContainer = timelineScrollRef.current
-    if (!scrollContainer) {
-      return undefined
-    }
-
-    const syncPositionAfterScroll = () => {
-      positionTimelinePlayhead(
-        timelinePlayheadTimeRef.current ?? timelinePlayheadTimestamp,
-      )
-    }
-
-    syncPositionAfterScroll()
-    scrollContainer.addEventListener('scroll', syncPositionAfterScroll, { passive: true })
-    return () => scrollContainer.removeEventListener('scroll', syncPositionAfterScroll)
-  // Positioning closes over the current canvas bounds and is refreshed when
-  // either of them changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    expandedSections.timeline,
-    timelineHasRows,
-    timelineBaseTimestamp,
-    timelineDurationMs,
-    timelineWidthPx,
-  ])
-
-  // Drives the "Play" button: advances the playhead forward at
-  // `timelinePlaybackSpeed`x real elapsed time, starting from wherever the
-  // playhead currently is. Unlike Live/"Now" mode this never depends on the
-  // actual wall-clock time, so it keeps animating smoothly even when the
-  // planning window doesn't contain the real current time.
-  useEffect(() => {
-    if (!timelinePlaying) {
-      timelinePlaybackFrameTimestampRef.current = null
-      return undefined
-    }
-
-    const step = (frameTimestamp) => {
-      if (timelinePlaybackFrameTimestampRef.current === null) {
-        timelinePlaybackFrameTimestampRef.current = frameTimestamp
-      }
-
-      const elapsedMs = frameTimestamp - timelinePlaybackFrameTimestampRef.current
-      timelinePlaybackFrameTimestampRef.current = frameTimestamp
-
-      const rawNextTimestamp =
-        (timelinePlayheadTimeRef.current ?? planningWindowStartTimestamp ?? 0)
-        + (elapsedMs * timelinePlaybackSpeed)
-      // Inlined clampToPlanningWindow: only planningWindow{Start,End}Timestamp
-      // (already in the dependency list below) are needed here, so the loop
-      // doesn't have to restart every render to satisfy exhaustive-deps.
-      const clampedNextTimestamp =
-        (planningWindowStartTimestamp === null || planningWindowEndTimestamp === null)
-          ? rawNextTimestamp
-          : Math.max(planningWindowStartTimestamp, Math.min(planningWindowEndTimestamp, rawNextTimestamp))
-
-      timelinePlayheadTimeRef.current = clampedNextTimestamp
-      const syncText = (
-        frameTimestamp - timelinePlaybackLastTextSyncRef.current >= 100
-      )
-      if (syncText) {
-        timelinePlaybackLastTextSyncRef.current = frameTimestamp
-      }
-      syncTimelinePlaybackDom(clampedNextTimestamp, syncText)
-      syncTimelinePlaybackViewport(clampedNextTimestamp)
-
-      if (planningWindowEndTimestamp !== null && rawNextTimestamp >= planningWindowEndTimestamp) {
-        setTimelinePlayheadTime(clampedNextTimestamp)
-        setTimelinePlaying(false)
-        return
-      }
-
-      timelinePlaybackRafRef.current = window.requestAnimationFrame(step)
-    }
-
-    timelinePlaybackRafRef.current = window.requestAnimationFrame(step)
-
-    return () => {
-      if (timelinePlaybackRafRef.current !== null) {
-        window.cancelAnimationFrame(timelinePlaybackRafRef.current)
-        timelinePlaybackRafRef.current = null
-      }
-      timelinePlaybackFrameTimestampRef.current = null
-    }
-  // Playback intentionally uses the synchronizer captured for these bounds;
-  // ordinary playback frames do not create React renders.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    timelinePlaying,
-    timelinePlaybackSpeed,
-    planningWindowStartTimestamp,
-    planningWindowEndTimestamp,
-  ])
-
-  const formatGb = (value) => `${value >= 100 ? Math.round(value) : value.toFixed(1)} GB`
-
-  const clearTimelineTooltipHideTimeout = () => {
-    if (timelineTooltipHideTimeoutRef.current !== null) {
-      window.clearTimeout(timelineTooltipHideTimeoutRef.current)
-      timelineTooltipHideTimeoutRef.current = null
-    }
-  }
-
-  const showWarningTooltip = (message, event) => {
-    if (!message) return
-
-    setWarningTooltip({
-      visible: true,
-      message,
-      x: event?.clientX ?? 0,
-      y: event?.clientY ?? 0,
-    })
-  }
-
-  const moveWarningTooltip = (event) => {
-    setWarningTooltip((current) => (
-      current.visible
-        ? { ...current, x: event?.clientX ?? current.x, y: event?.clientY ?? current.y }
-        : current
-    ))
-  }
-
-  const hideWarningTooltip = () => {
-    setWarningTooltip((current) => (
-      current.visible
-        ? { ...current, visible: false }
-        : current
-    ))
-  }
-
-  const showTimelineTooltip = (item, event, pinned = false) => {
-    if (!item) {
-      return
-    }
-
-    clearTimelineTooltipHideTimeout()
-
-    setTimelineTooltip((current) => {
-      // Once opened by click, hover/focus events caused by content moving
-      // under the pointer while the workspace scrolls must not turn the
-      // dialog back into a cursor-following tooltip.
-      if (current.pinned && !pinned) {
-        return current
-      }
-
-      return {
-        visible: true,
-        pinned,
-        item,
-        anchorItemId: item.id,
-        x: event?.clientX ?? current.x,
-        y: event?.clientY ?? current.y,
-      }
-    })
-  }
-
-  const moveTimelineTooltip = (event) => {
-    setTimelineTooltip((current) => (
-      current.visible && !current.pinned
-        ? {
-            ...current,
-            x: event?.clientX ?? current.x,
-            y: event?.clientY ?? current.y,
-          }
-        : current
-    ))
-  }
-
-  const scheduleTimelineTooltipHide = () => {
-    clearTimelineTooltipHideTimeout()
-
-    timelineTooltipHideTimeoutRef.current = window.setTimeout(() => {
-      setTimelineTooltip((current) => (
-        current.pinned
-          ? current
-          : {
-              visible: false,
-              pinned: false,
-              item: null,
-              anchorItemId: null,
-              x: current.x,
-              y: current.y,
-            }
-      ))
-      timelineTooltipHideTimeoutRef.current = null
-    }, 120)
-  }
-
-  const hideTimelineTooltip = (force = false) => {
-    clearTimelineTooltipHideTimeout()
-
-    setTimelineTooltip((current) => {
-      if (!current.visible) {
-        return current
-      }
-
-      if (current.pinned && !force) {
-        return current
-      }
-
-          return {
-            visible: false,
-            pinned: false,
-            item: null,
-            anchorItemId: null,
-            x: current.x,
-            y: current.y,
-          }
-    })
-  }
-
-  useLayoutEffect(() => {
-    if (!timelineTooltip.visible || !timelineTooltip.pinned || !timelineTooltip.anchorItemId) {
-      return undefined
-    }
-
-    const updatePinnedTimelineTooltipPosition = () => {
-      const anchorNode = timelinePanelRef.current?.querySelector(
-        `[data-timeline-item-id="${timelineTooltip.anchorItemId}"]`,
-      )
-
-      if (!anchorNode) {
-        return
-      }
-
-      const rect = anchorNode.getBoundingClientRect()
-      const preferredLeft = rect.right + 12
-      const fallbackLeft = rect.left - 320
-      const nextLeft = preferredLeft <= window.innerWidth - 24
-        ? preferredLeft
-        : Math.max(16, fallbackLeft)
-      const nextTop = Math.max(16, Math.min(rect.top + 6, window.innerHeight - 240))
-
-      setTimelineTooltip((current) => (
-        current.visible && current.pinned && current.anchorItemId === timelineTooltip.anchorItemId
-          ? (
-              Math.abs(current.x - nextLeft) < 0.5 && Math.abs(current.y - nextTop) < 0.5
-                ? current
-                : { ...current, x: nextLeft, y: nextTop }
-            )
-          : current
-      ))
-    }
-
-    updatePinnedTimelineTooltipPosition()
-
-    const timelineScroll = timelineScrollRef.current
-    const workspaceScroll = timelinePanelRef.current?.closest('.workspace-main')
-    timelineScroll?.addEventListener('scroll', updatePinnedTimelineTooltipPosition, { passive: true })
-    workspaceScroll?.addEventListener('scroll', updatePinnedTimelineTooltipPosition, { passive: true })
-    window.addEventListener('resize', updatePinnedTimelineTooltipPosition)
-
-    return () => {
-      timelineScroll?.removeEventListener('scroll', updatePinnedTimelineTooltipPosition)
-      workspaceScroll?.removeEventListener('scroll', updatePinnedTimelineTooltipPosition)
-      window.removeEventListener('resize', updatePinnedTimelineTooltipPosition)
-    }
-  }, [timelineTooltip.anchorItemId, timelineTooltip.pinned, timelineTooltip.visible])
-
-  const toggleTimelineTooltipPin = (item, event) => {
-    if (!item) {
-      return
-    }
-
-    clearTimelineTooltipHideTimeout()
-
-    setTimelineTooltip((current) => {
-      const sameItemPinned = current.pinned && current.item?.id === item.id
-
-      if (sameItemPinned) {
-        return {
-          visible: false,
-          pinned: false,
-          item: null,
-          anchorItemId: null,
-          x: current.x,
-          y: current.y,
-        }
-      }
-
-      return {
-        visible: true,
-        pinned: true,
-        item,
-        anchorItemId: item.id,
-        x: event?.clientX ?? current.x,
-        y: event?.clientY ?? current.y,
-      }
-    })
-  }
 
   const renderTimelineTooltipContent = (item, pinned = false) => (
-    <>
-      <div className="timeline-hover-tooltip-header">
-        <strong>{item.kind === 'link' ? `Link ID: ${item.linkId}` : item.label}</strong>
-        {item.tradeOffId ? (
-          <span className="timeline-hover-tooltip-pill">{item.tradeOffId}</span>
-        ) : item.kind === 'activity' ? (
-          <span className="timeline-hover-tooltip-pill timeline-hover-tooltip-pill--activity">
-            Priority
-          </span>
-        ) : null}
-      </div>
-      <span>{item.detail}</span>
-      <span>Start: {formatTimelineDateTime(item.startTime)}</span>
-      <span>End: {formatTimelineDateTime(item.endTime)}</span>
-      <span>Duration: {formatTimelineItemDuration(item)}</span>
-      {item.recommended && <span>Auto-scheduled by the backend</span>}
-      {item.overrideState && item.overrideState !== 'auto' && <span>Override: {item.overrideState}</span>}
-      {Number.isFinite(getBackendDataDownlinkMb(item)) && getBackendDataDownlinkMb(item) > 0 && (
-        <span>Data downlink: {(getBackendDataDownlinkMb(item) / 1000).toFixed(2)} GB</span>
-      )}
-      {Number.isFinite(item.score) && <span>Backend score: {item.score.toFixed(2)}</span>}
-      {item.rejectionReason && !item.blockMessage && <span>{item.rejectionReason}</span>}
-      {item.blockMessage && <span>{item.blockMessage}</span>}
-      {item.kind === 'link' && item.tradeOffId && (
-        <span>Trade-Off relation: {item.tradeOffId}</span>
-      )}
-      {pinned && item.kind === 'link' && (
-        <div className="timeline-link-popup-actions">
-          {item.tradeOffId && (
-          <button
-            type="button"
-            className="timeline-link-popup-tradeoff-button"
-            onClick={() => {
-              hideTimelineTooltip(true)
-              openTimelineTradeOffView(
-                item.tradeOffId,
-                item.optionId ?? item.linkId,
-                item.linkId,
-                false,
-              )
-            }}
-          >
-            Show Trade-Off
-          </button>
-          )}
-          <div className="timeline-link-popup-status-row">
-            <span>Schedule controls</span>
-          </div>
-          {sessionId && tradeOffsCalculated && item.isSchedulable ? (
-            <div
-              className="timeline-link-popup-controls"
-              role="group"
-              aria-label={`Schedule controls for ${item.linkId}`}
-            >
-              {[
-                { state: 'auto', label: 'A' },
-                { state: 'pinned', label: 'P' },
-                { state: 'excluded', label: 'X' },
-              ].map((control) => (
-                <button
-                  key={control.state}
-                  type="button"
-                  className={`timeline-link-popup-control timeline-link-popup-control--${control.state} ${item.overrideState === control.state ? 'timeline-link-popup-control--active' : ''}`}
-                  onClick={() => handleLinkOverride({
-                    ...item,
-                    optionId: item.optionId ?? item.linkId,
-                    tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
-                  }, control.state)}
-                  disabled={Boolean(overridingLinkId)}
-                  aria-pressed={item.overrideState === control.state}
-                  title={getOverviewControlTooltip(control.state)}
-                >
-                  {control.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                className={`timeline-link-popup-control timeline-link-popup-schedule-toggle ${item.isScheduled ? 'timeline-link-popup-schedule-toggle--scheduled' : 'timeline-link-popup-schedule-toggle--unscheduled'}`}
-                onClick={() => handleLinkOverride({
-                  ...item,
-                  optionId: item.optionId ?? item.linkId,
-                  tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
-                }, getScheduleToggleState(item.isScheduled))}
-                disabled={Boolean(overridingLinkId)}
-                aria-pressed={item.isScheduled}
-                aria-label={item.isScheduled
-                  ? `Scheduled. Click to unschedule ${item.linkId}`
-                  : `Unscheduled. Click to schedule ${item.linkId}`}
-                title={getScheduleToggleTitle(item.isScheduled)}
-              >
-                {item.isScheduled ? 'Scheduled' : 'Unscheduled'}
-              </button>
-            </div>
-          ) : (
-            <span className="timeline-link-popup-unavailable">
-              {!item.isSchedulable
-                ? 'This link is blocked or ineligible and cannot be scheduled.'
-                : 'Calculate Trade-Offs to enable schedule controls.'}
-            </span>
-          )}
-          {overridingLinkId === item.linkId && (
-            <span className="timeline-link-popup-saving" role="status">Updating backend schedule…</span>
-          )}
-        </div>
-      )}
-      <span className="timeline-hover-tooltip-note">
-        {pinned
-          ? 'Click the bar again or close this popup.'
-          : 'Click the bar to open schedule controls.'}
-      </span>
-    </>
+    <TimelineTooltip
+      item={item}
+      pinned={pinned}
+      formatTimelineDateTime={formatTimelineDateTime}
+      handleLinkOverride={handleLinkOverride}
+      hideTimelineTooltip={hideTimelineTooltip}
+      openTimelineTradeOffView={openTimelineTradeOffView}
+      overridingLinkId={overridingLinkId}
+      sessionId={sessionId}
+      tradeOffsCalculated={tradeOffsCalculated}
+    />
   )
 
   const renderAssetWarning = (message) => (
-    <span
-      className="asset-warning"
-      title={message}
-      tabIndex={0}
-      aria-label={message}
-      onMouseEnter={(event) => showWarningTooltip(message, event)}
-      onMouseMove={moveWarningTooltip}
-      onMouseLeave={hideWarningTooltip}
-      onFocus={(event) => showWarningTooltip(message, event)}
-      onBlur={hideWarningTooltip}
-    >
-      <svg
-        className="asset-warning-icon"
-        viewBox="0 0 24 24"
-        focusable="false"
-        aria-hidden="true"
-      >
-        <path
-          d="M12 3 1.8 20.5c-.4.7.1 1.5.9 1.5h18.6c.8 0 1.3-.8.9-1.5L12 3Z"
-          fill="currentColor"
-        />
-        <path
-          d="M12 8.2c.5 0 .9.4.9.9v5.7a.9.9 0 1 1-1.8 0V9.1c0-.5.4-.9.9-.9Zm0 10a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Z"
-          fill="#fff"
-        />
-      </svg>
-    </span>
-  )
-
-  const getAssetWarningMessage = (asset) => (
-    asset?.error
-    ?? asset?.reason
-    ?? asset?.message
-    ?? asset?.rejectionReason
-    ?? asset?.ineligibility_reason
-    ?? null
-  )
-
-  const getTradeOffAccentColor = (colorIndex) =>
-    TRADE_OFF_ACCENT_COLORS[(colorIndex ?? 0) % TRADE_OFF_ACCENT_COLORS.length]
-
-  const clampOverviewPanelWidth = (value) => Math.min(72, Math.max(38, value))
-
-  const updateOverviewPanelWidthFromClientX = (clientX) => {
-    if (!splitPanelsRef.current) {
-      return
-    }
-
-    const rect = splitPanelsRef.current.getBoundingClientRect()
-    if (rect.width <= 0) {
-      return
-    }
-
-    const relativeX = clientX - rect.left
-    const nextWidth = (relativeX / rect.width) * 100
-    const clampedWidth = clampOverviewPanelWidth(nextWidth)
-    if (panelSlotAssignment.topRight) {
-      splitPanelsRef.current.style.gridTemplateColumns = `minmax(0, ${clampedWidth}%) 0.9rem minmax(0, calc(${100 - clampedWidth}% - 0.9rem))`
-    }
-    return clampedWidth
-  }
-
-  const handlePanelResizeStart = (event) => {
-    event.preventDefault()
-    let nextWidth = overviewPanelWidth
-
-    const handlePointerMove = (moveEvent) => {
-      nextWidth = updateOverviewPanelWidthFromClientX(moveEvent.clientX) ?? nextWidth
-    }
-
-    const stopResize = () => {
-      window.removeEventListener('pointermove', handlePointerMove)
-      window.removeEventListener('pointerup', stopResize)
-      window.removeEventListener('pointercancel', stopResize)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      splitDragCleanupRef.current = null
-      setOverviewPanelWidth(nextWidth)
-    }
-
-    splitDragCleanupRef.current = stopResize
-
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', stopResize)
-    window.addEventListener('pointercancel', stopResize)
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-
-    nextWidth = updateOverviewPanelWidthFromClientX(event.clientX) ?? nextWidth
-  }
-
-  const handlePanelResizeKeyDown = (event) => {
-    if (event.key === 'ArrowLeft') {
-      event.preventDefault()
-      setOverviewPanelWidth((current) => clampOverviewPanelWidth(current - 4))
-    }
-
-    if (event.key === 'ArrowRight') {
-      event.preventDefault()
-      setOverviewPanelWidth((current) => clampOverviewPanelWidth(current + 4))
-    }
-  }
-
-  // The upper bound used to be a tight 640px, which capped the Map View
-  // panel well before the sidebar's Visible Assets list could fully unroll
-  // for missions with more than a handful of assets (the sidebar tracks this
-  // height via `maxHeight: mapViewHeightPx` and `overflow-y: auto`, so
-  // raising this cap is what lets a taller drag actually show the whole list
-  // without internal scrolling). Raised generously rather than computed
-  // exactly from asset count, since the panel is a manual, user-driven
-  // resize -- the drag simply has more room to go as far as they need.
-  const clampBottomTopHeightPx = (value) => Math.min(2400, Math.max(140, value))
-
-  const updatePlanningGridRows = (topHeight) => {
-    const planningRow = splitPanelsRef.current?.querySelector('.planning-views-row')
-    if (!planningRow) {
-      return
-    }
-    planningRow.style.gridTemplateRows = [
-      expandedSections[panelSlotAssignment.bottomTop] ? `${topHeight}px` : 'auto',
-      '0.9rem',
-      'auto',
-    ].join(' ')
-
-    const liveMapSlotHeight = panelSlotAssignment.bottomTop === 'mapView'
-      ? topHeight
-      : null
-    if (liveMapSlotHeight !== null) {
-      const liveMapHeight = Math.max(40, liveMapSlotHeight - MAP_PANEL_CHROME_OVERHEAD_PX)
-      missionMapRef.current?.setHeight(liveMapHeight)
-      const mapSidebar = splitPanelsRef.current?.querySelector('.map-sidebar')
-      if (mapSidebar) {
-        mapSidebar.style.maxHeight = `${liveMapHeight}px`
-      }
-    }
-  }
-
-  const handlePlanningRowResizeStart = (event) => {
-    event.preventDefault()
-
-    const startClientY = event.clientY
-    const startHeight = bottomTopHeightPx
-    let nextHeight = startHeight
-
-    const handlePointerMove = (moveEvent) => {
-      nextHeight = clampBottomTopHeightPx(startHeight + (moveEvent.clientY - startClientY))
-      updatePlanningGridRows(nextHeight)
-    }
-
-    const stopResize = () => {
-      window.removeEventListener('pointermove', handlePointerMove)
-      window.removeEventListener('pointerup', stopResize)
-      window.removeEventListener('pointercancel', stopResize)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      planningRowResizeDragCleanupRef.current = null
-      setBottomTopHeightPx(nextHeight)
-    }
-
-    planningRowResizeDragCleanupRef.current = stopResize
-
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', stopResize)
-    window.addEventListener('pointercancel', stopResize)
-    document.body.style.cursor = 'row-resize'
-    document.body.style.userSelect = 'none'
-  }
-
-  const handlePlanningRowResizeKeyDown = (event) => {
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setBottomTopHeightPx((current) => clampBottomTopHeightPx(current - 16))
-    }
-
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      setBottomTopHeightPx((current) => clampBottomTopHeightPx(current + 16))
-    }
-  }
-
-  const clampTopPanelsHeightPx = (value) => Math.min(960, Math.max(220, value))
-
-  const handleTopPanelsResizeStart = (event) => {
-    event.preventDefault()
-
-    const startClientY = event.clientY
-    const startHeight = topPanelsHeightPx
-    let nextHeight = startHeight
-
-    const handlePointerMove = (moveEvent) => {
-      nextHeight = clampTopPanelsHeightPx(startHeight + (moveEvent.clientY - startClientY))
-      splitPanelsRef.current?.style.setProperty('--top-panels-height', `${nextHeight}px`)
-    }
-
-    const stopResize = () => {
-      window.removeEventListener('pointermove', handlePointerMove)
-      window.removeEventListener('pointerup', stopResize)
-      window.removeEventListener('pointercancel', stopResize)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      topPanelsResizeDragCleanupRef.current = null
-      setTopPanelsHeightPx(nextHeight)
-    }
-
-    topPanelsResizeDragCleanupRef.current = stopResize
-
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', stopResize)
-    window.addEventListener('pointercancel', stopResize)
-    document.body.style.cursor = 'row-resize'
-    document.body.style.userSelect = 'none'
-  }
-
-  const handleTopPanelsResizeKeyDown = (event) => {
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setTopPanelsHeightPx((current) => clampTopPanelsHeightPx(current - 16))
-    }
-
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      setTopPanelsHeightPx((current) => clampTopPanelsHeightPx(current + 16))
-    }
-  }
-
-  // bottomTopHeightPx is the whole panel row (heading + padding included);
-  // the map canvas itself only gets what's left after that chrome, so it
-  // needs to subtract the same overhead the panel heading/padding takes up.
-  // Map View defaults to a tall, comfortable height whenever it isn't the
-  // panel occupying the resizable bottomTop slot, since there's no divider
-  // controlling its size in those positions.
-  const mapViewSlotHeightPx = panelSlotAssignment.bottomTop === 'mapView'
-    ? bottomTopHeightPx
-    : null
-  const mapViewHeightPx = mapViewSlotHeightPx !== null
-    ? Math.max(40, mapViewSlotHeightPx - MAP_PANEL_CHROME_OVERHEAD_PX)
-    : 380
-
-  const handlePanelDragStart = (panelId) => (event) => {
-    setDraggedPanelId(panelId)
-    event.dataTransfer.effectAllowed = 'move'
-    try {
-      event.dataTransfer.setData('text/plain', panelId)
-    } catch {
-      // Some browsers restrict dataTransfer access mid-drag; draggedPanelId
-      // state is already the source of truth for the drop handler below.
-    }
-  }
-
-  const handlePanelDragEnd = () => {
-    setDraggedPanelId(null)
-    setDragOverPanelId(null)
-  }
-
-  const handlePanelDragOver = (panelId) => (event) => {
-    if (!draggedPanelId || draggedPanelId === panelId) {
-      return
-    }
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-    setDragOverPanelId((current) => (current === panelId ? current : panelId))
-  }
-
-  const handlePanelDragLeave = (panelId) => () => {
-    setDragOverPanelId((current) => (current === panelId ? null : current))
-  }
-
-  const handlePanelDrop = (targetPanelId) => (event) => {
-    event.preventDefault()
-    const sourcePanelId = draggedPanelId
-    setDraggedPanelId(null)
-    setDragOverPanelId(null)
-
-    if (!sourcePanelId || sourcePanelId === targetPanelId) {
-      return
-    }
-
-    setPanelSlotAssignment((current) => {
-      const sourceSlot = Object.keys(current).find((slot) => current[slot] === sourcePanelId)
-      const targetSlot = Object.keys(current).find((slot) => current[slot] === targetPanelId)
-
-      if (!sourceSlot || !targetSlot) {
-        return current
-      }
-
-      return {
-        ...current,
-        [sourceSlot]: targetPanelId,
-        [targetSlot]: sourcePanelId,
-      }
-    })
-  }
-
-  const getPanelDropZoneProps = (panelId) => ({
-    onDragOver: handlePanelDragOver(panelId),
-    onDragLeave: handlePanelDragLeave(panelId),
-    onDrop: handlePanelDrop(panelId),
-  })
-
-  const getPanelDragClassName = (panelId) => (
-    `${draggedPanelId === panelId ? ' panel--dragging' : ''}`
-    + `${dragOverPanelId === panelId && draggedPanelId && draggedPanelId !== panelId ? ' panel--drag-over' : ''}`
+    <AssetWarning
+      message={message}
+      hideWarningTooltip={hideWarningTooltip}
+      moveWarningTooltip={moveWarningTooltip}
+      showWarningTooltip={showWarningTooltip}
+    />
   )
 
   const renderPanelDragHandle = (panelId) => (
-    <button
-      type="button"
-      className="panel-drag-handle"
-      draggable="true"
-      onDragStart={handlePanelDragStart(panelId)}
-      onDragEnd={handlePanelDragEnd}
-      aria-label={`Drag to move the ${PANEL_LABELS[panelId]} panel`}
-      title="Drag to move panel"
-    >
-      <span className="panel-drag-handle-icon" aria-hidden="true"></span>
-    </button>
+    <PanelDragHandle
+      panelId={panelId}
+      handlePanelDragEnd={handlePanelDragEnd}
+      handlePanelDragStart={handlePanelDragStart}
+    />
   )
 
-  // The small handle icon above is still the clearest visual affordance,
-  // but requiring a precise grab on that ~27px icon made panels feel only
-  // partly movable. Spreading this onto the whole heading row lets a
-  // person pick the panel up from anywhere across its title/status area
-  // too, the way dragging a browser tab or an OS window by its title bar
-  // works -- nested buttons (collapse toggle, badges) keep working
-  // normally since a plain click never crosses HTML5's drag-start
-  // threshold.
-  const getPanelHeadingDragProps = (panelId) => ({
-    draggable: true,
-    onDragStart: handlePanelDragStart(panelId),
-    onDragEnd: handlePanelDragEnd,
-  })
-
   const renderTradeOffPill = (tradeOffId) => (
-    <span className="tradeoff-id-pill">
-      {tradeOffId}
-    </span>
+    <TradeOffPill tradeOffId={tradeOffId} />
   )
 
   const handleLinkOverride = async (option, overrideState) => {
@@ -4406,92 +1414,6 @@ export default function App() {
 
     setMarkedTimelineLinkId(option.linkId)
     setMarkedTradeOffOptionId(option.optionId)
-  }
-
-  const toggleTimelineSection = (sectionId) => {
-    setExpandedTimelineSections((current) => ({
-      ...current,
-      [sectionId]: !current[sectionId],
-    }))
-  }
-
-  const toggleTimelineGroup = (groupId) => {
-    setExpandedTimelineGroups((current) => ({
-      ...current,
-      [groupId]: !current[groupId],
-    }))
-  }
-
-  const toggleTimelineAssetVisibility = (sectionId) => {
-    setTimelineAssetVisibility((current) => ({
-      ...current,
-      [sectionId]: !current[sectionId],
-    }))
-  }
-
-  // Navigation only: marking a link highlights its timeline instances without
-  // auto-scrolling or opening/changing the trade-off drawer.
-  const markLinkForNavigation = (linkId, optionId) => {
-    if (!linkId) {
-      return
-    }
-
-    if (markedTimelineLinkId === linkId) {
-      setMarkedTimelineLinkId(null)
-      setMarkedTradeOffOptionId(null)
-      return
-    }
-
-    setMarkedTimelineLinkId(linkId)
-
-    if (!optionId) {
-      setMarkedTradeOffOptionId(null)
-      return
-    }
-
-    setMarkedTradeOffOptionId(optionId)
-  }
-
-  const handleTimelineItemClick = (item, event) => {
-    event.preventDefault()
-    event.stopPropagation()
-
-    if (item.kind === 'link') {
-      markLinkForNavigation(item.linkId, item.optionId)
-    }
-
-    toggleTimelineTooltipPin(item, event)
-  }
-
-  const handleTimelineBackgroundClick = (event) => {
-    if (event.target.closest('button, [role="slider"], .timeline-tradeoff-drawer')) {
-      return
-    }
-
-    setMarkedTimelineLinkId(null)
-    setMarkedTradeOffOptionId(null)
-    hideTimelineTooltip(true)
-  }
-
-  const getOptionForLinkId = (linkId) => tradeOffCards
-    .flatMap((card) => card.options)
-    .find((option) => option.linkId === linkId) ?? null
-
-  const handleOverviewTradeOffClick = (row) => {
-    const linkId = row.backendLinkId ?? row.linkId ?? null
-    const option = getOptionForLinkId(linkId)
-
-    if (timelineTradeOffViewId === row.tradeOffId && markedTimelineLinkId === linkId) {
-      closeTimelineTradeOffView()
-      return
-    }
-
-    openTimelineTradeOffView(
-      row.tradeOffId,
-      option?.optionId ?? linkId,
-      linkId,
-      true,
-    )
   }
 
   const renderTimelineBar = (item, rowType = 'link') => {
@@ -4556,14 +1478,7 @@ export default function App() {
   }
 
   const renderSectionChevron = (expanded) => (
-    <svg
-      className={`section-toggle-chevron ${expanded ? 'section-toggle-chevron--expanded' : ''}`}
-      viewBox="0 0 12 12"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path d="M2.25 4.25 6 8l3.75-3.75" />
-    </svg>
+    <SectionChevron expanded={expanded} />
   )
 
   const getScheduleBlockMessage = (row) => {
@@ -4600,2814 +1515,406 @@ export default function App() {
   const getSelectableTimeOptions = () => timeOptions
 
   const renderTimeInput = (menuKey, value, setValue, disabled = false) => (
-    <div
-      className={`time-window-dropdown ${activeTimeMenu === menuKey ? 'time-window-dropdown--open' : ''}`}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
-          setActiveTimeMenu(null)
-        }
-      }}
-    >
-      <div className="time-window-input-shell">
-        <input
-          type="text"
-          inputMode="numeric"
-          placeholder="HH:MM"
-          value={value}
-          maxLength={5}
-          disabled={disabled}
-          onFocus={() => {
-            if (!disabled) {
-              setActiveTimeMenu(menuKey)
-            }
-          }}
-          onChange={(event) => setValue(formatTimeTextInput(event.target.value, value))}
-          className="time-window-input time-window-input--combo"
-        />
-        <button
-          type="button"
-          className="time-window-input-toggle"
-          disabled={disabled}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => {
-            if (!disabled) {
-              setActiveTimeMenu((current) => (current === menuKey ? null : menuKey))
-            }
-          }}
-          aria-haspopup="listbox"
-          aria-expanded={activeTimeMenu === menuKey}
-          aria-label={`Toggle ${menuKey} time suggestions`}
-        >
-          <span className="time-window-select-arrow" aria-hidden="true">▾</span>
-        </button>
-      </div>
-      {activeTimeMenu === menuKey && !disabled && (
-        <div className="time-window-select-menu" role="listbox" aria-label={`${menuKey} time`}>
-          {getSelectableTimeOptions(menuKey).map((timeValue) => (
-            <button
-              key={`${menuKey}-${timeValue}`}
-              type="button"
-              role="option"
-              aria-selected={value === timeValue}
-              className={`time-window-select-option ${value === timeValue ? 'time-window-select-option--selected' : ''}`}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                setValue(timeValue)
-                setActiveTimeMenu(null)
-              }}
-            >
-              {timeValue}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <TimeInput
+      menuKey={menuKey}
+      value={value}
+      setValue={setValue}
+      disabled={disabled}
+      activeTimeMenu={activeTimeMenu}
+      formatTimeTextInput={formatTimeTextInput}
+      getSelectableTimeOptions={getSelectableTimeOptions}
+      setActiveTimeMenu={setActiveTimeMenu}
+    />
   )
 
-  const renderPlanningTimeActions = (target, disabled = false) => {
-    const targetLabel = target === 'start' ? 'Start' : 'End'
-
-    return (
-      <div className="time-window-quick-actions" role="group" aria-label={`${targetLabel} time presets`}>
-        <div className="time-window-quick-primary">
-          <button
-            type="button"
-            className="time-window-quick-button time-window-quick-button--current"
-            disabled={disabled}
-            onClick={() => handleSetCurrentPlanningTime(target)}
-          >
-            Set current time
-          </button>
-          <button
-            type="button"
-            className="time-window-quick-button time-window-quick-button--reset"
-            disabled={disabled}
-            onClick={() => handleResetPlanningTime(target)}
-          >
-            Reset
-          </button>
-        </div>
-        <div className="time-window-adjustment-row">
-          <span className="time-window-adjustment-label">Hours</span>
-          <div className="time-window-stepper" role="group" aria-label={`${targetLabel} hour adjustments`}>
-            <button
-              type="button"
-              className="time-window-quick-button"
-              disabled={disabled}
-              onClick={() => handleShiftPlanningTime(target, -60)}
-            >
-              -1h
-            </button>
-            <button
-              type="button"
-              className="time-window-quick-button"
-              disabled={disabled}
-              onClick={() => handleShiftPlanningTime(target, 60)}
-            >
-              +1h
-            </button>
-          </div>
-        </div>
-        <div className="time-window-adjustment-row">
-          <span className="time-window-adjustment-label">Days</span>
-          <div className="time-window-stepper" role="group" aria-label={`${targetLabel} day adjustments`}>
-            <button
-              type="button"
-              className="time-window-quick-button"
-              disabled={disabled}
-              onClick={() => handleShiftPlanningTime(target, -24 * 60)}
-            >
-              -1 day
-            </button>
-            <button
-              type="button"
-              className="time-window-quick-button"
-              disabled={disabled}
-              onClick={() => handleShiftPlanningTime(target, 24 * 60)}
-            >
-              +1 day
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  const renderPlanningTimeActions = (target, disabled = false) => (
+    <PlanningTimeActions
+      target={target}
+      disabled={disabled}
+      handleResetPlanningTime={handleResetPlanningTime}
+      handleSetCurrentPlanningTime={handleSetCurrentPlanningTime}
+      handleShiftPlanningTime={handleShiftPlanningTime}
+    />
+  )
 
   const renderExtractionProgressPanel = () => (
-    <div className="overview-progress">
-      <div className="overview-progress-body">
-        <div className="overview-progress-heading">
-          <span className="overview-progress-title">Processing Log</span>
-          <span className="overview-progress-percent">{extractionProgress}%</span>
-        </div>
-        <div className="overview-progress-log" role="log" aria-live="polite">
-          {extractionMessages.length === 0 ? (
-            <div className="overview-progress-entry overview-progress-entry--placeholder">
-              Waiting for backend status updates.
-            </div>
-          ) : (
-            extractionMessages.map((entry) => (
-              <div key={entry.id} className="overview-progress-entry">
-                {entry.text}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-      <div className="overview-progress-footer">
-        <div
-          className="overview-progress-bar"
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={extractionProgress}
-          aria-label="Overpass extraction progress"
-        >
-          <div
-            className="overview-progress-bar-fill"
-            style={{ width: `${Math.max(0, Math.min(100, extractionProgress))}%` }}
-          ></div>
-        </div>
-      </div>
-    </div>
+    <ExtractionProgress
+      extractionMessages={extractionMessages}
+      extractionProgress={extractionProgress}
+    />
   )
 
   const renderPlanningWindowContent = (disabled = false) => (
-    <div className={`time-window-panel ${disabled ? 'time-window-panel--disabled' : ''}`}>
-      <div className="time-window-header">
-        <div className="time-window-zone-toggle" role="group" aria-label="Planning interval time zone">
-          <button
-            type="button"
-            className={`time-window-zone-button ${planningTimeMode === 'utc' ? 'time-window-zone-button--active' : ''}`}
-            onClick={() => handlePlanningTimeModeChange('utc')}
-            aria-pressed={planningTimeMode === 'utc'}
-            disabled={disabled}
-          >
-            UTC
-          </button>
-          <button
-            type="button"
-            className={`time-window-zone-button ${planningTimeMode === 'local' ? 'time-window-zone-button--active' : ''}`}
-            onClick={() => handlePlanningTimeModeChange('local')}
-            aria-pressed={planningTimeMode === 'local'}
-            disabled={disabled}
-          >
-            Local
-          </button>
-        </div>
-      </div>
-      <div className="time-window-row">
-        <label className="time-window-field">
-          <span>Start Date</span>
-          <input
-            type="date"
-            value={planningWindowStartDate}
-            disabled={disabled}
-            onChange={(event) => {
-              setPlanningWindowStartDate(event.target.value)
-              event.target.blur()
-            }}
-            className="time-window-input"
-          />
-        </label>
-        <label className="time-window-field time-window-field--time">
-          <span>Start Time</span>
-          {renderTimeInput('start', planningWindowStartTime, setPlanningWindowStartTime, disabled)}
-        </label>
-      </div>
-      {renderPlanningTimeActions('start', disabled)}
-      <div className="time-window-row">
-        <label className="time-window-field">
-          <span>End Date</span>
-          <input
-            type="date"
-            value={planningWindowEndDate}
-            disabled={disabled}
-            onChange={(event) => {
-              setPlanningWindowEndDate(event.target.value)
-              event.target.blur()
-            }}
-            className="time-window-input"
-          />
-        </label>
-        <label className="time-window-field time-window-field--time">
-          <span>End Time</span>
-          {renderTimeInput('end', planningWindowEndTime, setPlanningWindowEndTime, disabled)}
-        </label>
-      </div>
-      {renderPlanningTimeActions('end', disabled)}
-      {planningWindowComplete && !planningWindowValid && (
-        <p className="time-window-error">
-          Enter a valid time window with an end time after the start time.
-        </p>
-      )}
-      {planningWindowInPast && (
-        <p className="time-window-warning">
-          Warning: This Planning Time Window lies in the past.
-        </p>
-      )}
-    </div>
+    <PlanningWindowForm
+      disabled={disabled}
+      handlePlanningTimeModeChange={handlePlanningTimeModeChange}
+      planningTimeMode={planningTimeMode}
+      planningWindowComplete={planningWindowComplete}
+      planningWindowEndDate={planningWindowEndDate}
+      planningWindowEndTime={planningWindowEndTime}
+      planningWindowInPast={planningWindowInPast}
+      planningWindowStartDate={planningWindowStartDate}
+      planningWindowStartTime={planningWindowStartTime}
+      planningWindowValid={planningWindowValid}
+      renderPlanningTimeActions={renderPlanningTimeActions}
+      renderTimeInput={renderTimeInput}
+      setPlanningWindowEndDate={setPlanningWindowEndDate}
+      setPlanningWindowEndTime={setPlanningWindowEndTime}
+      setPlanningWindowStartDate={setPlanningWindowStartDate}
+      setPlanningWindowStartTime={setPlanningWindowStartTime}
+    />
   )
 
   const renderLinkFiltersContent = (disabled = false) => (
-    <div className="filter-grid">
-      <label className="filter-field">
-        <span>Minimum Link Elevation</span>
-        <div className="filter-input-shell">
-          <input
-            type="number"
-            min="0"
-            max="90"
-            step="0.1"
-            inputMode="decimal"
-            placeholder="Optional"
-            value={minimumLinkElevationFilterDeg}
-            disabled={disabled}
-            onChange={(event) => setMinimumLinkElevationFilterDeg(event.target.value)}
-            className="filter-input"
-          />
-          <span className="filter-input-unit">°</span>
-        </div>
-      </label>
-      <label className="filter-field">
-        <span>Minimum Peak Elevation</span>
-        <div className="filter-input-shell">
-          <input
-            type="number"
-            min="0"
-            max="90"
-            step="0.1"
-            inputMode="decimal"
-            placeholder="Optional"
-            value={minimumPeakElevationFilterDeg}
-            disabled={disabled}
-            onChange={(event) => setMinimumPeakElevationFilterDeg(event.target.value)}
-            className="filter-input"
-          />
-          <span className="filter-input-unit">°</span>
-        </div>
-      </label>
-      {!linkFiltersValid && (
-        <p className="filter-error">
-          Optional filter values must stay between 0° and 90°.
-        </p>
-      )}
-    </div>
+    <LinkFilters
+      disabled={disabled}
+      linkFiltersValid={linkFiltersValid}
+      minimumLinkElevationFilterDeg={minimumLinkElevationFilterDeg}
+      minimumPeakElevationFilterDeg={minimumPeakElevationFilterDeg}
+      setMinimumLinkElevationFilterDeg={setMinimumLinkElevationFilterDeg}
+      setMinimumPeakElevationFilterDeg={setMinimumPeakElevationFilterDeg}
+    />
   )
 
   const renderBufferConfigContent = (disabled = false) => (
-    <div className={`scheduling-config ${disabled ? 'scheduling-config--disabled' : ''}`}>
-      <div className="scheduling-config-grid">
-        <label className="filter-field">
-          <span>Capacity</span>
-          <div className="filter-input-shell">
-            <input
-              type="number"
-              min="0.001"
-              step="10"
-              inputMode="decimal"
-              value={dataCapacityGb}
-              disabled={disabled}
-              aria-invalid={!bufferConfigValid}
-              onChange={(event) => setDataCapacityGb(event.target.value)}
-              className="filter-input"
-            />
-            <span className="filter-input-unit">GB</span>
-          </div>
-        </label>
-        <label className="filter-field">
-          <span>Initial Fill</span>
-          <div className="filter-input-shell">
-            <input
-              type="number"
-              min="0"
-              step="10"
-              inputMode="decimal"
-              value={dataStartFillGb}
-              disabled={disabled}
-              aria-invalid={!bufferConfigValid}
-              onChange={(event) => setDataStartFillGb(event.target.value)}
-              className="filter-input"
-            />
-            <span className="filter-input-unit">GB</span>
-          </div>
-        </label>
-        <label className="filter-field">
-          <span>Payload Generation</span>
-          <div className="filter-input-shell">
-            <input
-              type="number"
-              min="0"
-              step="1"
-              inputMode="decimal"
-              value={dataGenerationMbps}
-              disabled={disabled}
-              aria-invalid={!bufferConfigValid}
-              onChange={(event) => setDataGenerationMbps(event.target.value)}
-              className="filter-input"
-            />
-            <span className="filter-input-unit">MB/s</span>
-          </div>
-        </label>
-        <label className="filter-field">
-          <span>Downlink Rate</span>
-          <div className="filter-input-shell">
-            <input
-              type="number"
-              min="0.001"
-              step="0.1"
-              inputMode="decimal"
-              value={dataDownlinkRateMbps}
-              disabled={disabled}
-              aria-invalid={!bufferConfigValid}
-              onChange={(event) => setDataDownlinkRateMbps(event.target.value)}
-              className="filter-input"
-            />
-            <span className="filter-input-unit">MB/s</span>
-          </div>
-        </label>
-      </div>
-      <p className="scheduling-config-note">
-        Backend defaults for selected satellites. The downlink rate is also used when filtering links.
-      </p>
-      {!bufferConfigValid && (
-        <p className="filter-error">
-          Capacity and downlink rate must be positive; initial fill must be between zero and capacity.
-        </p>
-      )}
-    </div>
+    <BufferConfig
+      disabled={disabled}
+      bufferConfigValid={bufferConfigValid}
+      dataCapacityGb={dataCapacityGb}
+      dataDownlinkRateMbps={dataDownlinkRateMbps}
+      dataGenerationMbps={dataGenerationMbps}
+      dataStartFillGb={dataStartFillGb}
+      setDataCapacityGb={setDataCapacityGb}
+      setDataDownlinkRateMbps={setDataDownlinkRateMbps}
+      setDataGenerationMbps={setDataGenerationMbps}
+      setDataStartFillGb={setDataStartFillGb}
+    />
   )
 
   const renderTradeOffConfigContent = (disabled = false) => (
-    <div className={`scheduling-config ${disabled ? 'scheduling-config--disabled' : ''}`}>
-      <label className="filter-field">
-        <span>Scoring Strategy</span>
-        <select
-          value={tradeOffStrategy}
-          disabled={disabled}
-          onChange={(event) => setTradeOffStrategy(event.target.value)}
-          className="filter-input scheduling-config-select"
-        >
-          {TRADE_OFF_STRATEGIES.map((strategy) => (
-            <option key={strategy.value} value={strategy.value}>{strategy.label}</option>
-          ))}
-        </select>
-      </label>
-      {tradeOffStrategy === 'buffer_overflow_avoidance' && (
-        <div className="scheduling-config-grid scheduling-config-grid--parameters">
-          <label className="filter-field">
-            <span>Urgency Alpha</span>
-            <input
-              type="number"
-              min="0"
-              step="0.1"
-              inputMode="decimal"
-              value={scoringAlpha}
-              disabled={disabled}
-              aria-invalid={!tradeOffConfigValid}
-              onChange={(event) => setScoringAlpha(event.target.value)}
-              className="filter-input"
-            />
-          </label>
-          <label className="filter-field">
-            <span>Urgency Exponent</span>
-            <input
-              type="number"
-              min="0.001"
-              step="0.1"
-              inputMode="decimal"
-              value={scoringExponent}
-              disabled={disabled}
-              aria-invalid={!tradeOffConfigValid}
-              onChange={(event) => setScoringExponent(event.target.value)}
-              className="filter-input"
-            />
-          </label>
-        </div>
-      )}
-      <p className="scheduling-config-note">
-        Applied by the backend the next time Calculate Trade-Offs runs.
-      </p>
-      {!tradeOffConfigValid && (
-        <p className="filter-error">Alpha must be zero or greater and exponent must be positive.</p>
-      )}
-    </div>
+    <TradeOffConfig
+      disabled={disabled}
+      scoringAlpha={scoringAlpha}
+      scoringExponent={scoringExponent}
+      setScoringAlpha={setScoringAlpha}
+      setScoringExponent={setScoringExponent}
+      setTradeOffStrategy={setTradeOffStrategy}
+      tradeOffConfigValid={tradeOffConfigValid}
+      tradeOffStrategy={tradeOffStrategy}
+    />
   )
 
   const renderSatelliteOptionsContent = (configDisabled = false) => (
-    <div className="checkbox-list">
-      {satelliteAssets.map((asset) => (
-        (() => {
-          const warningMessage = getAssetWarningMessage(asset)
-
-          return (
-        <label
-          key={asset.name}
-          className={`checkbox-row ${asset.eligible && !configDisabled ? '' : 'checkbox-row--disabled'}`}
-        >
-          <input
-            type="checkbox"
-            checked={selectedSatellites.includes(asset.name)}
-            onChange={() => toggleSatellite(asset.name)}
-            disabled={!asset.eligible || configDisabled}
-          />
-          <span className="asset-name">{asset.name}</span>
-          {!asset.eligible && warningMessage && renderAssetWarning(warningMessage)}
-        </label>
-          )
-        })()
-      ))}
-      {satelliteAssets.length === 0 && (
-        !configDisabled ? <p>No satellite assets available.</p> : null
-      )}
-    </div>
+    <SatelliteOptions
+      configDisabled={configDisabled}
+      renderAssetWarning={renderAssetWarning}
+      satelliteAssets={satelliteAssets}
+      selectedSatellites={selectedSatellites}
+      toggleSatellite={toggleSatellite}
+    />
   )
 
   const renderGroundStationOptionsContent = (configDisabled = false) => (
-    <div className="checkbox-list">
-      {groundStationAssets.map((asset) => (
-        (() => {
-          const warningMessage = getAssetWarningMessage(asset)
-
-          return (
-        <label
-          key={asset.name}
-          className={`checkbox-row ${asset.eligible && !configDisabled ? '' : 'checkbox-row--disabled'}`}
-        >
-          <input
-            type="checkbox"
-            checked={selectedGroundStations.includes(asset.name)}
-            onChange={() => toggleGroundStation(asset.name)}
-            disabled={!asset.eligible || configDisabled}
-          />
-          <span className="asset-name">{asset.name}</span>
-          {!asset.eligible && warningMessage && renderAssetWarning(warningMessage)}
-        </label>
-          )
-        })()
-      ))}
-      {groundStationAssets.length === 0 && (
-        !configDisabled ? <p>No ground-station assets available.</p> : null
-      )}
-    </div>
+    <GroundStationOptions
+      configDisabled={configDisabled}
+      groundStationAssets={groundStationAssets}
+      renderAssetWarning={renderAssetWarning}
+      selectedGroundStations={selectedGroundStations}
+      toggleGroundStation={toggleGroundStation}
+    />
   )
 
   const renderUnavailableAssetsContent = (configDisabled = false) => (
-    <div className="checkbox-list">
-      {unavailableAssets.map((asset) => (
-        (() => {
-          const warningMessage = getAssetWarningMessage(asset)
-
-          return (
-        <div
-          key={asset.name}
-          className="checkbox-row checkbox-row--disabled checkbox-row--static"
-        >
-          <span className="asset-name">{asset.name}</span>
-          {warningMessage && renderAssetWarning(warningMessage)}
-        </div>
-          )
-        })()
-      ))}
-      {unavailableAssets.length === 0 && (
-        <p>{configDisabled ? 'Unavailable assets will appear here after the mission asset load.' : 'No unclassified assets.'}</p>
-      )}
-    </div>
+    <UnavailableAssets
+      configDisabled={configDisabled}
+      renderAssetWarning={renderAssetWarning}
+      unavailableAssets={unavailableAssets}
+    />
   )
 
   const renderAssetsLandingContent = (configDisabled = false) => (
-    <div className="landing-assets-panel">
-      <div className="landing-assets-group">
-        <button
-          type="button"
-          className="section-toggle"
-          onClick={() => toggleSection('satellites')}
-          disabled={configDisabled}
-        >
-          <span>Satellites</span>
-          <span className="section-toggle-icon" aria-hidden="true">
-            {renderSectionChevron(expandedSections.satellites)}
-          </span>
-        </button>
-        {expandedSections.satellites && renderSatelliteOptionsContent(configDisabled)}
-      </div>
-      <div className="landing-assets-group">
-        <button
-          type="button"
-          className="section-toggle"
-          onClick={() => toggleSection('groundStations')}
-          disabled={configDisabled}
-        >
-          <span>Ground Stations</span>
-          <span className="section-toggle-icon" aria-hidden="true">
-            {renderSectionChevron(expandedSections.groundStations)}
-          </span>
-        </button>
-        {expandedSections.groundStations && renderGroundStationOptionsContent(configDisabled)}
-      </div>
-      <div className="landing-assets-group">
-        <button
-          type="button"
-          className="section-toggle"
-          onClick={() => toggleSection('unavailableAssets')}
-          disabled={configDisabled}
-        >
-          <span>Unavailable Assets</span>
-          <span className="section-toggle-icon" aria-hidden="true">
-            {renderSectionChevron(expandedSections.unavailableAssets)}
-          </span>
-        </button>
-        {expandedSections.unavailableAssets && renderUnavailableAssetsContent(configDisabled)}
-      </div>
-    </div>
+    <AssetPicker
+      configDisabled={configDisabled}
+      expandedSections={expandedSections}
+      renderGroundStationOptionsContent={renderGroundStationOptionsContent}
+      renderSatelliteOptionsContent={renderSatelliteOptionsContent}
+      renderSectionChevron={renderSectionChevron}
+      renderUnavailableAssetsContent={renderUnavailableAssetsContent}
+      toggleSection={toggleSection}
+    />
   )
 
   if (view === 'landing') {
-    const filterTooltip = 'Waiting for SatOS mission data\u2026'
-
     return (
-      <div className="app-shell">
-        {appHeader(true)}
-        <div className="app-content app-content--landing">
-          <div className="landing-shell">
-            <div className="landing-content">
-              <div className={`landing-config-shell ${missionAssetsLoaded ? '' : 'landing-config-shell--disabled'}`}>
-                <div className="landing-config-header landing-config-header--primary">
-                  <div
-                    className={`landing-assets-status landing-assets-status--${missionAssetsStatus.tone}`}
-                    role="status"
-                    aria-live="polite"
-                  >
-                    {missionAssetsStatus.busy && (
-                      <span className="loading-spinner loading-spinner--inline" aria-hidden="true"></span>
-                    )}
-                    <span className="landing-assets-status-text">{missionAssetsStatus.label}</span>
-                    {missionAssetsStatus.retryLabel && (
-                      <button
-                        type="button"
-                        className="landing-assets-status-action"
-                        onClick={() => fetchAssets({ forceRefresh: true })}
-                        disabled={launchingScheduler}
-                        title={missionAssetsLoaded ? 'Force fresh re-initialization from SatOS' : 'Retry loading assets'}
-                      >
-                        {missionAssetsStatus.retryLabel}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="landing-config-divider"></div>
-
-                <div className="landing-config-body landing-config-body--landing">
-                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
-                    <div className="landing-config-panel-header">
-                      <span className="landing-config-step">Time Window</span>
-                    </div>
-                    {renderPlanningWindowContent(!missionAssetsLoaded)}
-                    {!missionAssetsLoaded && (
-                      <span className="landing-panel-tooltip">{filterTooltip}</span>
-                    )}
-                  </section>
-
-                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
-                    <div className="landing-config-panel-header">
-                      <span className="landing-config-step">Assets</span>
-                    </div>
-                    {renderAssetsLandingContent(!missionAssetsLoaded)}
-                    {!missionAssetsLoaded && (
-                      <span className="landing-panel-tooltip">{filterTooltip}</span>
-                    )}
-                  </section>
-
-                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
-                    <div className="landing-config-panel-header">
-                      <span className="landing-config-step">Link Filters</span>
-                    </div>
-                    {renderLinkFiltersContent(!missionAssetsLoaded)}
-                    {!missionAssetsLoaded && (
-                      <span className="landing-panel-tooltip">{filterTooltip}</span>
-                    )}
-                  </section>
-
-                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
-                    <div className="landing-config-panel-header">
-                      <span className="landing-config-step">Buffer Configuration</span>
-                    </div>
-                    {renderBufferConfigContent(!missionAssetsLoaded)}
-                    {!missionAssetsLoaded && (
-                      <span className="landing-panel-tooltip">{filterTooltip}</span>
-                    )}
-                  </section>
-
-                  <section className={`landing-config-panel ${missionAssetsLoaded ? '' : 'landing-config-panel--disabled'}`}>
-                    <div className="landing-config-panel-header">
-                      <span className="landing-config-step">Trade-Off Configuration</span>
-                    </div>
-                    {renderTradeOffConfigContent(!missionAssetsLoaded)}
-                    {!missionAssetsLoaded && (
-                      <span className="landing-panel-tooltip">{filterTooltip}</span>
-                    )}
-                  </section>
-                </div>
-
-                {showOverviewProgress && (
-                  <div className="landing-progress-shell">
-                    {renderExtractionProgressPanel()}
-                  </div>
-                )}
-
-                <div className="landing-config-footer">
-                  <div className="landing-footer-controls">
-                    <label className="landing-operator-inline-label">
-                      <span className="landing-operator-icon" aria-hidden="true">👤</span>
-                      <span className="landing-operator-text">Operator:</span>
-                      <input
-                        type="text"
-                        className="landing-operator-inline-input"
-                        placeholder="Enter your name (required)..."
-                        value={userName}
-                        onChange={(e) => setUserName(e.target.value)}
-                        disabled={launchingScheduler}
-                        aria-label="Mission operator name"
-                      />
-                    </label>
-                    <label className="landing-clear-scope-option">
-                      <input
-                        type="checkbox"
-                        checked={clearExistingScopeActivities}
-                        onChange={(e) => setClearExistingScopeActivities(e.target.checked)}
-                        disabled={launchingScheduler}
-                      />
-                      <span>Clear all existing SCOPE activities from the SatOS schedule</span>
-                    </label>
-                  </div>
-                  <div className="landing-action-wrapper">
-                    {launchingScheduler ? (
-                      <button
-                        className="btn-fetch btn-terminate landing-action-button"
-                        onClick={handleTerminateScheduler}
-                      >
-                          Terminate
-                      </button>
-                    ) : (
-                      <button
-                        className="btn-fetch landing-action-button"
-                        onClick={handleLoadScope}
-                        disabled={loadScopeDisabled}
-                      >
-                        Load SCOPE
-                      </button>
-                    )}
-                    {!launchingScheduler && loadScopeDisabled && (
-                      <span className="landing-action-tooltip">
-                        {loadScopeDisabledReason}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {error && (
-                <div className="error-message">
-                  <strong>Error:</strong> {error}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-        {warningTooltip.visible && createPortal((
-          <div
-            className="timeline-hover-tooltip warning-hover-tooltip"
-            style={{
-              left: `${Math.max(12, Math.min(warningTooltip.x + 16, window.innerWidth - 320))}px`,
-              top: `${Math.max(12, Math.min(warningTooltip.y + 18, window.innerHeight - 120))}px`,
-            }}
-          >
-            {warningTooltip.message}
-          </div>
-        ), document.body)}
-      </div>
+      <LandingPage
+        appHeader={appHeader}
+        clearExistingScopeActivities={clearExistingScopeActivities}
+        error={error}
+        fetchAssets={fetchAssets}
+        handleLoadScope={handleLoadScope}
+        handleTerminateScheduler={handleTerminateScheduler}
+        launchingScheduler={launchingScheduler}
+        loadScopeDisabled={loadScopeDisabled}
+        loadScopeDisabledReason={loadScopeDisabledReason}
+        missionAssetsLoaded={missionAssetsLoaded}
+        missionAssetsStatus={missionAssetsStatus}
+        renderAssetsLandingContent={renderAssetsLandingContent}
+        renderBufferConfigContent={renderBufferConfigContent}
+        renderExtractionProgressPanel={renderExtractionProgressPanel}
+        renderLinkFiltersContent={renderLinkFiltersContent}
+        renderPlanningWindowContent={renderPlanningWindowContent}
+        renderTradeOffConfigContent={renderTradeOffConfigContent}
+        setClearExistingScopeActivities={setClearExistingScopeActivities}
+        setUserName={setUserName}
+        showOverviewProgress={showOverviewProgress}
+        userName={userName}
+        warningTooltip={warningTooltip}
+      />
     )
   }
 
   const overviewPanelNode = (
-          <section
-            className={`panel overview-panel ${expandedSections.overview ? '' : 'panel--collapsed'}${getPanelDragClassName('overview')}`}
-            {...getPanelDropZoneProps('overview')}
-          >
-            <div
-              className={`panel-heading ${expandedSections.overview ? '' : 'panel-heading--collapsed'}`}
-              {...getPanelHeadingDragProps('overview')}
-            >
-              <div className="panel-heading-lead">
-                {renderPanelDragHandle('overview')}
-              <div className="panel-heading-title">
-                <h2>Overview</h2>
-              </div>
-              </div>
-              <div className="panel-heading-actions">
-                <div className="overview-inline-status">
-                  {schedulerLaunched && (
-                    <div className="overview-count-inline" title={`Orbit run: ${orbitEngineRunId ?? '—'} (${propagationResult?.overpass_blocks?.length ?? 0} propagated) · Filter run: ${filterRunId ?? '—'} (${filteredLinks.length} links) · Session: ${sessionId ?? '—'}`}>
-                      <span className="overview-status-label">Overpasses</span>
-                      <span className="overview-count-value">{overviewRows.length}</span>
-                    </div>
-                  )}
-                  {schedulerLaunched && (
-                    <div className="overview-count-inline">
-                      <span className="overview-status-label">Available Links</span>
-                      <span className="overview-count-value">{schedulableOverviewRows.length}</span>
-                    </div>
-                  )}
-                </div>
-                {schedulerLaunched && (
-                  <div className="overview-table-visibility-toggle" role="group" aria-label="Overview visibility filter">
-                    <button
-                      type="button"
-                      className={`overview-table-toggle-button ${showUnavailableOverviewRows ? 'overview-table-toggle-button--active' : ''}`}
-                      onClick={() => setShowUnavailableOverviewRows(true)}
-                      aria-pressed={showUnavailableOverviewRows}
-                    >
-                      Show all
-                    </button>
-                    <button
-                      type="button"
-                      className={`overview-table-toggle-button ${!showUnavailableOverviewRows ? 'overview-table-toggle-button--active' : ''}`}
-                      onClick={() => setShowUnavailableOverviewRows(false)}
-                      aria-pressed={!showUnavailableOverviewRows}
-                    >
-                      Show available
-                    </button>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="panel-collapse-toggle"
-                  onClick={() => toggleSection('overview')}
-                  aria-expanded={expandedSections.overview}
-                  aria-controls="overview-panel-content"
-                  aria-label={expandedSections.overview ? 'Collapse overview view' : 'Expand overview view'}
-                >
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.overview)}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {expandedSections.overview && (
-              <div id="overview-panel-content" className="panel-collapsible-content">
-              <div className="overview-list">
-              {showOverviewProgress ? (
-                renderExtractionProgressPanel()
-              ) : (
-                <div className="overview-table-scroll">
-                  <div className={`overview-list-header overview-list-grid ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''}`}>
-                    <span>Link ID</span>
-                    <span>Status</span>
-                    <span>Overpass ID</span>
-                    <span>Sat ID</span>
-                    <span>GS ID</span>
-                    <span>Start</span>
-                    <span>End</span>
-                    <span title="Time until the overpass starts (T-minus)">T-</span>
-                    <span>Duration</span>
-                    <span>Max Elev.</span>
-                    {tradeOffsCalculated && <span>Buffer level before</span>}
-                    {tradeOffsCalculated && (
-                      <span className="overview-header-cell overview-header-cell--tradeoff">
-                        <span>Trade-Off<br />ID</span>
-                      </span>
-                    )}
-                    {tradeOffsCalculated && (
-                      <span className="overview-header-cell overview-header-cell--score">
-                        <span>Score</span>
-                      </span>
-                    )}
-                    {tradeOffsCalculated && <span>Real Data Downlink</span>}
-                    {tradeOffsCalculated && (
-                      <span className="overview-header-cell overview-header-cell--controls">
-                        <span>Controls</span>
-                      </span>
-                    )}
-                    {tradeOffsCalculated && (
-                      <span className="overview-header-cell overview-header-cell--schedule">
-                        <span>Schedule</span>
-                      </span>
-                    )}
-                  </div>
-                  {visibleOverviewRows.length === 0 ? (
-                    <>
-                      {/* No fabricated sample row here: the table only ever
-                          renders links the backend actually returned. */}
-                      <p className="overview-list-empty">
-                        {overviewRows.length === 0
-                          ? 'No candidate links yet. Run the scheduler to propagate orbits and extract overpasses.'
-                          : 'No links match the current visibility filter.'}
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      {visibleOverviewRows.map((row) => {
-                        const rowOption = getOptionForLinkId(row.backendLinkId ?? row.linkId ?? null)
-                        const rowStatus = getOverviewRowStatus(row)
-                        const rowUnavailable = isOverviewRowUnavailable(row)
-                        const rowAvailabilityLabel = getOverviewAvailabilityLabel(row)
-                        const rowRejectionReason = row.rejectionReason ?? getScheduleBlockMessage(row)
-                        const isRecommendedRow = tradeOffsCalculated && row.isScheduled && row.overrideState === 'auto'
-                        const isSelectableRow = tradeOffsCalculated
-                          && !rowUnavailable
-                          && Boolean(sessionId)
-                        const isSelectedRow = isSelectableRow && row.isScheduled
-                        const overrideOption = rowOption ?? {
-                          tradeOffGroupId: row.backendTradeOffId,
-                          optionId: row.backendLinkId,
-                          linkId: row.backendLinkId,
-                          overpassId: row.overpassId,
-                          satId: row.satId,
-                          gsId: row.gsId,
-                          startTime: row.startTime,
-                        }
-                        const rowTradeOffBandClass = overviewTradeOffBandByOverpassId.get(row.overpassId) ?? ''
-
-                        return (
-                          <div
-                            key={row.overpassId}
-                            className={`overview-list-row ${rowUnavailable ? 'overview-list-row--blocked' : ''} ${isRecommendedRow ? 'overview-list-row--recommended' : ''} ${isSelectedRow ? 'overview-list-row--selected' : ''} ${rowTradeOffBandClass} ${tradeOffsCalculated ? 'overview-list-grid--with-tradeoffs' : ''} overview-list-grid`}
-                          >
-                            <span className="overview-linkid-cell">{getOverviewDisplayLinkId(row)}</span>
-                            <span
-                              className="overview-status-cell"
-                              onMouseEnter={rowRejectionReason ? (event) => showWarningTooltip(rowRejectionReason, event) : undefined}
-                              onMouseMove={rowRejectionReason ? moveWarningTooltip : undefined}
-                              onMouseLeave={rowRejectionReason ? hideWarningTooltip : undefined}
-                              onFocus={rowRejectionReason ? (event) => showWarningTooltip(rowRejectionReason, event) : undefined}
-                              onBlur={rowRejectionReason ? hideWarningTooltip : undefined}
-                            >
-                              {isRecommendedRow ? (
-                                <span className="overview-row-note overview-row-note--recommended">
-                                  Recommended
-                                </span>
-                              ) : rowStatus === 'blocked' || rowStatus === 'ineligible' ? (
-                                <span className="overview-row-note">
-                                  {rowAvailabilityLabel}
-                                </span>
-                              ) : (
-                                <span className="overview-status-empty">Eligible</span>
-                              )}
-                            </span>
-                            <span className="overview-overpass-cell">
-                              <span>{row.overpassId}</span>
-                            </span>
-                            <span>{row.satId}</span>
-                            <span>{row.gsId}</span>
-                            <span>{formatOverviewStartDateTime(row.startTime)}</span>
-                            <span>{formatOverviewEndDateTime(row.startTime, row.endTime)}</span>
-                            <OverpassCountdownCell startTime={row.startTime} endTime={row.endTime} />
-                            <span>{row.duration}</span>
-                            <span>{row.maxElevation ?? '—'}</span>
-                            {tradeOffsCalculated && (
-                              <span>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(row.backendLinkId ?? row.linkId ?? null) ?? row.incomingBufferMb)}</span>
-                            )}
-                            {tradeOffsCalculated && (
-                              rowUnavailable
-                                ? <span className="overview-tradeoff-cell">—</span>
-                                : row.tradeOffId !== '—'
-                                ? (
-                                  <span className="overview-tradeoff-cell">
-                                    <button
-                                      type="button"
-                                      className={`overview-tradeoff-button ${markedTimelineLinkId === (row.backendLinkId ?? row.linkId) ? 'overview-tradeoff-button--marked' : ''}`}
-                                      onClick={() => handleOverviewTradeOffClick(row)}
-                                      aria-pressed={markedTimelineLinkId === (row.backendLinkId ?? row.linkId)}
-                                      title={`Show ${row.tradeOffId} and mark link ${row.backendLinkId ?? row.linkId}`}
-                                    >
-                                      {renderTradeOffPill(row.tradeOffId)}
-                                    </button>
-                                  </span>
-                                )
-                                : <span className="overview-tradeoff-cell">—</span>
-                            )}
-                            {tradeOffsCalculated && (
-                              <span className="overview-score-cell">
-                                {Number.isFinite(row.score) ? row.score.toFixed(2) : '—'}
-                              </span>
-                            )}
-                            {tradeOffsCalculated && (
-                              <span className="overview-offloaded-cell">
-                                {formatDataDownlinkGb(
-                                  row.potentialDataDownlinkMb
-                                    ?? (() => {
-                                      const passCap = getPassCapacityMb(row)
-                                      const bufBefore = bufferLevelBeforeByLinkId.get(row.backendLinkId ?? row.linkId ?? null) ?? row.incomingBufferMb
-                                      if (Number.isFinite(passCap) && Number.isFinite(bufBefore)) {
-                                        return Math.min(passCap, bufBefore)
-                                      }
-                                      return getBackendDataDownlinkMb(row)
-                                    })()
-                                )}
-                              </span>
-                            )}
-                            {tradeOffsCalculated && (
-                              <span className="overview-select-cell">
-                                {isSelectableRow ? (
-                                  <span className="overview-override-controls" role="group" aria-label={`Override ${getOverviewDisplayLinkId(row)}`}>
-                                    {['auto', 'pinned', 'excluded'].map((state) => (
-                                      <button
-                                        key={state}
-                                        type="button"
-                                        className={`overview-override-button ${row.overrideState === state ? 'overview-override-button--active' : ''}`}
-                                        onClick={() => handleLinkOverride(overrideOption, state)}
-                                        disabled={Boolean(overridingLinkId)}
-                                        aria-pressed={row.overrideState === state}
-                                        title={getOverviewControlTooltip(state)}
-                                        onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
-                                        onMouseMove={moveWarningTooltip}
-                                        onMouseLeave={hideWarningTooltip}
-                                        onFocus={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
-                                        onBlur={hideWarningTooltip}
-                                      >
-                                        {state === 'auto' ? 'A' : state === 'pinned' ? 'P' : 'X'}
-                                      </button>
-                                    ))}
-                                  </span>
-                                ) : (
-                                  <span className="overview-select-empty">—</span>
-                                )}
-                              </span>
-                            )}
-                            {tradeOffsCalculated && (
-                              <span className="overview-schedule-state-cell">
-                                {isSelectableRow ? (
-                                  <button
-                                    type="button"
-                                    className={`overview-select-button ${row.isScheduled ? 'overview-select-button--selected' : ''}`}
-                                    onClick={() => handleLinkOverride(
-                                      overrideOption,
-                                      getScheduleToggleState(row.isScheduled),
-                                    )}
-                                    disabled={Boolean(overridingLinkId)}
-                                    aria-pressed={row.isScheduled}
-                                    aria-label={row.isScheduled
-                                      ? `Scheduled. Click to unschedule ${getOverviewDisplayLinkId(row)}`
-                                      : `Unscheduled. Click to schedule ${getOverviewDisplayLinkId(row)}`}
-                                    title={getScheduleToggleTitle(row.isScheduled)}
-                                  >
-                                    {row.isScheduled ? 'Scheduled' : 'Schedule'}
-                                  </button>
-                                ) : (
-                                  <span className="overview-select-empty">—</span>
-                                )}
-                              </span>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </>
-                  )}
-                </div>
-              )}
-              </div>
-
-              <div className="panel-action-wrapper">
-                <button
-                  className="panel-action"
-                  disabled={!schedulerLaunched || calculatingTradeOffs || !tradeOffAvailable}
-                  onClick={handleCalculateTradeOffs}
-                >
-                  {calculatingTradeOffs ? 'Calculating Trade-Offs...' : 'Calculate Trade-Offs'}
-                </button>
-                {!calculatingTradeOffs && (
-                  <span className="panel-action-tooltip">
-                    {!schedulerLaunched
-                      ? 'Finish loading SCOPE and wait for extraction to complete.'
-                      : !tradeOffAvailable
-                        ? !bufferConfigValid
-                          ? 'Enter a valid buffer configuration; initial fill cannot exceed capacity.'
-                          : !tradeOffConfigValid
-                            ? 'Enter a valid trade-off scoring configuration.'
-                          : overviewRows.length > 0
-                          ? 'All backend-filtered links are ineligible.'
-                          : 'No filtered links are available.'
-                        : 'Create a backend scheduling session for the filtered links.'}
-                  </span>
-                )}
-              </div>
-              </div>
-            )}
-          </section>
+    <OverviewPanel
+      bufferConfigValid={bufferConfigValid}
+      bufferLevelBeforeByLinkId={bufferLevelBeforeByLinkId}
+      calculatingTradeOffs={calculatingTradeOffs}
+      expandedSections={expandedSections}
+      filterRunId={filterRunId}
+      filteredLinks={filteredLinks}
+      formatOverviewEndDateTime={formatOverviewEndDateTime}
+      formatOverviewStartDateTime={formatOverviewStartDateTime}
+      getOptionForLinkId={getOptionForLinkId}
+      getOverviewAvailabilityLabel={getOverviewAvailabilityLabel}
+      getPanelDragClassName={getPanelDragClassName}
+      getPanelDropZoneProps={getPanelDropZoneProps}
+      getPanelHeadingDragProps={getPanelHeadingDragProps}
+      getScheduleBlockMessage={getScheduleBlockMessage}
+      handleCalculateTradeOffs={handleCalculateTradeOffs}
+      handleLinkOverride={handleLinkOverride}
+      handleOverviewTradeOffClick={handleOverviewTradeOffClick}
+      hideWarningTooltip={hideWarningTooltip}
+      isOverviewRowUnavailable={isOverviewRowUnavailable}
+      markedTimelineLinkId={markedTimelineLinkId}
+      moveWarningTooltip={moveWarningTooltip}
+      orbitEngineRunId={orbitEngineRunId}
+      overridingLinkId={overridingLinkId}
+      overviewRows={overviewRows}
+      overviewTradeOffBandByOverpassId={overviewTradeOffBandByOverpassId}
+      propagationResult={propagationResult}
+      renderExtractionProgressPanel={renderExtractionProgressPanel}
+      renderPanelDragHandle={renderPanelDragHandle}
+      renderSectionChevron={renderSectionChevron}
+      renderTradeOffPill={renderTradeOffPill}
+      schedulableOverviewRows={schedulableOverviewRows}
+      schedulerLaunched={schedulerLaunched}
+      sessionId={sessionId}
+      setShowUnavailableOverviewRows={setShowUnavailableOverviewRows}
+      showOverviewProgress={showOverviewProgress}
+      showUnavailableOverviewRows={showUnavailableOverviewRows}
+      showWarningTooltip={showWarningTooltip}
+      toggleSection={toggleSection}
+      tradeOffAvailable={tradeOffAvailable}
+      tradeOffConfigValid={tradeOffConfigValid}
+      tradeOffsCalculated={tradeOffsCalculated}
+      visibleOverviewRows={visibleOverviewRows}
+    />
   )
-
-  const tradeOffPanelNode = TRADE_OFF_PANEL_ENABLED ? (
-          <section
-            className={`panel tradeoff-panel ${expandedSections.tradeOff ? '' : 'panel--collapsed'}${getPanelDragClassName('tradeOff')}`}
-            {...getPanelDropZoneProps('tradeOff')}
-          >
-            <div
-              className={`panel-heading ${expandedSections.tradeOff ? '' : 'panel-heading--collapsed'}`}
-              {...getPanelHeadingDragProps('tradeOff')}
-            >
-              <div className="panel-heading-lead">
-                {renderPanelDragHandle('tradeOff')}
-              <div className="panel-heading-title">
-                <h2>Trade-Off</h2>
-              </div>
-              </div>
-              <button
-                type="button"
-                className="panel-collapse-toggle"
-                onClick={() => toggleSection('tradeOff')}
-                aria-expanded={expandedSections.tradeOff}
-                aria-controls="tradeoff-panel-content"
-                aria-label={expandedSections.tradeOff ? 'Collapse trade-off view' : 'Expand trade-off view'}
-              >
-                <span className="section-toggle-icon" aria-hidden="true">
-                  {renderSectionChevron(expandedSections.tradeOff)}
-                </span>
-              </button>
-            </div>
-            {expandedSections.tradeOff && (
-              <div id="tradeoff-panel-content" className="panel-collapsible-content">
-                {!tradeOffsCalculated && (
-                  <p>Calculate trade-offs to create a backend scheduling session.</p>
-                )}
-                {tradeOffsCalculated && tradeOffCards.length === 0 && (
-                  <p>No trade-off groups were identified for the current selection.</p>
-                )}
-                {tradeOffsCalculated && tradeOffCards.length > 0 && (
-                  <div className="tradeoff-card-list" ref={tradeOffCardListRef}>
-                {tradeOffCards.map((card, index) => (
-                  <article
-                    key={card.id}
-                    data-card-index={index}
-                    className={`tradeoff-card ${index === activeTradeOffCardIndex ? 'tradeoff-card--active' : ''}`}
-                    style={{ '--tradeoff-accent': getTradeOffAccentColor(card.colorIndex) }}
-                    onClick={() => {
-                      if (index !== activeTradeOffCardIndex) {
-                        showTradeOffCard(index)
-                      }
-                    }}
-                  >
-                    <div className="tradeoff-card-header">
-                      <div className="tradeoff-card-titleblock">
-                        <h3>{renderTradeOffPill(card.title, card.colorIndex)}</h3>
-                        <p className="tradeoff-card-resource">{card.resourceLabel}</p>
-                      </div>
-                    </div>
-                    <div className="tradeoff-option-list">
-                      {card.options.map((option) => {
-                        const optionRow = overviewRowByLinkId.get(option.linkId)
-                        const effectiveOverrideState = optionRow?.overrideState ?? option.overrideState
-                        const optionScheduled = Boolean(optionRow?.isScheduled ?? option.isScheduled)
-                        const optionRecommended = optionScheduled && effectiveOverrideState === 'auto'
-                        const displayScore = Number(optionRow?.score ?? option.score ?? 0)
-
-                        const optionMarked = markedTradeOffOptionId === option.optionId
-
-                        return (
-                          <div
-                            key={option.optionId}
-                            data-option-id={option.optionId}
-                            className={[
-                              'tradeoff-option',
-                              optionScheduled ? 'tradeoff-option--selected' : '',
-                              optionMarked ? 'tradeoff-option--marked' : '',
-                            ].filter(Boolean).join(' ')}
-                            style={{ '--tradeoff-accent': getTradeOffAccentColor(option.colorIndex) }}
-                            role="button"
-                            tabIndex={0}
-                            aria-pressed={optionMarked}
-                            title={optionMarked ? 'Unmark this pass in the timeline' : 'Mark this pass in the timeline'}
-                            onClick={() => focusTimelineOnOption(option)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault()
-                                focusTimelineOnOption(option)
-                              }
-                            }}
-                          >
-                            <div className="tradeoff-option-header">
-                              <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
-                              <div className="tradeoff-meta tradeoff-meta--option">
-                                {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
-                                <span className="tradeoff-score">Score {displayScore.toFixed(2)}</span>
-                              </div>
-                            </div>
-
-                            <dl className="tradeoff-option-facts">
-                              <div className="tradeoff-option-fact">
-                                <dt>Satellite</dt>
-                                <dd>{option.satId ?? '—'}</dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
-                                <dt>Ground Station</dt>
-                                <dd>{option.gsId ?? '—'}</dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
-                                <dt>Start</dt>
-                                <dd>{formatOverviewStartDateTime(option.startTime)}</dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
-                                <dt>End</dt>
-                                <dd>{formatOverviewEndDateTime(option.startTime, option.endTime)}</dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
-                                <dt>Duration</dt>
-                                <dd>{option.duration ?? '—'}</dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
-                                <dt>Max Elev.</dt>
-                                <dd>{option.maxElevation ?? '—'}</dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
-                                <dt>Buffer level before</dt>
-                                <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb)}</dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
-                                <dt>Full pass capacity</dt>
-                                <dd>
-                                  <span>{formatDataDownlinkGb(getPassCapacityMb(option))}</span>
-                                  {(() => {
-                                    const passCapMb = getPassCapacityMb(option)
-                                    const bufBeforeMb = bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb
-                                    if (Number.isFinite(passCapMb) && Number.isFinite(bufBeforeMb) && bufBeforeMb < passCapMb) {
-                                      return renderAssetWarning("Pass Capacity exceeds Buffer level")
-                                    }
-                                    return null
-                                  })()}
-                                </dd>
-                              </div>
-                              <div className="tradeoff-option-fact">
-                                <dt>Real data downlink</dt>
-                                <dd>
-                                  {formatDataDownlinkGb(
-                                    option.potentialDataDownlinkMb
-                                      ?? (() => {
-                                        const passCap = getPassCapacityMb(option)
-                                        const bufBefore = bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb
-                                        if (Number.isFinite(passCap) && Number.isFinite(bufBefore)) {
-                                          return Math.min(passCap, bufBefore)
-                                        }
-                                        return getBackendDataDownlinkMb(option)
-                                      })()
-                                  )}
-                                </dd>
-                              </div>
-                            </dl>
-
-                            <div className="tradeoff-option-actions">
-                              <span
-                                className="tradeoff-override-controls"
-                                role="group"
-                                aria-label={`Override ${option.linkId ?? option.overpassId}`}
-                              >
-                                {['auto', 'pinned', 'excluded'].map((state) => (
-                                  <button
-                                    key={state}
-                                    type="button"
-                                    className={`tradeoff-override-button ${effectiveOverrideState === state ? 'tradeoff-override-button--active' : ''}`}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      handleLinkOverride(option, state)
-                                    }}
-                                    disabled={Boolean(overridingLinkId)}
-                                    aria-pressed={effectiveOverrideState === state}
-                                    title={getOverviewControlTooltip(state)}
-                                    onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
-                                    onMouseMove={moveWarningTooltip}
-                                    onMouseLeave={hideWarningTooltip}
-                                    onFocus={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
-                                    onBlur={hideWarningTooltip}
-                                  >
-                                    {state === 'auto' ? 'A' : state === 'pinned' ? 'P' : 'X'}
-                                  </button>
-                                ))}
-                              </span>
-                              <button
-                                type="button"
-                                className="tradeoff-select-button"
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  handleLinkOverride(option, getScheduleToggleState(optionScheduled))
-                                }}
-                                disabled={Boolean(overridingLinkId)}
-                                aria-pressed={optionScheduled}
-                                title={getScheduleToggleTitle(optionScheduled)}
-                              >
-                                {optionScheduled ? 'Scheduled' : 'Schedule'}
-                              </button>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </article>
-                ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-  ) : null
 
   const mapViewPanelNode = (
-          <section
-            className={`panel map-panel${getPanelDragClassName('mapView')}`}
-            {...getPanelDropZoneProps('mapView')}
-          >
-            <div
-              className="panel-heading panel-heading--map"
-              {...getPanelHeadingDragProps('mapView')}
-            >
-              <div className="panel-heading-lead">
-                {renderPanelDragHandle('mapView')}
-              <div className="panel-heading-title">
-                <h2>Map View</h2>
-              </div>
-              </div>
-              <div className="map-panel-controls">
-                <button
-                  type="button"
-                  className="map-panel-toggle"
-                  onClick={() => toggleSection('mapView')}
-                  aria-expanded={expandedSections.mapView}
-                  aria-controls="map-panel-content"
-                  aria-label={expandedSections.mapView ? 'Collapse map view' : 'Expand map view'}
-                >
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.mapView)}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {expandedSections.mapView && (
-              <div id="map-panel-content" className="map-layout">
-                <div className="map-canvas-shell">
-                  <MapErrorBoundary>
-                    <Suspense
-                      fallback={(
-                        <div className="mission-map-shell">
-                          <div className="mission-map-state" role="status">Loading map...</div>
-                        </div>
-                      )}
-                    >
-                      <MissionMap
-                        ref={missionMapRef}
-                        heightPx={mapViewHeightPx}
-                        assets={visibleMapAssets}
-                        satelliteTracks={preparedSatelliteTracks}
-                        activeAssetId={activeMapAsset?.id ?? null}
-                        onSelectAsset={handleSelectMapAsset}
-                        timeMode={activePlanningWindow?.timeMode ?? planningTimeMode}
-                        showGroundStationVisibility={showGroundStationVisibilityCircles}
-                        showSatelliteVisibility={showSatelliteVisibilityCircles}
-                        showGroundTracks={showGroundTracks}
-                        groundTrackWindowHours={groundTrackWindowHours}
-                      />
-                    </Suspense>
-                  </MapErrorBoundary>
-                </div>
-
-                <aside className="map-sidebar" style={{ maxHeight: `${mapViewHeightPx}px` }}>
-                  <div className="map-sidebar-section">
-                    <h3>Map Layers</h3>
-                    <div
-                      className={`map-layer-controls-wrapper${
-                        schedulerLaunched ? '' : ' map-layer-controls-wrapper--disabled'
-                      }`}
-                    >
-                      <div className="map-layer-toggle-list">
-                        <div className="map-layer-toggle">
-                          <span className="map-layer-toggle-label">
-                            <span
-                              className="map-layer-toggle-swatch map-layer-toggle-swatch--ground-station"
-                              aria-hidden="true"
-                            ></span>
-                            Ground station visibility circles
-                          </span>
-                          <label className="toggle-switch">
-                            <input
-                              type="checkbox"
-                              checked={showGroundStationVisibilityCircles}
-                              disabled={!schedulerLaunched}
-                              onChange={() => setShowGroundStationVisibilityCircles((current) => !current)}
-                            />
-                            <span className="toggle-switch-track" aria-hidden="true">
-                              <span className="toggle-switch-thumb"></span>
-                            </span>
-                          </label>
-                        </div>
-                        <div className="map-layer-toggle">
-                          <span className="map-layer-toggle-label">
-                            <span
-                              className="map-layer-toggle-swatch map-layer-toggle-swatch--satellite"
-                              aria-hidden="true"
-                            ></span>
-                            Satellite visibility circles
-                          </span>
-                          <label className="toggle-switch">
-                            <input
-                              type="checkbox"
-                              checked={showSatelliteVisibilityCircles}
-                              disabled={!schedulerLaunched}
-                              onChange={() => setShowSatelliteVisibilityCircles((current) => !current)}
-                            />
-                            <span className="toggle-switch-track" aria-hidden="true">
-                              <span className="toggle-switch-thumb"></span>
-                            </span>
-                          </label>
-                        </div>
-                        <div className="map-layer-toggle">
-                          <span className="map-layer-toggle-label">
-                            <span
-                              className="map-layer-toggle-swatch map-layer-toggle-swatch--ground-track"
-                              aria-hidden="true"
-                            ></span>
-                            Ground tracks
-                          </span>
-                          <label className="toggle-switch">
-                            <input
-                              type="checkbox"
-                              checked={showGroundTracks}
-                              disabled={!schedulerLaunched}
-                              onChange={() => setShowGroundTracks((current) => !current)}
-                            />
-                            <span className="toggle-switch-track" aria-hidden="true">
-                              <span className="toggle-switch-thumb"></span>
-                            </span>
-                          </label>
-                        </div>
-                        <label className="time-window-field map-layer-window-field">
-                          <span>Ground track window (hours)</span>
-                          <input
-                            className="time-window-input"
-                            type="number"
-                            min="0"
-                            step="0.5"
-                            value={groundTrackWindowHours}
-                            disabled={!schedulerLaunched || !showGroundTracks}
-                            onChange={(event) => {
-                              const parsed = Number(event.target.value)
-                              setGroundTrackWindowHours(Number.isFinite(parsed) ? Math.max(0, parsed) : 0)
-                            }}
-                          />
-                        </label>
-                      </div>
-                      {!schedulerLaunched && (
-                        <span className="map-layer-controls-tooltip">
-                          Launch the communication scheduler to unlock map layer settings.
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="map-sidebar-section">
-                    <h3>Visible Assets</h3>
-                    {visibleMapAssets.length > 0 ? (
-                      <div ref={visibleMapAssetListRef} className="map-asset-card-list">
-                        {visibleMapAssets.map((asset) => (
-                          <button
-                            key={asset.id}
-                            type="button"
-                            data-map-asset-id={asset.id}
-                            aria-pressed={activeMapAsset?.id === asset.id}
-                            className={`map-asset-card ${
-                              activeMapAsset?.id === asset.id ? 'map-asset-card--active' : ''
-                            }`}
-                            onClick={() => setActiveMapAssetId((current) => (
-                              current === asset.id ? null : asset.id
-                            ))}
-                          >
-                            <div className="map-asset-card-header">
-                              <span className={`map-asset-dot map-asset-dot--${asset.markerType}`}></span>
-                              <span className="map-asset-card-name">{asset.name.toUpperCase()}</span>
-                            </div>
-                            <div className="map-asset-card-type">{asset.type}</div>
-                            <dl className="map-asset-card-grid">
-                              <dt>Latitude</dt>
-                              <dd>{formatCoordinate(asset.latitude, 'N', 'S')}</dd>
-                              <dt>Longitude</dt>
-                              <dd>{formatCoordinate(asset.longitude, 'E', 'W')}</dd>
-                              {asset.markerType === 'ground-station' && (
-                                <>
-                                  <dt>Min. Elevation</dt>
-                                  <dd>
-                                    {Number.isFinite(asset.minLinkElevation)
-                                      ? `${asset.minLinkElevation.toFixed(1)}°`
-                                      : '—'}
-                                  </dd>
-                                </>
-                              )}
-                              {asset.markerType === 'satellite' && (
-                                <>
-                                  <dt>Altitude</dt>
-                                  <dd>{formatAltitude(asset.altitude)}</dd>
-                                  <dt>Track Time</dt>
-                                  <dd>{formatTimelinePlayheadDateTime(asset.timestamp)}</dd>
-                                </>
-                              )}
-                            </dl>
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <p>No selected assets with usable map coordinates yet.</p>
-                    )}
-                  </div>
-
-                  {selectedAssetsWithoutLocation.length > 0 && (
-                    <div className="map-sidebar-section">
-                      <h3>Selected Without Location</h3>
-                      <div className="map-missing-location-list">
-                        {selectedAssetsWithoutLocation.map((asset) => (
-                          <div key={asset.id} className="map-missing-location-card">
-                            <span className="map-missing-location-name">{asset.name.toUpperCase()}</span>
-                            <span className="map-missing-location-type">{asset.type}</span>
-                            <span className="map-missing-location-copy">{asset.locationMessage}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </aside>
-              </div>
-            )}
-          </section>
+    <MapPanel
+      activeMapAsset={activeMapAsset}
+      activePlanningWindow={activePlanningWindow}
+      expandedSections={expandedSections}
+      formatAltitude={formatAltitude}
+      formatCoordinate={formatCoordinate}
+      formatTimelinePlayheadDateTime={formatTimelinePlayheadDateTime}
+      getPanelDragClassName={getPanelDragClassName}
+      getPanelDropZoneProps={getPanelDropZoneProps}
+      getPanelHeadingDragProps={getPanelHeadingDragProps}
+      groundTrackWindowHours={groundTrackWindowHours}
+      handleSelectMapAsset={handleSelectMapAsset}
+      mapViewHeightPx={mapViewHeightPx}
+      missionMapRef={missionMapRef}
+      planningTimeMode={planningTimeMode}
+      preparedSatelliteTracks={preparedSatelliteTracks}
+      renderPanelDragHandle={renderPanelDragHandle}
+      renderSectionChevron={renderSectionChevron}
+      schedulerLaunched={schedulerLaunched}
+      selectedAssetsWithoutLocation={selectedAssetsWithoutLocation}
+      setActiveMapAssetId={setActiveMapAssetId}
+      setGroundTrackWindowHours={setGroundTrackWindowHours}
+      setShowGroundStationVisibilityCircles={setShowGroundStationVisibilityCircles}
+      setShowGroundTracks={setShowGroundTracks}
+      setShowSatelliteVisibilityCircles={setShowSatelliteVisibilityCircles}
+      showGroundStationVisibilityCircles={showGroundStationVisibilityCircles}
+      showGroundTracks={showGroundTracks}
+      showSatelliteVisibilityCircles={showSatelliteVisibilityCircles}
+      toggleSection={toggleSection}
+      visibleMapAssetListRef={visibleMapAssetListRef}
+      visibleMapAssets={visibleMapAssets}
+    />
   )
 
+  // Everything TimelineTracks reads. Assembled here rather than threaded
+  // through props: the surface is genuinely this wide, and one named bundle
+  // is easier to keep honest than a sixty-attribute call site.
+  const timelineContextValue = {
+    activeTimelineTradeOffCard,
+    bufferLevelBeforeByLinkId,
+    buildDataVolumePolyline,
+    closeTimelineTradeOffView,
+    dataVolumeModel,
+    dataVolumeYMaxGb,
+    expandedTimelineGroups,
+    expandedTimelineSections,
+    focusTimelineOnOption,
+    formatBufferLevelGb,
+    formatDataDownlinkGb,
+    formatGb,
+    formatOverviewEndDateTime,
+    formatOverviewStartDateTime,
+    formatTimelineDateTime,
+    formatTimelinePlayheadDateTime,
+    getBackendDataDownlinkMb,
+    getOverviewControlTooltip,
+    getPassCapacityMb,
+    getScheduleToggleState,
+    getScheduleToggleTitle,
+    getTimelineRowHeight,
+    handleLinkOverride,
+    handleTimelineBackgroundClick,
+    handleTimelineKeyDown,
+    handleTimelinePlayheadKeyDown,
+    handleTimelinePlayheadPointerDown,
+    handleTimelinePlayheadPointerMove,
+    handleTimelinePlayheadPointerUp,
+    handleTimelineTradeOffDrawerPointerDown,
+    hideWarningTooltip,
+    markedTimelineLinkId,
+    markedTradeOffOptionId,
+    moveWarningTooltip,
+    overridingLinkId,
+    overviewRowByLinkId,
+    pauseTimelineLiveMode,
+    planningWindowEndTimestamp,
+    planningWindowStartTimestamp,
+    renderAssetWarning,
+    renderSectionChevron,
+    renderTimelineBar,
+    renderTradeOffPill,
+    showWarningTooltip,
+    timelineIsFit,
+    timelineModel,
+    timelinePlayheadCanvasRatio,
+    timelinePlayheadSliderRef,
+    timelinePlayheadTimestamp,
+    timelineRenderRows,
+    timelineScrollFrameRef,
+    timelineScrollRef,
+    timelineTradeOffDrawerOffset,
+    timelineTradeOffDrawerRef,
+    timelineWheelHintRef,
+    timelineWidthPx,
+    toggleTimelineGroup,
+    toggleTimelineSection,
+    visibleTimelineTicks,
+  }
+
   const timelinePanelNode = (
-          <section
-            ref={timelinePanelRef}
-            className={`panel timeline-panel ${expandedSections.timeline ? '' : 'panel--collapsed'}${getPanelDragClassName('timeline')}`}
-            {...getPanelDropZoneProps('timeline')}
-          >
-            <div
-              className={`panel-heading panel-heading--timeline ${expandedSections.timeline ? '' : 'panel-heading--collapsed'}`}
-              {...getPanelHeadingDragProps('timeline')}
-            >
-              <div className="panel-heading-lead">
-                {renderPanelDragHandle('timeline')}
-              <div className="panel-heading-title">
-                <h2>Timeline</h2>
-              </div>
-              </div>
-              <div className="panel-heading-actions">
-                {timelineModel && (
-                  <div className="timeline-header-meta">
-                    <span className="timeline-meta-item">
-                      <span className="timeline-meta-label">
-                        Planning Window ({activePlanningWindow?.timeMode === 'local' ? 'Local' : 'UTC'})
-                      </span>
-                      <span className="timeline-meta-value">
-                        {formatPlanningWindow(
-                          activePlanningWindow?.startTime,
-                          activePlanningWindow?.endTime,
-                          activePlanningWindow?.timeMode,
-                        )}
-                      </span>
-                    </span>
-                    <span className="timeline-meta-item timeline-meta-item--muted">
-                      <span className="timeline-meta-label">DOY</span>
-                      <span className="timeline-meta-value">
-                        {getDayOfYear(timelineModel.baseDate, activePlanningWindow?.timeMode)}
-                      </span>
-                    </span>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="panel-collapse-toggle"
-                  onClick={() => toggleSection('timeline')}
-                  aria-expanded={expandedSections.timeline}
-                  aria-controls="timeline-panel-content"
-                  aria-label={expandedSections.timeline ? 'Collapse timeline view' : 'Expand timeline view'}
-                >
-                  <span className="section-toggle-icon" aria-hidden="true">
-                    {renderSectionChevron(expandedSections.timeline)}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {expandedSections.timeline && (
-              <div id="timeline-panel-content" className="panel-collapsible-content">
-                {!schedulerLaunched && (
-                  <p className="timeline-empty-copy">
-                    Launch Communication Scheduler to initialize the planning timeline.
-                  </p>
-                )}
-
-                {schedulerLaunched && timelineModel && (
-                  <>
-                <div className="timeline-toolbar">
-                  <div className="timeline-toolbar-groups">
-                    <div className="timeline-toolbar-row">
-                      <div className="timeline-toolbar-side timeline-toolbar-side--left">
-                        <div className="timeline-toggle-group" role="group" aria-label="Timeline layers">
-                          {TIMELINE_LAYERS.map((layer) => (
-                            <button
-                              key={layer.id}
-                              type="button"
-                              className={`timeline-toggle ${timelineLayers[layer.id] ? 'timeline-toggle--active' : ''}`}
-                              onClick={() => toggleTimelineLayer(layer.id)}
-                              aria-pressed={Boolean(timelineLayers[layer.id])}
-                            >
-                              {layer.label}
-                            </button>
-                          ))}
-                          {timelineLayers.communication && (
-                            <button
-                              type="button"
-                              className={`timeline-toggle timeline-toggle--sub ${timelineLayers.ineligible ? 'timeline-toggle--active' : ''}`}
-                              onClick={() => toggleTimelineLayer('ineligible')}
-                              aria-pressed={Boolean(timelineLayers.ineligible)}
-                            >
-                              Show Ineligible Links
-                            </button>
-                          )}
-                        </div>
-                        <div className="timeline-toggle-group timeline-toggle-group--asset" role="group" aria-label="Timeline assets">
-                          <button
-                            type="button"
-                            className={`timeline-toggle ${timelineAssetVisibility.satellites ? 'timeline-toggle--active' : ''}`}
-                            onClick={() => toggleTimelineAssetVisibility('satellites')}
-                            aria-pressed={timelineAssetVisibility.satellites}
-                          >
-                            Satellites
-                          </button>
-                          <button
-                            type="button"
-                            className={`timeline-toggle ${timelineAssetVisibility.groundStations ? 'timeline-toggle--active' : ''}`}
-                            onClick={() => toggleTimelineAssetVisibility('groundStations')}
-                            aria-pressed={timelineAssetVisibility.groundStations}
-                          >
-                            Ground Stations
-                          </button>
-                        </div>
-                      </div>
-                      <div className="timeline-toolbar-side timeline-toolbar-side--right">
-                        <div className="timeline-toggle-group timeline-toggle-group--playback" role="group" aria-label="Timeline playback">
-                          <button
-                            type="button"
-                            className={`timeline-toggle timeline-play-toggle ${timelinePlaying ? 'timeline-toggle--active' : ''}`}
-                            onClick={handleTimelinePlaybackToggle}
-                            disabled={planningWindowStartTimestamp === null || planningWindowEndTimestamp === null}
-                            aria-pressed={timelinePlaying}
-                          >
-                            <span className="timeline-play-icon" aria-hidden="true">
-                              {timelinePlaying ? '⏸' : '▶'}
-                            </span>
-                            {timelinePlaying ? 'Pause' : 'Play'}
-                          </button>
-                          <div className="timeline-speed-control" role="group" aria-label="Playback speed">
-                            {TIMELINE_PLAYBACK_SPEEDS.map((speed) => (
-                              <button
-                                key={speed}
-                                type="button"
-                                className={`timeline-speed-option ${timelinePlaybackSpeed === speed ? 'timeline-speed-option--active' : ''}`}
-                                onClick={() => setTimelinePlaybackSpeed(speed)}
-                                aria-pressed={timelinePlaybackSpeed === speed}
-                              >
-                                {speed}×
-                              </button>
-                            ))}
-                          </div>
-                          <div className="timeline-zoom-control">
-                            <button
-                              type="button"
-                              className="timeline-zoom-option timeline-zoom-reset"
-                              onClick={handleResetTimelineView}
-                              disabled={
-                                timelineZoomLevel === TIMELINE_DEFAULT_ZOOM_LEVEL
-                                && timelineCustomZoomMultiplier === null
-                              }
-                            >
-                              Reset View
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {timelineRenderRows.length === 0 ? (
-                  <p className="timeline-empty-copy">Enable at least one timeline layer and one asset section to display the schedule view.</p>
-                ) : (
-                  <div
-                    className="timeline-layout"
-                    onClick={handleTimelineBackgroundClick}
-                  >
-                    <div className="timeline-label-column">
-                      <div className="timeline-label-cell timeline-label-cell--day"></div>
-                      <div className="timeline-label-cell timeline-label-cell--axis"></div>
-                      {timelineRenderRows.map((renderRow) => {
-                        const rowStyle = {
-                          '--timeline-row-height': getTimelineRowHeight(renderRow),
-                        }
-
-                        if (renderRow.type === 'section') {
-                          const sectionExpanded = Boolean(
-                            expandedTimelineSections[renderRow.section.id],
-                          )
-
-                          return (
-                            <div
-                              key={`${renderRow.key}-label`}
-                              className="timeline-label-cell timeline-label-cell--section"
-                              style={rowStyle}
-                            >
-                              <button
-                                type="button"
-                                className="timeline-section-toggle"
-                                onClick={() => toggleTimelineSection(renderRow.section.id)}
-                                aria-expanded={sectionExpanded}
-                                aria-label={`${sectionExpanded ? 'Collapse' : 'Expand'} ${renderRow.label}`}
-                              >
-                                <span className="timeline-group-chevron" aria-hidden="true">
-                                  {renderSectionChevron(sectionExpanded)}
-                                </span>
-                                <span className="timeline-section-name">{renderRow.label}</span>
-                                <span className="timeline-section-count">
-                                  {renderRow.section.groups.length}
-                                </span>
-                              </button>
-                            </div>
-                          )
-                        }
-
-                        if (renderRow.type === 'group') {
-                          const groupExpanded = Boolean(expandedTimelineGroups[renderRow.group.id])
-                          const groupMarked = renderRow.group.rows.some((row) => (
-                            row.items.some((item) => item.linkId === markedTimelineLinkId)
-                          ))
-                          const groupSelected = renderRow.group.rows.some((row) => (
-                            row.items.some((item) => item.variant === 'selected')
-                          ))
-
-                          return (
-                            <div
-                              key={`${renderRow.key}-label`}
-                              className={`timeline-label-cell timeline-label-cell--group ${groupExpanded ? 'timeline-label-cell--group-open' : ''} ${groupMarked ? 'timeline-label-cell--marked' : ''} ${groupSelected ? 'timeline-label-cell--selected' : ''}`}
-                              style={rowStyle}
-                            >
-                              <button
-                                type="button"
-                                className="timeline-group-toggle"
-                                onClick={() => toggleTimelineGroup(renderRow.group.id)}
-                                aria-expanded={groupExpanded}
-                                aria-label={`${groupExpanded ? 'Collapse' : 'Expand'} ${renderRow.group.label}`}
-                              >
-                                <span className="timeline-group-chevron" aria-hidden="true">
-                                  {renderSectionChevron(groupExpanded)}
-                                </span>
-                                <span className="timeline-group-name">{renderRow.group.label}</span>
-                                {renderRow.group.linkCount > 0 && (
-                                  <span className="timeline-group-count">
-                                    {renderRow.group.linkCount}
-                                  </span>
-                                )}
-                              </button>
-                            </div>
-                          )
-                        }
-
-                        if (renderRow.type === 'dataVolume') {
-                          const { series } = renderRow
-
-                          return (
-                            <div
-                              key={`${renderRow.key}-label`}
-                              className="timeline-label-cell timeline-label-cell--data-volume"
-                              style={rowStyle}
-                            >
-                              <span className="timeline-data-volume-title">Data Volume</span>
-                              {series ? (
-                                <>
-                                  <span className="data-volume-axis-label">
-                                    {formatGb(series.capacityGb)} capacity · {formatGb(series.totalDownlinkedGb)} downlinked
-                                  </span>
-                                  <span className="data-volume-flags">
-                                    {series.overflowed && (
-                                      <span className="data-volume-flag data-volume-flag--overflow">Buffer full</span>
-                                    )}
-                                    {series.totalLostGb > 0 && (
-                                      <span className="data-volume-flag data-volume-flag--overflow">
-                                        {formatGb(series.totalLostGb)} lost
-                                      </span>
-                                    )}
-                                  </span>
-                                </>
-                              ) : (
-                                <span className="data-volume-axis-label">Available after Calculate Trade-Offs</span>
-                              )}
-                            </div>
-                          )
-                        }
-
-                        const linkRowMarked = renderRow.row.items.some((item) => item.linkId === markedTimelineLinkId)
-                        const linkRowSelected = renderRow.row.items.some((item) => item.variant === 'selected')
-
-                        return (
-                          <div
-                            key={`${renderRow.key}-label`}
-                            className={`timeline-label-cell timeline-label-cell--link ${linkRowMarked ? 'timeline-label-cell--marked' : ''} ${linkRowSelected ? 'timeline-label-cell--selected' : ''}`}
-                            style={rowStyle}
-                          >
-                            <span className="timeline-link-name">{renderRow.row.counterpartName}</span>
-                          </div>
-                        )
-                      })}
-                    </div>
-
-                    <div className={`timeline-main-stage ${activeTimelineTradeOffCard ? 'timeline-main-stage--with-tradeoff' : ''}`}>
-                    <div ref={timelineScrollFrameRef} className="timeline-scroll-frame">
-                      <span
-                        ref={timelineWheelHintRef}
-                        className="timeline-wheel-hint"
-                        aria-hidden="true"
-                      >
-                        Hold Ctrl (⌘ on Mac) + scroll to zoom the timeline
-                      </span>
-                      {timelinePlayheadCanvasRatio !== null
-                        && timelinePlayheadCanvasRatio >= 0
-                        && timelinePlayheadCanvasRatio <= 1 && (
-                        <div
-                          ref={timelinePlayheadSliderRef}
-                          className="timeline-playhead-slider"
-                          data-timeline-playhead
-                          role="slider"
-                          tabIndex="0"
-                          aria-label="Current time shown on the map"
-                          aria-valuemin={planningWindowStartTimestamp ?? undefined}
-                          aria-valuemax={planningWindowEndTimestamp ?? undefined}
-                          aria-valuenow={timelinePlayheadTimestamp}
-                          aria-valuetext={formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
-                          onPointerDown={handleTimelinePlayheadPointerDown}
-                          onPointerMove={handleTimelinePlayheadPointerMove}
-                          onPointerUp={handleTimelinePlayheadPointerUp}
-                          onPointerCancel={handleTimelinePlayheadPointerUp}
-                          onKeyDown={handleTimelinePlayheadKeyDown}
-                        >
-                          <span className="timeline-playhead-handle" aria-hidden="true"></span>
-                          <span className="timeline-playhead-label">
-                            <span data-playback-label>
-                              {formatTimelinePlayheadDateTime(timelinePlayheadTimestamp)}
-                            </span>
-                          </span>
-                        </div>
-                      )}
-                      <div
-                        ref={timelineScrollRef}
-                        className={`timeline-scroll ${timelineIsFit ? 'timeline-scroll--fit' : ''}`}
-                        tabIndex="0"
-                        role="region"
-                        aria-label="Interactive planning timeline"
-                        onPointerDown={pauseTimelineLiveMode}
-                        onTouchStart={pauseTimelineLiveMode}
-                        onKeyDown={handleTimelineKeyDown}
-                      >
-                        <div
-                          className={`timeline-time-canvas ${timelineIsFit ? 'timeline-time-canvas--fit' : ''}`}
-                          style={{
-                            width: `${timelineWidthPx}px`,
-                            '--timeline-hour-width': `${(60 / timelineModel.totalMinutes) * 100}%`,
-                            '--timeline-major-width': `${(120 / timelineModel.totalMinutes) * 100}%`,
-                          }}
-                        >
-                      <div className="timeline-content-plane">
-                      <div className="timeline-day-row">
-                        <div
-                          className="timeline-scenario-edge timeline-scenario-edge--start"
-                          style={{ left: 0 }}
-                        >
-                          <span>Scenario Start</span>
-                        </div>
-                        <div
-                          className="timeline-scenario-edge timeline-scenario-edge--end"
-                          style={{ right: 0 }}
-                        >
-                          <span>Scenario End</span>
-                        </div>
-                        {timelineModel.dayBands.map((band, index) => (
-                          <div
-                            key={`${band.label}-${index}`}
-                            className={`timeline-day-band ${band.alt ? 'timeline-day-band--alt' : ''}`}
-                            style={{
-                              left: `${(band.startMinutes / timelineModel.totalMinutes) * 100}%`,
-                              width: `${(band.widthMinutes / timelineModel.totalMinutes) * 100}%`,
-                            }}
-                          >
-                            {band.label}
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="timeline-axis-row">
-                        {visibleTimelineTicks.map((tick) => (
-                          <div
-                            key={tick.offsetMinutes}
-                            className={`timeline-axis-marker ${tick.offsetMinutes % 120 === 0 ? 'timeline-axis-marker--major' : ''}`}
-                            style={{ left: `${(tick.offsetMinutes / timelineModel.totalMinutes) * 100}%` }}
-                          >
-                            <span>{tick.label}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="timeline-grid-backdrop" aria-hidden="true"></div>
-
-                      {timelineRenderRows.map((renderRow) => {
-                        const rowStyle = {
-                          '--timeline-row-height': getTimelineRowHeight(renderRow),
-                        }
-
-                        if (renderRow.type === 'section') {
-                          return (
-                            <div
-                              key={`${renderRow.key}-row`}
-                              className="timeline-track-row timeline-track-row--section"
-                              style={rowStyle}
-                            ></div>
-                          )
-                        }
-
-                        if (renderRow.type === 'dataVolume') {
-                          const { series } = renderRow
-
-                          return (
-                            <div
-                              key={`${renderRow.key}-row`}
-                              className="timeline-track-row timeline-track-row--data-volume data-volume-row"
-                              style={rowStyle}
-                            >
-                              {series ? (
-                                <>
-                                  {series.payloadWindows.map((payloadWindow) => (
-                                    <span
-                                      key={`${series.id}-payload-${payloadWindow.id}`}
-                                      className="data-volume-payload-window"
-                                      style={{
-                                        left: `${((payloadWindow.startTimestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
-                                        width: `${((payloadWindow.endTimestamp - payloadWindow.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
-                                      }}
-                                      role="img"
-                                      aria-label={`Payload data generation from ${formatTimelineDateTime(payloadWindow.startTimestamp)} to ${formatTimelineDateTime(payloadWindow.endTimestamp)}.`}
-                                      title={`Payload data generation: ${formatTimelineDateTime(payloadWindow.startTimestamp)} – ${formatTimelineDateTime(payloadWindow.endTimestamp)}`}
-                                    ></span>
-                                  ))}
-                                  <svg
-                                    className="data-volume-chart"
-                                    viewBox="0 0 1000 100"
-                                    preserveAspectRatio="none"
-                                    aria-hidden="true"
-                                  >
-                                    <line
-                                      className="data-volume-capacity-line"
-                                      x1="0"
-                                      x2="1000"
-                                      y1={100 - ((series.capacityGb / dataVolumeYMaxGb) * 100)}
-                                      y2={100 - ((series.capacityGb / dataVolumeYMaxGb) * 100)}
-                                    />
-                                    <polyline
-                                      className="data-volume-curve"
-                                      points={buildDataVolumePolyline(series.points)}
-                                    />
-                                  </svg>
-
-                                  {series.steps.map((step) => (
-                                    <span
-                                      key={`${series.id}-${step.id}`}
-                                      className="data-volume-step"
-                                      style={{
-                                        left: `${((step.startTimestamp - dataVolumeModel.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
-                                        width: `${((step.endTimestamp - step.startTimestamp) / dataVolumeModel.durationMs) * 100}%`,
-                                      }}
-                                      aria-hidden="true"
-                                    ></span>
-                                  ))}
-                                </>
-                              ) : (
-                                <span className="data-volume-inline-empty">
-                                  Calculate Trade-Offs to load the backend buffer profile.
-                                </span>
-                              )}
-                            </div>
-                          )
-                        }
-
-                        const rowItems = renderRow.type === 'group'
-                          ? renderRow.group.items
-                          : renderRow.row.items
-                        const rowMarked = rowItems.some((item) => item.linkId === markedTimelineLinkId)
-                        const rowSelected = rowItems.some((item) => item.variant === 'selected')
-
-                        return (
-                          <div
-                            key={`${renderRow.key}-row`}
-                            className={`timeline-track-row timeline-track-row--${renderRow.type} ${rowMarked ? 'timeline-track-row--marked' : ''} ${rowSelected ? 'timeline-track-row--selected' : ''}`}
-                            style={rowStyle}
-                          >
-                            {rowItems.map((item) => renderTimelineBar(item, renderRow.type))}
-                          </div>
-                        )
-                      })}
-                        </div>
-                      </div>
-                    </div>
-                    </div>
-                    {activeTimelineTradeOffCard && (
-                      <aside
-                        ref={timelineTradeOffDrawerRef}
-                        className="timeline-tradeoff-drawer"
-                        style={{
-                          transform: `translate(${timelineTradeOffDrawerOffset.x}px, ${timelineTradeOffDrawerOffset.y}px)`,
-                        }}
-                      >
-                        <div
-                          className="timeline-tradeoff-drawer-header"
-                          onPointerDown={handleTimelineTradeOffDrawerPointerDown}
-                        >
-                          <div className="timeline-tradeoff-drawer-titleblock">
-                            <span className="timeline-tradeoff-drawer-eyebrow">Trade-Off</span>
-                            <h3>{renderTradeOffPill(activeTimelineTradeOffCard.title)}</h3>
-                            <p className="timeline-tradeoff-drawer-resource">
-                              {activeTimelineTradeOffCard.resourceLabel}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            className="timeline-tradeoff-drawer-close"
-                            onClick={closeTimelineTradeOffView}
-                            aria-label="Close trade-off details"
-                          >
-                            ×
-                          </button>
-                        </div>
-                        <div className="tradeoff-option-list">
-                          {activeTimelineTradeOffCard.options.map((option) => {
-                            const optionRow = overviewRowByLinkId.get(option.linkId)
-                            const effectiveOverrideState = optionRow?.overrideState ?? option.overrideState
-                            const optionScheduled = Boolean(optionRow?.isScheduled ?? option.isScheduled)
-                            const optionRecommended = optionScheduled && effectiveOverrideState === 'auto'
-                            const displayScore = Number(optionRow?.score ?? option.score ?? 0)
-
-                            const optionMarked = markedTradeOffOptionId === option.optionId
-
-                            return (
-                              <div
-                                key={option.optionId}
-                                data-option-id={option.optionId}
-                                className={[
-                                  'tradeoff-option',
-                                  optionScheduled ? 'tradeoff-option--selected' : '',
-                                  optionMarked ? 'tradeoff-option--marked' : '',
-                                  'tradeoff-option--timeline-drawer',
-                                ].filter(Boolean).join(' ')}
-                                role="button"
-                                tabIndex={0}
-                                aria-pressed={optionMarked}
-                                title={optionMarked ? 'Unmark this pass in the timeline' : 'Mark this pass in the timeline'}
-                                onClick={() => focusTimelineOnOption(option)}
-                                onKeyDown={(event) => {
-                                  if (event.key === 'Enter' || event.key === ' ') {
-                                    event.preventDefault()
-                                    focusTimelineOnOption(option)
-                                  }
-                                }}
-                              >
-                                <div className="tradeoff-option-header">
-                                  <span className="tradeoff-option-id">{option.linkId ?? option.overpassId}</span>
-                                  <div className="tradeoff-meta tradeoff-meta--option">
-                                    {optionRecommended && <span className="tradeoff-recommended">Recommended</span>}
-                                    <span className="tradeoff-score">Score {displayScore.toFixed(2)}</span>
-                                  </div>
-                                </div>
-
-                                <dl className="tradeoff-option-facts">
-                                  <div className="tradeoff-option-fact">
-                                    <dt>Satellite</dt>
-                                    <dd>{option.satId ?? '—'}</dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
-                                    <dt>Ground Station</dt>
-                                    <dd>{option.gsId ?? '—'}</dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
-                                    <dt>Start</dt>
-                                    <dd>{formatOverviewStartDateTime(option.startTime)}</dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
-                                    <dt>End</dt>
-                                    <dd>{formatOverviewEndDateTime(option.startTime, option.endTime)}</dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
-                                    <dt>Duration</dt>
-                                    <dd>{option.duration ?? '—'}</dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
-                                    <dt>Max Elev.</dt>
-                                    <dd>{option.maxElevation ?? '—'}</dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
-                                    <dt>Buffer level before</dt>
-                                    <dd>{formatBufferLevelGb(bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb)}</dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
-                                    <dt>Full pass capacity</dt>
-                                    <dd>
-                                      <span>{formatDataDownlinkGb(getPassCapacityMb(option))}</span>
-                                      {(() => {
-                                        const passCapMb = getPassCapacityMb(option)
-                                        const bufBeforeMb = bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb
-                                        if (Number.isFinite(passCapMb) && Number.isFinite(bufBeforeMb) && bufBeforeMb < passCapMb) {
-                                          return renderAssetWarning("Pass Capacity exceeds Buffer level")
-                                        }
-                                        return null
-                                      })()}
-                                    </dd>
-                                  </div>
-                                  <div className="tradeoff-option-fact">
-                                    <dt>Real data downlink</dt>
-                                    <dd>
-                                      {formatDataDownlinkGb(
-                                        option.potentialDataDownlinkMb
-                                          ?? (() => {
-                                            const passCap = getPassCapacityMb(option)
-                                            const bufBefore = bufferLevelBeforeByLinkId.get(option.linkId) ?? option.incomingBufferMb
-                                            if (Number.isFinite(passCap) && Number.isFinite(bufBefore)) {
-                                              return Math.min(passCap, bufBefore)
-                                            }
-                                            return getBackendDataDownlinkMb(option)
-                                          })()
-                                      )}
-                                    </dd>
-                                  </div>
-                                </dl>
-
-                                <div className="tradeoff-option-actions">
-                                  <span
-                                    className="tradeoff-override-controls"
-                                    role="group"
-                                    aria-label={`Override ${option.linkId ?? option.overpassId}`}
-                                  >
-                                    {['auto', 'pinned', 'excluded'].map((state) => (
-                                      <button
-                                        key={state}
-                                        type="button"
-                                        className={`tradeoff-override-button ${effectiveOverrideState === state ? 'tradeoff-override-button--active' : ''}`}
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          handleLinkOverride(option, state)
-                                        }}
-                                        disabled={Boolean(overridingLinkId)}
-                                        aria-pressed={effectiveOverrideState === state}
-                                        title={getOverviewControlTooltip(state)}
-                                        onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
-                                        onMouseMove={moveWarningTooltip}
-                                        onMouseLeave={hideWarningTooltip}
-                                        onFocus={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
-                                        onBlur={hideWarningTooltip}
-                                      >
-                                        {state === 'auto' ? 'A' : state === 'pinned' ? 'P' : 'X'}
-                                      </button>
-                                    ))}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="tradeoff-select-button"
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      handleLinkOverride(option, getScheduleToggleState(optionScheduled))
-                                    }}
-                                    disabled={Boolean(overridingLinkId)}
-                                    aria-pressed={optionScheduled}
-                                    title={getScheduleToggleTitle(optionScheduled)}
-                                  >
-                                    {optionScheduled ? 'Scheduled' : 'Schedule'}
-                                  </button>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </aside>
-                    )}
-                  </div>
-                  </div>
-                )}
-
-                <div className="timeline-confirmation">
-                  <div className="timeline-confirmation-copy">
-                    <div className="timeline-confirmation-heading">
-                      <span className="timeline-confirmation-title">Confirm Communication Schedule</span>
-                    </div>
-                    <span className="timeline-confirmation-text">
-                      Stage and review the schedule summary before writing activities to SatOS.
-                    </span>
-                  </div>
-                  <div className="timeline-confirmation-actions">
-                    <button
-                      type="button"
-                      className="btn-fetch timeline-confirm-button"
-                      disabled={!confirmScheduleAvailable || confirmingSchedule || isScheduleStaged}
-                      onClick={handleConfirmSchedule}
-                    >
-                      {isScheduleStaged ? '✓ Schedule Staged for Review' : 'Confirm Communication Schedule'}
-                    </button>
-                    {!confirmingSchedule && !confirmScheduleAvailable && (
-                      <span className="timeline-confirmation-tooltip">
-                        {!schedulerLaunched
-                          ? 'Launch Communication Scheduler first.'
-                          : !tradeOffsCalculated
-                            ? 'Calculate Trade-Offs first so a backend session exists.'
-                            : finalScheduleRows.length === 0
-                              ? 'The backend session currently contains no scheduled links.'
-                              : 'The final schedule is not ready yet.'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {isScheduleStaged && finalScheduleRows.length > 0 && (
-                  <div
-                    ref={scheduleStagingReviewRef}
-                    className="schedule-staging-review-panel"
-                    role="region"
-                    aria-label="Staged Schedule Review"
-                  >
-                    <div className="staging-review-header">
-                      <span className="staging-review-badge">Stage 2 · Staged Review</span>
-                      <h3 className="staging-review-title">Staged Communication Schedule & SatOS Commit Review</h3>
-                      <p className="staging-review-description">
-                        Review the aggregated link allocations and data volume profile per asset before pushing activities to SatOS.
-                      </p>
-                    </div>
-
-                    {/* Summary KPI Banner */}
-                    <div className="staging-metrics-banner">
-                      <div className="staging-metric-card">
-                        <span className="staging-metric-label">Total Scheduled Links</span>
-                        <span className="staging-metric-value">{commitSummary.totalScheduledLinks}</span>
-                        <span className="staging-metric-subtext">Active contact passes</span>
-                      </div>
-                      <div className="staging-metric-card">
-                        <span className="staging-metric-label">Total Data Offload</span>
-                        <span className="staging-metric-value">{commitSummary.totalOffloadedGb} GB</span>
-                        <span className="staging-metric-subtext">{(commitSummary.totalOffloadedMb).toLocaleString()} MB</span>
-                      </div>
-                      <div className="staging-metric-card">
-                        <span className="staging-metric-label">Total Contact Time</span>
-                        <span className="staging-metric-value">{formatDurationFromSeconds(commitSummary.totalDurationSeconds)}</span>
-                        <span className="staging-metric-subtext">{commitSummary.totalDurationSeconds} seconds total</span>
-                      </div>
-                      <div className="staging-metric-card">
-                        <span className="staging-metric-label">Participating Assets</span>
-                        <span className="staging-metric-value">
-                          {commitSummary.satellites.length} Sat · {commitSummary.groundStations.length} GS
-                        </span>
-                        <span className="staging-metric-subtext">Coordinated resources</span>
-                      </div>
-                    </div>
-
-                    {/* Per-Satellite Schedule Breakdown & Buffer Volumes */}
-                    <div className="staging-asset-section">
-                      <h4 className="staging-section-title">Satellite Allocations & Data Buffer Summaries</h4>
-                      <div className="staging-asset-cards-grid">
-                        {commitSummary.satellites.map((sat) => {
-                          const satLinkIds = sat.links.map((link) => link.backendLinkId || link.linkId)
-                          const satAssetConfirmed = satLinkIds.length > 0
-                            && satLinkIds.every((linkId) => confirmedStagingLinks[`sat:${linkId}`])
-
-                          return (
-                          <div key={sat.satId} className="staging-asset-card">
-                            <div className="staging-asset-header">
-                              <div className="staging-asset-title-group">
-                                <span className="staging-asset-name">{sat.satId}</span>
-                                <span className="staging-chip">{sat.links.length} Link{sat.links.length === 1 ? '' : 's'}</span>
-                              </div>
-                              <div className="staging-asset-chips">
-                                <span className="staging-chip">
-                                  Offload: <strong>{(sat.totalOffloadedMb / 1000).toFixed(2)} GB</strong>
-                                </span>
-                                <span className="staging-chip">
-                                  Duration: <strong>{formatDurationFromSeconds(sat.totalDurationSeconds)}</strong>
-                                </span>
-                                {sat.capacityMb > 0 && (
-                                  <span className="staging-chip">
-                                    Peak Buffer: <strong>{(sat.peakBufferMb / 1000).toFixed(2)} / {(sat.capacityMb / 1000).toFixed(2)} GB</strong>
-                                  </span>
-                                )}
-                                {sat.capacityMb > 0 && (
-                                  <span className="staging-chip">
-                                    Final Buffer: <strong>{(sat.finalBufferMb / 1000).toFixed(2)} GB</strong>
-                                  </span>
-                                )}
-                                {sat.totalLostMb > 0 && (
-                                  <span className="staging-chip staging-chip--warn">
-                                    Overflow / Lost: <strong>{(sat.totalLostMb / 1000).toFixed(2)} GB</strong>
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="staging-links-table-container">
-                              <table className="staging-links-table">
-                                <thead>
-                                  <tr>
-                                    <th>Link ID</th>
-                                    <th>Activity Name</th>
-                                    <th>Initiator</th>
-                                    <th>Ground Station</th>
-                                    <th>Start Event (UTC)</th>
-                                    <th>End Event (UTC)</th>
-                                    <th>Duration</th>
-                                    <th>Expected Data Downlinked</th>
-                                    <th className="staging-confirm-column">Confirm</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {sat.links.map((link) => {
-                                    const linkId = link.backendLinkId || link.linkId
-                                    const actName = `DOWNLINK_${linkId}_${link.satId}-${link.gsId}`
-                                    const linkConfirmed = Boolean(confirmedStagingLinks[`sat:${linkId}`])
-                                    const linkInitiator = link.overrideState === 'pinned'
-                                      ? `SCOPE_pinned-${userName.trim() || 'operator'}`
-                                      : 'SCOPE_auto-scheduled'
-                                    return (
-                                      <tr key={linkId} className={linkConfirmed ? 'staging-link-row--confirmed' : ''}>
-                                        <td><strong>{linkId}</strong></td>
-                                        <td><code className="staging-code-cell">{actName}</code></td>
-                                        <td><span className="staging-initiator-badge">{linkInitiator}</span></td>
-                                        <td>{link.gsId}</td>
-                                        <td>{formatUtcEventDateTime(link.startTime)}</td>
-                                        <td>{formatUtcEventDateTime(link.endTime)}</td>
-                                        <td>{link.duration || formatDurationFromSeconds(link.durationSeconds)}</td>
-                                        <td>
-                                          <strong>{(Number(link.usefulDataOffloadedMb ?? 0) / 1000).toFixed(2)} GB</strong>{' '}
-                                          <span className="staging-table-subtext">({Number(link.usefulDataOffloadedMb ?? 0).toFixed(1)} MB)</span>
-                                        </td>
-                                        <td className="staging-confirm-cell">
-                                          <input
-                                            type="checkbox"
-                                            className="staging-link-confirm-checkbox"
-                                            checked={linkConfirmed}
-                                            onChange={() => toggleStagingLinkConfirmation('sat', linkId)}
-                                            disabled={confirmingSchedule}
-                                            aria-label={`Confirm link ${linkId} on the satellite side`}
-                                          />
-                                        </td>
-                                      </tr>
-                                    )
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-
-                            <div className={`staging-asset-confirm-bar ${satAssetConfirmed ? 'staging-asset-confirm-bar--confirmed' : ''}`}>
-                              <label className="staging-asset-confirm-label">
-                                <input
-                                  type="checkbox"
-                                  checked={satAssetConfirmed}
-                                  onChange={() => toggleStagingAssetConfirmation('sat', sat.links)}
-                                  disabled={confirmingSchedule}
-                                />
-                                <span>
-                                  {satAssetConfirmed
-                                    ? `${sat.satId} schedule reviewed and confirmed`
-                                    : `Confirm ${sat.satId} schedule before commit`}
-                                </span>
-                              </label>
-                            </div>
-                          </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Per-Ground Station Schedule Breakdown */}
-                    <div className="staging-asset-section">
-                      <h4 className="staging-section-title">Ground Station Allocations & Contact Passes</h4>
-                      <div className="staging-asset-cards-grid">
-                        {commitSummary.groundStations.map((gs) => {
-                          const gsLinkIds = gs.links.map((link) => link.backendLinkId || link.linkId)
-                          const gsAssetConfirmed = gsLinkIds.length > 0
-                            && gsLinkIds.every((linkId) => confirmedStagingLinks[`gs:${linkId}`])
-
-                          return (
-                          <div key={gs.gsId} className="staging-asset-card">
-                            <div className="staging-asset-header">
-                              <div className="staging-asset-title-group">
-                                <span className="staging-asset-name">{gs.gsId}</span>
-                                <span className="staging-chip">{gs.links.length} Pass{gs.links.length === 1 ? '' : 'es'}</span>
-                              </div>
-                              <div className="staging-asset-chips">
-                                <span className="staging-chip">
-                                  Data Received: <strong>{(gs.totalOffloadedMb / 1000).toFixed(2)} GB</strong>
-                                </span>
-                                <span className="staging-chip">
-                                  Total Contact: <strong>{formatDurationFromSeconds(gs.totalDurationSeconds)}</strong>
-                                </span>
-                              </div>
-                            </div>
-                            <div className="staging-links-table-container">
-                              <table className="staging-links-table">
-                                <thead>
-                                  <tr>
-                                    <th>Link ID</th>
-                                    <th>Activity Name</th>
-                                    <th>Initiator</th>
-                                    <th>Satellite</th>
-                                    <th>Start Event (UTC)</th>
-                                    <th>End Event (UTC)</th>
-                                    <th>Duration</th>
-                                    <th>Expected Data Received</th>
-                                    <th className="staging-confirm-column">Confirm</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {gs.links.map((link) => {
-                                    const linkId = link.backendLinkId || link.linkId
-                                    const actName = `DOWNLINK_${linkId}_${link.satId}-${link.gsId}`
-                                    const linkConfirmed = Boolean(confirmedStagingLinks[`gs:${linkId}`])
-                                    const linkInitiator = link.overrideState === 'pinned'
-                                      ? `SCOPE_pinned-${userName.trim() || 'operator'}`
-                                      : 'SCOPE_auto-scheduled'
-                                    return (
-                                      <tr key={linkId} className={linkConfirmed ? 'staging-link-row--confirmed' : ''}>
-                                        <td><strong>{linkId}</strong></td>
-                                        <td><code className="staging-code-cell">{actName}</code></td>
-                                        <td><span className="staging-initiator-badge">{linkInitiator}</span></td>
-                                        <td>{link.satId}</td>
-                                        <td>{formatUtcEventDateTime(link.startTime)}</td>
-                                        <td>{formatUtcEventDateTime(link.endTime)}</td>
-                                        <td>{link.duration || formatDurationFromSeconds(link.durationSeconds)}</td>
-                                        <td>
-                                          <strong>{(Number(link.usefulDataOffloadedMb ?? 0) / 1000).toFixed(2)} GB</strong>{' '}
-                                          <span className="staging-table-subtext">({Number(link.usefulDataOffloadedMb ?? 0).toFixed(1)} MB)</span>
-                                        </td>
-                                        <td className="staging-confirm-cell">
-                                          <input
-                                            type="checkbox"
-                                            className="staging-link-confirm-checkbox"
-                                            checked={linkConfirmed}
-                                            onChange={() => toggleStagingLinkConfirmation('gs', linkId)}
-                                            disabled={confirmingSchedule}
-                                            aria-label={`Confirm link ${linkId} on the ground station side`}
-                                          />
-                                        </td>
-                                      </tr>
-                                    )
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-
-                            <div className={`staging-asset-confirm-bar ${gsAssetConfirmed ? 'staging-asset-confirm-bar--confirmed' : ''}`}>
-                              <label className="staging-asset-confirm-label">
-                                <input
-                                  type="checkbox"
-                                  checked={gsAssetConfirmed}
-                                  onChange={() => toggleStagingAssetConfirmation('gs', gs.links)}
-                                  disabled={confirmingSchedule}
-                                />
-                                <span>
-                                  {gsAssetConfirmed
-                                    ? `${gs.gsId} schedule reviewed and confirmed`
-                                    : `Confirm ${gs.gsId} schedule before commit`}
-                                </span>
-                              </label>
-                            </div>
-                          </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Action Bar for SatOS Commit */}
-                    <div className="staging-commit-action-bar">
-                      <button
-                        type="button"
-                        className="btn-modify-overrides"
-                        onClick={handleBackToEdit}
-                        disabled={confirmingSchedule}
-                      >
-                        Modify Overrides / Back
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-fetch timeline-confirm-button btn-commit-satos"
-                        disabled={
-                          confirmingSchedule
-                          || !sessionId
-                          || finalScheduleRows.length === 0
-                          || !allStagingLinksConfirmed
-                          || scheduleCommitted
-                        }
-                        onClick={handleCommitToSatOS}
-                      >
-                        {confirmingSchedule
-                          ? 'Committing Activities to SatOS...'
-                          : scheduleCommitted
-                          ? 'Schedule Already Committed to SatOS'
-                          : 'Commit SCOPE Communication Activities to SatOS'}
-                      </button>
-                      {!confirmingSchedule && !scheduleCommitted && !allStagingLinksConfirmed && (
-                        <span className="staging-commit-tooltip">
-                          Every link needs to be confirmed on both its satellite side and its ground station side before committing to SatOS.
-                        </span>
-                      )}
-                      {!confirmingSchedule && scheduleCommitted && (
-                        <span className="staging-commit-tooltip">
-                          This schedule was already committed to SatOS. Change an override or recalculate trade-offs to commit again.
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {confirmationSuccess && (
-                  <div
-                    ref={confirmationSuccessRef}
-                    className="confirmation-success"
-                    role="status"
-                    aria-live="polite"
-                  >
-                    <span className="confirmation-success-icon" aria-hidden="true">✓</span>
-                    <div className="confirmation-success-copy">
-                      <strong>Success</strong>
-                      <span>
-                        {confirmedScheduleCount} link{confirmedScheduleCount === 1 ? '' : 's'} committed as {createdActivitiesCount} SatOS activit{createdActivitiesCount === 1 ? 'y' : 'ies'}.
-                      </span>
-                    </div>
-                  </div>
-                )}
-                  </>
-                )}
-              </div>
-            )}
-          </section>
+    <TimelinePanel
+      activePlanningWindow={activePlanningWindow}
+      allStagingLinksConfirmed={allStagingLinksConfirmed}
+      commitSummary={commitSummary}
+      confirmScheduleAvailable={confirmScheduleAvailable}
+      confirmationSuccess={confirmationSuccess}
+      confirmationSuccessRef={confirmationSuccessRef}
+      confirmedScheduleCount={confirmedScheduleCount}
+      confirmedStagingLinks={confirmedStagingLinks}
+      confirmingSchedule={confirmingSchedule}
+      createdActivitiesCount={createdActivitiesCount}
+      expandedSections={expandedSections}
+      finalScheduleRows={finalScheduleRows}
+      getPanelDragClassName={getPanelDragClassName}
+      getPanelDropZoneProps={getPanelDropZoneProps}
+      getPanelHeadingDragProps={getPanelHeadingDragProps}
+      handleBackToEdit={handleBackToEdit}
+      handleCommitToSatOS={handleCommitToSatOS}
+      handleConfirmSchedule={handleConfirmSchedule}
+      handleResetTimelineView={handleResetTimelineView}
+      handleTimelinePlaybackToggle={handleTimelinePlaybackToggle}
+      isScheduleStaged={isScheduleStaged}
+      planningWindowEndTimestamp={planningWindowEndTimestamp}
+      planningWindowStartTimestamp={planningWindowStartTimestamp}
+      renderPanelDragHandle={renderPanelDragHandle}
+      renderSectionChevron={renderSectionChevron}
+      scheduleCommitted={scheduleCommitted}
+      scheduleStagingReviewRef={scheduleStagingReviewRef}
+      schedulerLaunched={schedulerLaunched}
+      sessionId={sessionId}
+      setTimelinePlaybackSpeed={setTimelinePlaybackSpeed}
+      timelineAssetVisibility={timelineAssetVisibility}
+      timelineContextValue={timelineContextValue}
+      timelineCustomZoomMultiplier={timelineCustomZoomMultiplier}
+      timelineLayers={timelineLayers}
+      timelineModel={timelineModel}
+      timelinePanelRef={timelinePanelRef}
+      timelinePlaybackSpeed={timelinePlaybackSpeed}
+      timelinePlaying={timelinePlaying}
+      timelineRenderRows={timelineRenderRows}
+      timelineZoomLevel={timelineZoomLevel}
+      toggleSection={toggleSection}
+      toggleStagingAssetConfirmation={toggleStagingAssetConfirmation}
+      toggleStagingLinkConfirmation={toggleStagingLinkConfirmation}
+      toggleTimelineAssetVisibility={toggleTimelineAssetVisibility}
+      toggleTimelineLayer={toggleTimelineLayer}
+      tradeOffsCalculated={tradeOffsCalculated}
+      userName={userName}
+    />
   )
 
   const panelNodesById = {
     overview: overviewPanelNode,
-    tradeOff: tradeOffPanelNode,
     mapView: mapViewPanelNode,
     timeline: timelinePanelNode,
   }
 
   const pageContent = (
-    <div className={`workspace-shell ${sidebarCollapsed ? 'workspace-shell--collapsed' : ''}`}>
-        <aside className={`workspace-sidebar ${sidebarCollapsed ? 'workspace-sidebar--collapsed' : ''}`}>
-          <div className="workspace-sidebar-header">
-            {!sidebarCollapsed && <h2>Configuration</h2>}
-            <button
-              type="button"
-              className="sidebar-collapse-toggle"
-              onClick={() => setSidebarCollapsed((current) => !current)}
-              aria-label={sidebarCollapsed ? 'Expand configuration sidebar' : 'Collapse configuration sidebar'}
-            >
-              <svg
-                className="sidebar-collapse-icon"
-                viewBox="0 0 12 12"
-                aria-hidden="true"
-                focusable="false"
-              >
-                {sidebarCollapsed ? (
-                  <path d="M4 2.25 7.75 6 4 9.75" />
-                ) : (
-                  <path d="M8 2.25 4.25 6 8 9.75" />
-                )}
-              </svg>
-            </button>
-          </div>
-
-          {sidebarCollapsed ? (
-            <div className="sidebar-collapsed-content">
-              <span className="sidebar-collapsed-label">Configuration</span>
-              {launchingScheduler && (
-                <button
-                  type="button"
-                  className="sidebar-collapsed-terminate"
-                  onClick={handleTerminateScheduler}
-                  aria-label="Terminate the communication scheduler launch"
-                  title="Terminate"
-                >
-                  <svg
-                    className="sidebar-collapsed-terminate-icon"
-                    viewBox="0 0 12 12"
-                    aria-hidden="true"
-                    focusable="false"
-                  >
-                    <path d="M3 3 9 9 M9 3 3 9" />
-                  </svg>
-                </button>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="workspace-sidebar-content">
-                <div className="sidebar-block">
-                  <button
-                    type="button"
-                    className="section-toggle"
-                    onClick={() => toggleSection('timeWindow')}
-                  >
-                    <span>Time Window</span>
-                    <span className="section-toggle-icon" aria-hidden="true">
-                      {renderSectionChevron(expandedSections.timeWindow)}
-                    </span>
-                  </button>
-                  {expandedSections.timeWindow && renderPlanningWindowContent()}
-                </div>
-
-                <div className="sidebar-block">
-                  <button
-                    type="button"
-                    className="section-toggle"
-                    onClick={() => toggleSection('satellites')}
-                  >
-                    <span>Satellites</span>
-                    <span className="section-toggle-icon" aria-hidden="true">
-                      {renderSectionChevron(expandedSections.satellites)}
-                    </span>
-                  </button>
-                  {expandedSections.satellites && (
-                    <div className="checkbox-list">
-                      {satelliteAssets.map((asset) => (
-                        <label
-                          key={asset.name}
-                          className={`checkbox-row ${asset.eligible ? '' : 'checkbox-row--disabled'}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedSatellites.includes(asset.name)}
-                            onChange={() => toggleSatellite(asset.name)}
-                            disabled={!asset.eligible}
-                          />
-                          <span className="asset-name">{asset.name}</span>
-                          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
-                        </label>
-                      ))}
-                      {satelliteAssets.length === 0 && <p>No satellite assets available.</p>}
-                    </div>
-                  )}
-                </div>
-
-                <div className="sidebar-block">
-                  <button
-                    type="button"
-                    className="section-toggle"
-                    onClick={() => toggleSection('groundStations')}
-                  >
-                    <span>Ground Stations</span>
-                    <span className="section-toggle-icon" aria-hidden="true">
-                      {renderSectionChevron(expandedSections.groundStations)}
-                    </span>
-                  </button>
-                  {expandedSections.groundStations && (
-                    <div className="checkbox-list">
-                      {groundStationAssets.map((asset) => (
-                        <label
-                          key={asset.name}
-                          className={`checkbox-row ${asset.eligible ? '' : 'checkbox-row--disabled'}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedGroundStations.includes(asset.name)}
-                            onChange={() => toggleGroundStation(asset.name)}
-                            disabled={!asset.eligible}
-                          />
-                          <span className="asset-name">{asset.name}</span>
-                          {!asset.eligible && asset.error && renderAssetWarning(asset.error)}
-                        </label>
-                      ))}
-                      {groundStationAssets.length === 0 && <p>No ground-station assets available.</p>}
-                    </div>
-                  )}
-                </div>
-
-                <div className="sidebar-block">
-                  <button
-                    type="button"
-                    className="section-toggle"
-                    onClick={() => toggleSection('unavailableAssets')}
-                  >
-                    <span>Unavailable Assets</span>
-                    <span className="section-toggle-icon" aria-hidden="true">
-                      {renderSectionChevron(expandedSections.unavailableAssets)}
-                    </span>
-                  </button>
-                  {expandedSections.unavailableAssets && (
-                    <div className="checkbox-list">
-                      {unavailableAssets.map((asset) => (
-                        <div
-                          key={asset.name}
-                          className="checkbox-row checkbox-row--disabled checkbox-row--static"
-                        >
-                          <span className="asset-name">{asset.name}</span>
-                          {asset.error && renderAssetWarning(asset.error)}
-                        </div>
-                      ))}
-                      {unavailableAssets.length === 0 && <p>No unclassified assets.</p>}
-                    </div>
-                  )}
-                </div>
-
-                <div className="sidebar-block">
-                  <button
-                    type="button"
-                    className="section-toggle"
-                    onClick={() => toggleSection('linkFilters')}
-                  >
-                    <span>Link Filters</span>
-                    <span className="section-toggle-icon" aria-hidden="true">
-                      {renderSectionChevron(expandedSections.linkFilters)}
-                    </span>
-                  </button>
-                  {expandedSections.linkFilters && renderLinkFiltersContent()}
-                </div>
-
-                <div className="sidebar-block">
-                  <button
-                    type="button"
-                    className="section-toggle"
-                    onClick={() => toggleSection('bufferConfig')}
-                  >
-                    <span>Buffer Configuration</span>
-                    <span className="section-toggle-icon" aria-hidden="true">
-                      {renderSectionChevron(expandedSections.bufferConfig)}
-                    </span>
-                  </button>
-                  {expandedSections.bufferConfig && renderBufferConfigContent()}
-                </div>
-
-                <div className="sidebar-block">
-                  <button
-                    type="button"
-                    className="section-toggle"
-                    onClick={() => toggleSection('tradeOffConfig')}
-                  >
-                    <span>Trade-Off Configuration</span>
-                    <span className="section-toggle-icon" aria-hidden="true">
-                      {renderSectionChevron(expandedSections.tradeOffConfig)}
-                    </span>
-                  </button>
-                  {expandedSections.tradeOffConfig && renderTradeOffConfigContent()}
-                </div>
-              </div>
-
-              <div className="sidebar-action-wrapper">
-                {launchingScheduler ? (
-                  <button
-                    type="button"
-                    className="btn-fetch btn-terminate"
-                    onClick={handleTerminateScheduler}
-                  >
-                    Terminate
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn-fetch"
-                    disabled={!launchRequirementsMet || backendAlive !== true}
-                    onClick={handleLaunchScheduler}
-                  >
-                    Launch Communication Scheduler
-                  </button>
-                )}
-                {!launchingScheduler && (!launchRequirementsMet || backendAlive !== true) && (
-                  <span className="sidebar-action-tooltip">
-                    {backendAlive === false
-                      ? 'Backend offline \u2014 start the SCOPE backend to launch the scheduler.'
-                      : 'Enter a valid time window and select at least 1 satellite and 1 ground station first.'}
-                  </span>
-                )}
-              </div>
-            </>
-          )}
-        </aside>
-
-        <main className="workspace-main">
-          <div
-            ref={splitPanelsRef}
-            className="workspace-panels-split"
-            style={{
-              // Without a second panel in the top row there is nothing to
-              // split, so the remaining panel takes the full width and the
-              // vertical resizer disappears with it.
-              gridTemplateColumns: panelSlotAssignment.topRight
-                ? `minmax(0, ${overviewPanelWidth}%) 0.9rem minmax(0, calc(${100 - overviewPanelWidth}% - 0.9rem))`
-                : 'minmax(0, 1fr)',
-              '--top-panels-height': `${topPanelsHeightPx}px`,
-            }}
-          >
-          {panelNodesById[panelSlotAssignment.topLeft]}
-
-          {panelSlotAssignment.topRight && (
-            <>
-              <div
-                className={`panel-resizer ${!expandedSections[panelSlotAssignment.topLeft] && !expandedSections[panelSlotAssignment.topRight] ? 'panel-resizer--collapsed' : ''}`}
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize the top-row panels"
-                tabIndex={0}
-                onPointerDown={handlePanelResizeStart}
-                onKeyDown={handlePanelResizeKeyDown}
-              >
-                <span className="panel-resizer-line" aria-hidden="true"></span>
-                <span className="panel-resizer-grip" aria-hidden="true"></span>
-              </div>
-
-              {panelNodesById[panelSlotAssignment.topRight]}
-            </>
-          )}
-          </div>
-
-          <div
-            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.topLeft] && !(panelSlotAssignment.topRight && expandedSections[panelSlotAssignment.topRight]) ? 'panel-resizer--collapsed' : ''}`}
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize the height of the top row"
-            tabIndex={0}
-            onPointerDown={handleTopPanelsResizeStart}
-            onKeyDown={handleTopPanelsResizeKeyDown}
-          >
-            <span className="panel-resizer-line panel-resizer-line--horizontal" aria-hidden="true"></span>
-            <span className="panel-resizer-grip panel-resizer-grip--horizontal" aria-hidden="true"></span>
-          </div>
-
-          <div
-            className="planning-views-row"
-            style={{
-              // A collapsed panel falls back to `auto` -- holding a fixed
-              // height open for a collapsed panel would just leave a gap.
-              gridTemplateRows: [
-                expandedSections[panelSlotAssignment.bottomTop] ? `${bottomTopHeightPx}px` : 'auto',
-                '0.9rem',
-                'auto',
-              ].join(' '),
-            }}
-          >
-          {panelNodesById[panelSlotAssignment.bottomTop]}
-
-          <div
-            className={`panel-resizer panel-resizer--horizontal ${!expandedSections[panelSlotAssignment.bottomTop] && !expandedSections[panelSlotAssignment.bottomMiddle] ? 'panel-resizer--collapsed' : ''}`}
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label={`Resize the ${PANEL_LABELS[panelSlotAssignment.bottomTop]} panel`}
-            tabIndex={0}
-            onPointerDown={handlePlanningRowResizeStart}
-            onKeyDown={handlePlanningRowResizeKeyDown}
-          >
-            <span className="panel-resizer-line panel-resizer-line--horizontal" aria-hidden="true"></span>
-            <span className="panel-resizer-grip panel-resizer-grip--horizontal" aria-hidden="true"></span>
-          </div>
-
-          {panelNodesById[panelSlotAssignment.bottomMiddle]}
-          </div>
-        </main>
-      </div>
+    <WorkspaceLayout
+      backendAlive={backendAlive}
+      bottomTopHeightPx={bottomTopHeightPx}
+      expandedSections={expandedSections}
+      groundStationAssets={groundStationAssets}
+      handleLaunchScheduler={handleLaunchScheduler}
+      handlePanelResizeKeyDown={handlePanelResizeKeyDown}
+      handlePanelResizeStart={handlePanelResizeStart}
+      handlePlanningRowResizeKeyDown={handlePlanningRowResizeKeyDown}
+      handlePlanningRowResizeStart={handlePlanningRowResizeStart}
+      handleTerminateScheduler={handleTerminateScheduler}
+      handleTopPanelsResizeKeyDown={handleTopPanelsResizeKeyDown}
+      handleTopPanelsResizeStart={handleTopPanelsResizeStart}
+      launchRequirementsMet={launchRequirementsMet}
+      launchingScheduler={launchingScheduler}
+      overviewPanelWidth={overviewPanelWidth}
+      panelNodesById={panelNodesById}
+      panelSlotAssignment={panelSlotAssignment}
+      renderAssetWarning={renderAssetWarning}
+      renderBufferConfigContent={renderBufferConfigContent}
+      renderLinkFiltersContent={renderLinkFiltersContent}
+      renderPlanningWindowContent={renderPlanningWindowContent}
+      renderSectionChevron={renderSectionChevron}
+      renderTradeOffConfigContent={renderTradeOffConfigContent}
+      satelliteAssets={satelliteAssets}
+      selectedGroundStations={selectedGroundStations}
+      selectedSatellites={selectedSatellites}
+      setSidebarCollapsed={setSidebarCollapsed}
+      sidebarCollapsed={sidebarCollapsed}
+      splitPanelsRef={splitPanelsRef}
+      toggleGroundStation={toggleGroundStation}
+      toggleSatellite={toggleSatellite}
+      toggleSection={toggleSection}
+      topPanelsHeightPx={topPanelsHeightPx}
+      unavailableAssets={unavailableAssets}
+    />
   )
 
   return (

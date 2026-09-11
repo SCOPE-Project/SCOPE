@@ -1,0 +1,137 @@
+.timeline-bar-content {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: inherit;
+  justify-content: inherit;
+  gap: inherit;
+  overflow: hidden;
+}
+
+.timeline-bar--compact {
+  padding: 0.32rem 0.38rem;
+}
+
+.timeline-bar--tiny {
+  align-items: flex-start;
+  text-align: left;
+  justify-content: center;
+  padding-inline: 0.16rem;
+}
+
+.timeline-bar-title,
+.timeline-bar-copy {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-bar-title {
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.timeline-bar--tiny .timeline-bar-title {
+  font-size: 0.68rem;
+  line-height: 1.1;
+}
+
+.timeline-bar-copy {
+  font-size: 0.68rem;
+  opacity: 0.88;
+  line-height: 1.2;
+}
+
+.timeline-bar-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.45rem);
+  transform: translateX(-50%);
+  min-width: 14rem;
+  max-width: 18rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.58rem 0.72rem;
+  border: 1px solid #bcc6cf;
+  border-radius: 0.18rem;
+  background: #fdfefe;
+  color: #243645;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  text-align: left;
+  box-shadow: 0 10px 24px rgba(31, 42, 51, 0.16);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: auto;
+  transition: opacity 0.08s ease;
+  z-index: 30;
+  user-select: text;
+  cursor: text;
+}
+
+.timeline-bar-tooltip-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.timeline-bar:hover,
+.timeline-bar:focus-visible {
+  z-index: 6;
+}
+
+.timeline-bar--playhead-active {
+  border-color: #b9571f;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 0 0 2px rgba(185, 87, 31, 0.24),
+    0 4px 10px rgba(31, 42, 51, 0.12);
+  z-index: 5;
+}
+
+.timeline-bar:hover .timeline-bar-tooltip,
+.timeline-bar:focus-visible .timeline-bar-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.timeline-bar-tooltip strong {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #10202d;
+}
+
+.timeline-bar--current {
+  background: #f3d8bf;
+  border-color: rgba(158, 93, 26, 0.42);
+}
+
+.timeline-bar--neutral {
+  background: #edf1f5;
+  border-color: rgba(108, 128, 148, 0.32);
+}
+
+.timeline-bar--candidate {
+  background: #edf1f5;
+  border-color: rgba(108, 128, 148, 0.28);
+}
+
+.timeline-bar--fixed {
+  background: #dcefdc;
+  border-color: rgba(45, 113, 58, 0.36);
+}
+
+.timeline-bar--recommended {
+  background: #dcefdc;
+  border-color: rgba(45, 113, 58, 0.36);
+}
+
+.timeline-bar--selected {
+  background: #dcefdc;
+  border-color: rgba(45, 113, 58, 0.44);
+}

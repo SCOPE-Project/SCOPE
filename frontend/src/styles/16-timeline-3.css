@@ -1,0 +1,707 @@
+.timeline-scroll {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  padding-bottom: 0.25rem;
+  scroll-behavior: auto;
+  scrollbar-color: #71879a #dce3e9;
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  outline: none;
+}
+
+.timeline-horizontal-scroll-control {
+  display: grid;
+  grid-template-columns: auto minmax(8rem, 1fr);
+  align-items: center;
+  gap: 0.62rem;
+  width: 100%;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.timeline-horizontal-scroll-control input {
+  width: 100%;
+  height: 1rem;
+  min-width: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+.timeline-horizontal-scroll-control input:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.timeline-horizontal-scroll-control input::-webkit-slider-runnable-track {
+  height: 0.24rem;
+  border-radius: 999px;
+  background: #cfd9e2;
+}
+
+.timeline-horizontal-scroll-control input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0.78rem;
+  height: 0.78rem;
+  margin-top: -0.27rem;
+  border: 1px solid #1f5f99;
+  border-radius: 999px;
+  background: #2c76bf;
+  box-shadow: 0 1px 3px rgba(31, 42, 51, 0.24);
+}
+
+.timeline-horizontal-scroll-control input::-moz-range-track {
+  height: 0.24rem;
+  border: none;
+  border-radius: 999px;
+  background: #cfd9e2;
+}
+
+.timeline-horizontal-scroll-control input::-moz-range-thumb {
+  width: 0.78rem;
+  height: 0.78rem;
+  border: 1px solid #1f5f99;
+  border-radius: 999px;
+  background: #2c76bf;
+  box-shadow: 0 1px 3px rgba(31, 42, 51, 0.24);
+}
+
+.timeline-horizontal-scroll-control--floating {
+  position: fixed;
+  z-index: 238;
+  bottom: 0.72rem;
+  padding: 0.48rem 0.62rem;
+  border: 1px solid #aebbc6;
+  border-radius: 0.24rem;
+  background: rgba(250, 252, 253, 0.98);
+  box-shadow: 0 7px 20px rgba(31, 42, 51, 0.2);
+}
+
+.timeline-scroll--fit {
+  overflow-x: hidden;
+  padding-bottom: 0.25rem;
+}
+
+.timeline-scroll--fit::-webkit-scrollbar {
+  display: none;
+}
+
+.timeline-scroll::-webkit-scrollbar {
+  height: 0.78rem;
+}
+
+.timeline-scroll::-webkit-scrollbar-track {
+  background: #dce3e9;
+  border-radius: 999px;
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid #dce3e9;
+  border-radius: 999px;
+  background: #71879a;
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: #536b7e;
+}
+
+.timeline-scroll:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(185, 87, 31, 0.34);
+}
+
+.timeline-layout {
+  display: grid;
+  grid-template-columns: 13.2rem minmax(0, 1fr);
+  align-items: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.timeline-label-column {
+  min-width: 0;
+  padding-top: 1.9rem;
+  border-right: 1px solid var(--line-soft);
+  background: var(--bg-panel);
+  z-index: 12;
+}
+
+.timeline-scroll-frame {
+  position: relative;
+  height: fit-content;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding-top: 1.9rem;
+  overflow: hidden;
+}
+
+.timeline-main-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  display: block;
+  align-items: start;
+  overflow: visible;
+}
+
+.timeline-main-stage--with-tradeoff {
+  overflow: visible;
+}
+
+.timeline-tradeoff-drawer {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  z-index: 24;
+  width: clamp(18rem, 24vw, 22rem);
+  max-width: min(calc(100% - 0.7rem), 22rem);
+  min-width: 0;
+  min-height: 0;
+  max-height: min(calc(100% - 0.7rem), calc(100vh - 14.5rem));
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 34px rgba(31, 42, 51, 0.18);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  backdrop-filter: blur(4px);
+  will-change: transform;
+}
+
+.timeline-tradeoff-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: move;
+  user-select: none;
+}
+
+.timeline-tradeoff-drawer-titleblock {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.timeline-tradeoff-drawer-eyebrow {
+  display: inline-block;
+  margin-bottom: 0.18rem;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.timeline-tradeoff-drawer-titleblock h3 {
+  margin: 0 0 0.12rem;
+  font-size: 0.98rem;
+}
+
+.timeline-tradeoff-drawer-resource {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.timeline-tradeoff-drawer-close {
+  width: 1.7rem;
+  height: 1.7rem;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.18rem;
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.timeline-tradeoff-drawer-close:hover {
+  background: var(--bg-hover);
+}
+
+.timeline-tradeoff-drawer-close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.timeline-time-canvas {
+  position: relative;
+  box-sizing: content-box;
+  padding-inline: 0;
+  background: #f1f4f7;
+}
+
+.timeline-time-canvas--fit {
+  box-sizing: border-box;
+  padding-inline: 14px;
+}
+
+.timeline-content-plane {
+  position: relative;
+  width: 100%;
+}
+
+/* One shared grid replaces a separate pair of DOM nodes for every tick in
+   every row. The hour and two-hour widths are supplied by the timeline model
+   on the canvas, so the background stays aligned at every zoom level. */
+.timeline-grid-backdrop {
+  position: absolute;
+  z-index: 1;
+  top: calc(1.35rem + 1.6rem);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(0, 57, 117, 0.18) 1px, transparent 1px),
+    linear-gradient(to right, rgba(90, 109, 128, 0.1) 1px, transparent 1px);
+  background-size:
+    var(--timeline-major-width) 100%,
+    var(--timeline-hour-width) 100%;
+  background-repeat: repeat-x;
+}
+
+.timeline-grid-backdrop--data {
+  top: 1.6rem;
+}
+
+/* Shown briefly whenever a plain (non-modifier) wheel gesture passes over
+   the timeline, mirroring .mission-map-wheel-hint -- scrolling still just
+   pans the timeline, so this tells the person how to zoom with the wheel
+   instead. */
+.timeline-wheel-hint {
+  position: absolute;
+  z-index: 17;
+  top: 0.15rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(-0.3rem);
+  padding: 0.38rem 0.7rem;
+  border-radius: 0.2rem;
+  background: rgba(31, 42, 51, 0.85);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.28);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.timeline-wheel-hint--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* One viewport overlay owns the datetime label, grab handle and dashed line.
+   Its X is derived from the zoomed canvas position minus scrollLeft, which
+   keeps every visual and the pointer input on exactly the same coordinate. */
+.timeline-playhead-slider {
+  position: absolute;
+  z-index: 16;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  margin-left: -6px;
+  cursor: ew-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.timeline-playhead-slider:focus-visible {
+  border-radius: 999px;
+}
+
+.timeline-playhead-handle {
+  position: absolute;
+  z-index: 1;
+  top: 1.05rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: #b9571f;
+  border: 2px solid #fff8f1;
+  box-shadow: 0 1px 4px rgba(31, 42, 51, 0.35);
+}
+
+.timeline-playhead-slider::after {
+  content: '';
+  position: absolute;
+  top: 1.9rem;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  border-left: 2px dashed #b9571f;
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+
+.timeline-playhead-slider:focus-visible .timeline-playhead-handle {
+  box-shadow: 0 0 0 3px rgba(185, 87, 31, 0.35);
+}
+
+.timeline-playhead-label {
+  position: absolute;
+  top: 0.05rem;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  transform: translateX(-50%);
+  padding: 0.24rem 0.42rem;
+  border: 1px solid #b9571f;
+  border-radius: 0.2rem;
+  background: #fff8f1;
+  color: #7a3b18;
+  box-shadow: 0 2px 7px rgba(31, 42, 51, 0.14);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.timeline-playhead-slider:active {
+  cursor: grabbing;
+}
+
+.timeline-detail-card {
+  margin-top: 0.95rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.22rem;
+  background: var(--bg-panel);
+}
+
+.timeline-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.timeline-detail-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.timeline-detail-titleblock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+}
+
+.timeline-detail-track {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+}
+
+.timeline-detail-titleblock h3 {
+  font-size: 0.94rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.timeline-detail-copy {
+  margin-top: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.timeline-bar-marker {
+  width: 0.52rem;
+  height: 0.52rem;
+  align-self: flex-start;
+  border-radius: 999px;
+  background: #1f5f31;
+  box-shadow: 0 0 0 2px rgba(237, 246, 239, 0.96);
+  flex: 0 0 auto;
+}
+
+.timeline-detail-grid {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.9rem;
+  font-size: 0.81rem;
+}
+
+.timeline-detail-grid dt {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.timeline-detail-grid dd {
+  color: var(--text-primary);
+}
+
+.timeline-grid {
+  display: grid;
+  align-items: stretch;
+  min-width: 100%;
+}
+
+.timeline-label-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.56rem 0.68rem 0.56rem 0;
+  border-top: 1px solid var(--line-soft);
+  min-height: var(--timeline-row-height, 3.2rem);
+}
+
+.timeline-label-cell--day,
+.timeline-label-cell--axis {
+  min-height: 0;
+  padding: 0;
+  border-top: 0;
+}
+
+.timeline-label-cell--day {
+  height: 1.35rem;
+  border-bottom: 1px solid var(--line-soft);
+  background: #f6f8fb;
+}
+
+.timeline-label-cell--axis {
+  height: 1.6rem;
+  border-bottom: 1px solid var(--line-soft);
+  background: #fbfcfd;
+}
+
+.timeline-track-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.timeline-track-copy {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.timeline-day-row,
+.timeline-axis-row,
+.timeline-track-row {
+  position: relative;
+  min-width: 0;
+}
+
+.timeline-day-row {
+  height: 1.35rem;
+  border-bottom: 1px solid var(--line-soft);
+  background: #f6f8fb;
+}
+
+.timeline-day-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.6rem;
+  background: #f4f7fa;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.timeline-day-band--alt {
+  background: #dde6ee;
+  color: #213545;
+}
+
+.timeline-axis-row {
+  height: 1.6rem;
+  border-bottom: 1px solid var(--line-soft);
+  background: #fbfcfd;
+}
+
+.timeline-axis-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid rgba(90, 109, 128, 0.14);
+}
+
+.timeline-axis-marker--major {
+  border-left-color: rgba(0, 57, 117, 0.26);
+}
+
+.timeline-axis-marker span {
+  position: absolute;
+  top: 0.32rem;
+  left: 0.35rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.timeline-scenario-edge {
+  position: absolute;
+  top: 0.12rem;
+  bottom: 0.12rem;
+  width: 0;
+  z-index: 3;
+  display: block;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.timeline-scenario-edge::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(0, 57, 117, 0.42);
+  left: 0;
+}
+
+.timeline-scenario-edge span {
+  position: absolute;
+  top: 50%;
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.05rem;
+  padding: 0.08rem 0.36rem;
+  border: 1px solid rgba(0, 57, 117, 0.18);
+  border-radius: 0.16rem;
+  background: rgba(247, 250, 253, 0.96);
+  color: #234257;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transform: translateY(-50%);
+}
+
+.timeline-scenario-edge--start span {
+  left: 0.32rem;
+}
+
+.timeline-scenario-edge--end span {
+  right: 0.32rem;
+}
+
+.timeline-track-row {
+  min-height: var(--timeline-row-height, 3.2rem);
+  border-top: 1px solid var(--line-soft);
+  background: #fcfdfe;
+}
+
+.planning-views-row .timeline-label-cell:not(.timeline-label-cell--day):not(.timeline-label-cell--axis):not(.timeline-label-cell--section):not(.timeline-label-cell--group):not(.timeline-label-cell--link),
+.planning-views-row .timeline-track-row:not(.timeline-track-row--section):not(.timeline-track-row--group):not(.timeline-track-row--link) {
+  box-sizing: border-box;
+  height: max(var(--timeline-row-height, 3.2rem), 6.5rem);
+  min-height: max(var(--timeline-row-height, 3.2rem), 6.5rem);
+}
+
+.timeline-grid-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid rgba(90, 109, 128, 0.1);
+  pointer-events: none;
+}
+
+.timeline-grid-line--major {
+  border-left-color: rgba(0, 57, 117, 0.18);
+}
+
+.timeline-now-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px solid var(--accent-primary);
+  z-index: 4;
+  pointer-events: none;
+}
+
+.timeline-now-badge {
+  position: absolute;
+  /* The "Now" badge lives inside .timeline-day-row's own now-line copy
+     (each of .timeline-day-row/.timeline-axis-row/.timeline-track-row
+     renders its own now-line/marker-line so the dashed line stays
+     visually continuous across all three -- see the comment above the
+     day-row's now-line JSX), so this offset is just a small inset from
+     that row's own top edge. */
+  top: 0.35rem;
+  left: 0.35rem;
+  padding: 0.14rem 0.35rem;
+  border-radius: 0.18rem;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.timeline-bar {
+  position: absolute;
+  top: 0.56rem;
+  box-sizing: border-box;
+  min-width: 2px;
+  height: 2.32rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 0.12rem;
+  padding: 0;
+  border-radius: 0.2rem;
+  border: 1px solid transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+  color: #10202d;
+  text-align: left;
+  overflow: visible;
+  cursor: pointer;
+  z-index: 2;
+}

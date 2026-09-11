@@ -1,0 +1,122 @@
+.overview-select-button:hover {
+  border-color: var(--accent-primary);
+}
+
+.overview-select-button:focus-visible {
+  outline: 2px solid rgba(185, 87, 31, 0.55);
+  outline-offset: 1px;
+}
+
+.overview-select-button--selected {
+  border-color: #5aaf70;
+  background: #d9f1df;
+  color: #176c31;
+  cursor: default;
+}
+
+.overview-list-row--selected {
+  background: rgba(90, 175, 112, 0.08);
+  box-shadow: inset 3px 0 0 #5aaf70;
+}
+
+.overview-list-row--selected .overview-select-button--selected {
+  color: #fff;
+  background: #5aaf70;
+  border-color: #5aaf70;
+}
+
+.overview-select-empty {
+  color: var(--text-muted);
+}
+
+.overview-data-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Trade-Off option facts ------------------------------------------- */
+
+.tradeoff-option-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem 0.7rem;
+  margin: 0.55rem 0 0.7rem;
+}
+
+.tradeoff-option-fact {
+  min-width: 0;
+}
+
+.tradeoff-option-fact dt {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tradeoff-option-fact dd {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* The Overview trade-off pill replaces the removed mini card tabs: it both
+   activates the card and marks that specific overpass everywhere. */
+.overview-tradeoff-button {
+  padding: 0;
+  border: 0;
+  border-radius: 0.24rem;
+  background: transparent;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.overview-tradeoff-button:hover {
+  box-shadow: 0 0 0 2px rgba(185, 87, 31, 0.22);
+}
+
+.overview-tradeoff-button:focus-visible {
+  outline: 2px solid rgba(185, 87, 31, 0.55);
+  outline-offset: 1px;
+}
+
+.overview-tradeoff-button--marked {
+  box-shadow: 0 0 0 2px rgba(185, 87, 31, 0.65);
+}
+
+/* --- Asset-centric timeline rows -------------------------------------- */
+/* Rows are: section divider -> asset group header -> one sub-row per
+   counterpart. Label column and canvas render the SAME flat row list, so the
+   heights below must stay symmetrical between the two halves. */
+
+.timeline-label-cell--section {
+  justify-content: center;
+  min-height: 1.85rem;
+  padding: 0 0.45rem 0 0;
+  border-top: 0;
+}
+
+.timeline-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.16rem 0.28rem 0.16rem 0.12rem;
+  border: 0;
+  border-radius: 0.2rem;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.timeline-section-toggle:hover {
+  background: rgba(0, 57, 117, 0.07);
+}

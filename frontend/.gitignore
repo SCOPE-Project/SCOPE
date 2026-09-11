@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Files staged for manual deletion (this session could not delete them)
+_to_delete/
