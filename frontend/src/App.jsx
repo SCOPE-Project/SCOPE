@@ -4036,7 +4036,6 @@ export default function App() {
   const renderAssetWarning = (message) => (
     <span
       className="asset-warning"
-      title={message}
       tabIndex={0}
       aria-label={message}
       onMouseEnter={(event) => showWarningTooltip(message, event)}
