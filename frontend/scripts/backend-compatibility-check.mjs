@@ -11,6 +11,7 @@ const EXPECTED_BACKEND_PATHS = [
   '/schedule/session/{session_id}',
   '/schedule/session/{session_id}/override',
   '/schedule/session/{session_id}/strategy',
+  '/schedule/session/{session_id}/buffer-configs',
   '/schedule/session/{session_id}/commit',
 ]
 
@@ -91,7 +92,7 @@ const run = async () => {
       issues,
       openApiDocument,
       filterSchema,
-      ['orbit_engine_run_id', 'min_aos_los_elevation_deg', 'min_peak_elevation_deg', 'default_downlink_rate_mbps'],
+      ['orbit_engine_run_id', 'min_aos_los_elevation_deg', 'min_peak_elevation_deg', 'default_downlink_rate_mbps', 'satellite_downlink_rates_mbps'],
       'Filter-links payload',
     )
 
@@ -122,12 +123,28 @@ const run = async () => {
       'Session strategy payload',
     )
 
+    const bufferConfigsSchema = openApiDocument.paths?.['/schedule/session/{session_id}/buffer-configs']?.post?.requestBody?.content?.['application/json']?.schema
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      bufferConfigsSchema,
+      ['default_buffer_config', 'satellite_buffer_configs'],
+      'Session buffer-configs payload',
+    )
+    checkSchemaProperties(
+      issues,
+      openApiDocument,
+      componentSchemas.SatelliteBufferOverrideDTO,
+      ['capacity_mb', 'initial_level_mb', 'payload_generation_rate_mbps', 'downlink_rate_mbps'],
+      'Satellite buffer override',
+    )
+
     const sessionPlanSchema = openApiDocument.paths?.['/schedule/session/{session_id}']?.get?.responses?.['200']?.content?.['application/json']?.schema
     checkSchemaProperties(
       issues,
       openApiDocument,
       sessionPlanSchema,
-      ['session_id', 'filter_run_id', 'current_plan', 'trade_off_groups', 'conflict_reasons', 'satellite_buffer_profiles'],
+      ['session_id', 'filter_run_id', 'satellite_configs', 'current_plan', 'trade_off_groups', 'conflict_reasons', 'satellite_buffer_profiles'],
       'Session plan response',
     )
 

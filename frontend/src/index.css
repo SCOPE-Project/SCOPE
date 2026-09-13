@@ -736,6 +736,160 @@ body {
   grid-template-columns: 1fr;
 }
 
+/* Buffer configuration: fleet default + per-satellite overrides */
+.buffer-config-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.buffer-config-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.buffer-config-count {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.buffer-override-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.buffer-override {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--line-soft);
+  border-radius: var(--radius-card);
+  background: var(--bg-panel-strong);
+  padding: 0.4rem 0.5rem;
+  min-width: 0;
+}
+
+.buffer-override--custom {
+  border-left-color: var(--accent-primary);
+}
+
+.buffer-override--invalid {
+  border-color: var(--error-border);
+  border-left-color: var(--accent-danger);
+}
+
+.buffer-override-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.buffer-override-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.1rem;
+}
+
+.buffer-override-toggle:disabled {
+  cursor: default;
+}
+
+.buffer-override-toggle:focus-visible,
+.buffer-override-reset:focus-visible {
+  outline: 2px solid var(--accent-info);
+  outline-offset: 1px;
+}
+
+.buffer-override-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.buffer-override-badge {
+  border-radius: 0.2rem;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.05rem 0.3rem;
+}
+
+.buffer-override-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.6rem;
+}
+
+.buffer-override-value {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.buffer-override-value--custom {
+  color: var(--accent-primary);
+  font-weight: 700;
+}
+
+.buffer-override-reset {
+  flex: none;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+  cursor: pointer;
+}
+
+.buffer-override-reset:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.buffer-override-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.filter-input::placeholder {
+  color: var(--accent-secondary);
+}
+
+.filter-input--overridden {
+  border-color: var(--accent-primary);
+  font-weight: 600;
+}
+
 @media (max-width: 1080px) {
   .landing-content {
     width: min(100%, 760px);

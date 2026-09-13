@@ -75,6 +75,7 @@ The operational workflow maps directly to the following five operator-centric pl
     The operator interactively steers and optimizes the plan ("what will be") through in-situ controls:
     - **Link Overrides:** Clicking override controls on individual links in the Trade-Off drawer, Overview table, or Timeline tooltip (`PIN`, `EXCLUDE`, `AUTO`). Each click triggers a synchronous `POST /schedule/session/{session_id}/override` which re-runs forward simulation and returns an updated `SessionPlanDTO` immediately without polling.
     - **Strategy Switching & Hyperparameter Tuning:** Changing the active scoring strategy directly from the Timeline toolbar or Sidebar accordion (`buffer_overflow_avoidance`, `max_downlink_throughput`, `max_pass_duration`), or adjusting Urgency parameters ($\alpha$, exponent) via synchronous `POST /schedule/session/{session_id}/strategy`. Existing manual overrides are preserved across strategy switches.
+    - **Buffer Reconfiguration:** Editing the fleet-default or per-satellite buffer configuration in the Sidebar accordion marks it as unapplied; **"Apply Buffer Config to Session"** sends synchronous `POST /schedule/session/{session_id}/buffer-configs`, which re-solves the session with the new capacities, fills and rates while preserving manual overrides and the scoring strategy.
     - **Visual Feedback:** The frontend instantly redraws rows, conflict cards, timeline bars, and storage buffer curves at 60 FPS.
 
 - **Phase 5: Commit**
@@ -272,6 +273,24 @@ The operator may also update the active scoring strategy without re-running the 
 - **FastAPI:** Synchronously loads the `SchedulingSession` from `SchedulingSessionRepository`, mutates `active_scoring_strategy` and `scoring_parameters`, re-runs `active_scheduler.solve(...)` with the existing `user_overrides`, updates `current_plan` and `satellite_buffer_profiles`, and returns the updated `SessionPlanDTO`.
 - **UI Update:** No background task or polling needed. The returned plan is applied synchronously via `applyAuthoritativeSessionPlan(...)`, redrawing Overview rows, Trade-Off cards, timeline bars, and buffer curves in a single pass.
 
+The operator may likewise change the buffer configuration of the active session:
+
+```
+[ Operator edits Fleet Default or a satellite override in the Sidebar ]
+               │
+               ├──> "Unapplied changes" note; Apply button enables once the configuration is valid
+               │
+               └──> POST /schedule/session/{session_id}/buffer-configs
+                              ──> { default_buffer_config, satellite_buffer_configs }
+                                       │
+                                       └──> Returns: updated SessionPlanDTO   (synchronous)
+```
+
+- **UI Model:** The Buffer Configuration panel (landing page and sidebar) holds one Fleet Default plus an inherit-by-default override per selected satellite. Empty override fields show the default as placeholder; edited fields are highlighted and a satellite row can be reset to the default. Validation is applied to each satellite's merged configuration.
+- **Launch & Resolve:** Per-satellite downlink rates are sent to `POST /tasks/filter-links` as `satellite_downlink_rates_mbps`; the full default + sparse overrides go to `POST /tasks/process-trade-offs`.
+- **Mutual Lockout:** Strategy and buffer updates share the `sessionReconfiguring` flag, so override controls, the strategy selectors and the buffer Apply button are disabled while either re-solve is in flight.
+- **FastAPI:** Resolves each satellite's configuration (override fields over the default), re-derives link pass capacities from the resolved downlink rates, re-runs `active_scheduler.solve(...)` with the existing `user_overrides` and scoring strategy, and returns the updated `SessionPlanDTO`.
+
 ---
 
 ### Phase 5: Commit
@@ -328,6 +347,7 @@ The operator may also update the active scoring strategy without re-running the 
 | **Phase 3: Resolve** | Trade-off complete — fetch result | `GET /tasks/status/{task_id}/result` | Synchronous REST | Returns SessionPlanDTO |
 | **Phase 4: Steer** | Override link (PIN / EXCLUDE / AUTO) | `POST /schedule/session/{session_id}/override` | Synchronous REST | Mutates session, re-runs forward simulation |
 | **Phase 4: Steer** | Change scoring strategy | `POST /schedule/session/{session_id}/strategy` | Synchronous REST | Mutates session strategy, re-runs forward simulation |
+| **Phase 4: Steer** | "Apply Buffer Config to Session" | `POST /schedule/session/{session_id}/buffer-configs` | Synchronous REST | Replaces session buffer configs, re-runs forward simulation |
 | **Phase 5: Commit** | "Confirm Communication Schedule" | *(Client-side state transition)* | Local staging | Renders KPI summary, per-asset tables & buffer profiles |
 | **Phase 5: Commit** | "Commit Activities to SatOS" | `POST /schedule/session/{session_id}/commit` | Synchronous REST | Converts LinkBlocks → Activities + ScheduleEvents, pushes to SatOS |
 | **Phase 5: Commit** | Baseline synchronization | `GET /tasks/initialize` | Synchronous REST | Refreshes SatOS ground-truth asset schedules |

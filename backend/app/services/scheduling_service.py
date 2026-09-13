@@ -1,7 +1,8 @@
 # app/services/scheduling_service.py
 import uuid
+from dataclasses import replace
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, Iterable, List, Optional, Any
 
 from core.models.scheduling import (
     DEFAULT_BUFFER_CAPACITY_MB,
@@ -17,10 +18,19 @@ from core.models.activities import Activity
 from core.scheduling.conflict_builder import build_conflict_structure
 from core.scheduling.forward_simulator import ForwardSimulationScheduler
 from core.scheduling.strategy import BaseScheduler, BaseScoringRule, get_scoring_rule
-from app.models.scheduling import CommitResponseDTO
+from app.models.scheduling import (
+    CommitResponseDTO,
+    SatelliteBufferConfigDTO,
+    SatelliteBufferOverrideDTO,
+    merge_buffer_config,
+)
 from app.repositories.scheduling_session_repository import SchedulingSessionRepository
 
 _default_scheduler: BaseScheduler = ForwardSimulationScheduler()
+
+
+class SessionNotFoundError(ValueError):
+    """Raised when a scheduling session id is unknown (a ValueError for existing callers)."""
 
 
 def create_session(
@@ -50,11 +60,6 @@ def create_session(
     if session_id is None:
         session_id = str(uuid.uuid4())
 
-    links_by_id: Dict[str, LinkBlock] = {l.link_id: l for l in candidate_links if l.link_id}
-    schedulable_links = [l for l in candidate_links if l.is_eligible and l.is_available]
-
-    conflict_structure = build_conflict_structure(schedulable_links)
-
     resolved_satellite_configs: Dict[str, SatelliteBufferConfig] = dict(satellite_configs or {})
     for link in candidate_links:
         sat = link.satellite_name
@@ -66,6 +71,12 @@ def create_session(
                 payload_generation_rate_mbps=default_payload_generation_rate_mbps,
                 downlink_rate_mbps=default_downlink_rate_mbps,
             )
+
+    candidate_links = _apply_session_downlink_rates(candidate_links, resolved_satellite_configs)
+    links_by_id: Dict[str, LinkBlock] = {l.link_id: l for l in candidate_links if l.link_id}
+    schedulable_links = [l for l in candidate_links if l.is_eligible and l.is_available]
+
+    conflict_structure = build_conflict_structure(schedulable_links)
 
     user_overrides: Dict[str, OverrideState] = {}
     schedules_map = asset_schedules or {}
@@ -104,6 +115,54 @@ def create_session(
     return session
 
 
+def _apply_session_downlink_rates(
+    links: List[LinkBlock],
+    satellite_configs: Dict[str, SatelliteBufferConfig],
+) -> List[LinkBlock]:
+    """
+    The session's buffer configuration is the authority on each satellite's downlink
+    rate, so pass capacities are re-derived from it rather than trusting the rate the
+    filter run happened to use. duration_seconds is the elevation-trimmed duration the
+    filter pipeline multiplied by, so the result matches a re-filter exactly. Changed
+    links are copied, leaving the filter run's stored links untouched.
+    """
+    reconciled: List[LinkBlock] = []
+    for link in links:
+        config = satellite_configs.get(link.satellite_name)
+        if config is None or link.duration_seconds <= 0.0:
+            reconciled.append(link)
+            continue
+        capacity_mb = round(link.duration_seconds * config.downlink_rate_mbps, 2)
+        if capacity_mb == link.estimated_data_capacity_mb:
+            reconciled.append(link)
+        else:
+            reconciled.append(replace(link, estimated_data_capacity_mb=capacity_mb))
+    return reconciled
+
+
+def resolve_buffer_configs(
+    satellite_names: Iterable[str],
+    default_buffer_config: Optional[SatelliteBufferConfigDTO] = None,
+    satellite_buffer_configs: Optional[Dict[str, SatelliteBufferOverrideDTO]] = None,
+) -> Dict[str, SatelliteBufferConfig]:
+    """
+    Resolves the effective buffer configuration of every satellite in the session:
+    the default, with each satellite's override applied field by field.
+    Raises ValueError for overrides naming a satellite that has no candidate links.
+    """
+    names = set(satellite_names)
+    overrides = satellite_buffer_configs or {}
+    unknown = sorted(set(overrides) - names)
+    if unknown:
+        raise ValueError(
+            f"Buffer overrides given for satellites without candidate links: {', '.join(unknown)}."
+        )
+    return {
+        sat: merge_buffer_config(sat, default_buffer_config, overrides.get(sat))
+        for sat in sorted(names)
+    }
+
+
 def create_session_from_config(
     filter_run_id: str,
     candidate_links: List[LinkBlock],
@@ -111,8 +170,8 @@ def create_session_from_config(
     scenario_end: datetime,
     asset_schedules: Optional[Dict[str, List[Activity]]] = None,
     scoring_config: Optional[Any] = None,
-    satellite_buffer_configs: Optional[Dict[str, Any]] = None,
-    default_buffer_config: Optional[Any] = None,
+    satellite_buffer_configs: Optional[Dict[str, SatelliteBufferOverrideDTO]] = None,
+    default_buffer_config: Optional[SatelliteBufferConfigDTO] = None,
     session_id: Optional[str] = None,
     scheduler: Optional[BaseScheduler] = None,
 ) -> SchedulingSession:
@@ -129,18 +188,11 @@ def create_session_from_config(
         if hasattr(scoring_config, "to_domain"):
             scoring_rule = scoring_config.to_domain()
 
-    sat_configs: Dict[str, SatelliteBufferConfig] = {}
-    if satellite_buffer_configs:
-        for sat_name, cfg in satellite_buffer_configs.items():
-            if hasattr(cfg, "to_domain"):
-                sat_configs[sat_name] = cfg.to_domain(sat_name)
-            elif isinstance(cfg, SatelliteBufferConfig):
-                sat_configs[sat_name] = cfg
-
-    def_cap = getattr(default_buffer_config, "capacity_mb", DEFAULT_BUFFER_CAPACITY_MB) if default_buffer_config else DEFAULT_BUFFER_CAPACITY_MB
-    def_init = getattr(default_buffer_config, "initial_level_mb", DEFAULT_BUFFER_INITIAL_LEVEL_MB) if default_buffer_config else DEFAULT_BUFFER_INITIAL_LEVEL_MB
-    def_gen = getattr(default_buffer_config, "payload_generation_rate_mbps", DEFAULT_PAYLOAD_GENERATION_RATE_MBPS) if default_buffer_config else DEFAULT_PAYLOAD_GENERATION_RATE_MBPS
-    def_dl = getattr(default_buffer_config, "downlink_rate_mbps", DEFAULT_DOWNLINK_RATE_MBPS) if default_buffer_config else DEFAULT_DOWNLINK_RATE_MBPS
+    sat_configs = resolve_buffer_configs(
+        satellite_names=(link.satellite_name for link in candidate_links),
+        default_buffer_config=default_buffer_config,
+        satellite_buffer_configs=satellite_buffer_configs,
+    )
 
     return create_session(
         filter_run_id=filter_run_id,
@@ -148,11 +200,7 @@ def create_session_from_config(
         scenario_start=scenario_start,
         scenario_end=scenario_end,
         asset_schedules=asset_schedules,
-        satellite_configs=sat_configs if sat_configs else None,
-        default_capacity_mb=def_cap,
-        default_initial_level_mb=def_init,
-        default_payload_generation_rate_mbps=def_gen,
-        default_downlink_rate_mbps=def_dl,
+        satellite_configs=sat_configs,
         scoring_strategy=scoring_strategy,
         scoring_parameters=scoring_parameters,
         scoring_rule=scoring_rule,
@@ -250,6 +298,53 @@ def update_strategy(
         scenario_end=session.scenario_end,
     )
 
+    session.current_plan = current_plan
+    session.satellite_buffer_profiles = satellite_profiles
+    SchedulingSessionRepository.save_session(session)
+    return session
+
+
+def update_buffer_configs(
+    session_id: str,
+    default_buffer_config: Optional[SatelliteBufferConfigDTO] = None,
+    satellite_buffer_configs: Optional[Dict[str, SatelliteBufferOverrideDTO]] = None,
+    scheduler: Optional[BaseScheduler] = None,
+) -> SchedulingSession:
+    """
+    Replaces the session's buffer configuration and re-runs the solver, keeping the
+    operator's pin/exclude overrides and the scoring strategy. Pass capacities are
+    re-derived when a downlink rate changes. Raises SessionNotFoundError if the
+    session does not exist and ValueError if the configuration is invalid.
+    """
+    session = SchedulingSessionRepository.get_session(session_id)
+    if not session:
+        raise SessionNotFoundError(f"SchedulingSession '{session_id}' not found.")
+
+    satellite_configs = resolve_buffer_configs(
+        satellite_names=(link.satellite_name for link in session.candidate_links.values()),
+        default_buffer_config=default_buffer_config,
+        satellite_buffer_configs=satellite_buffer_configs,
+    )
+    reconciled_links = _apply_session_downlink_rates(list(session.candidate_links.values()), satellite_configs)
+
+    active_scheduler = scheduler or _default_scheduler
+    active_scoring = get_scoring_rule(session.active_scoring_strategy, **(session.scoring_parameters or {}))
+    candidate_links = {link.link_id: link for link in reconciled_links}
+
+    current_plan, satellite_profiles = active_scheduler.solve(
+        candidate_links=candidate_links,
+        user_overrides=session.user_overrides,
+        satellite_configs=satellite_configs,
+        conflict_structure=session.conflict_structure,
+        asset_schedules=session.asset_schedules,
+        scoring_rule=active_scoring,
+        scenario_start=session.scenario_start,
+        scenario_end=session.scenario_end,
+    )
+
+    # Only mutate the stored session once the new configuration solved successfully.
+    session.candidate_links = candidate_links
+    session.satellite_configs = satellite_configs
     session.current_plan = current_plan
     session.satellite_buffer_profiles = satellite_profiles
     SchedulingSessionRepository.save_session(session)
