@@ -8,7 +8,7 @@ from app.models.scheduling import (
     FilterResultDTO,
     SessionPlanDTO,
     ScoringStrategyConfigDTO,
-    SatelliteBufferConfigDTO,
+    BufferConfigSelection,
 )
 
 
@@ -37,19 +37,12 @@ class FilterLinksRequest(BaseModel):
     satellite_downlink_rates_mbps: Optional[Dict[str, float]] = Field(default=None, description="Optional per-satellite downlink transmission data rates in MB/s")
 
 
-class TradeOffRequest(BaseModel):
+class TradeOffRequest(BufferConfigSelection):
     """
-    Request model for the trade-off scheduling session task.
-    """ 
+    Request model for the trade-off scheduling session task. Buffer configuration
+    is a default plus sparse per-satellite overrides (see BufferConfigSelection).
+    """
     filter_run_id: str = Field(..., description="Run ID of the filtered links dataset")
-    satellite_buffer_configs: Optional[Dict[str, SatelliteBufferConfigDTO]] = Field(
-        default=None,
-        description="Per-satellite buffer configuration overrides (capacity, initial level, generation rate, downlink rate)",
-    )
-    default_buffer_config: Optional[SatelliteBufferConfigDTO] = Field(
-        default=None,
-        description="Default buffer configuration applied to any satellite not explicitly configured in satellite_buffer_configs",
-    )
     scoring_config: ScoringStrategyConfigDTO = Field(
         default_factory=lambda: ScoringStrategyConfigDTO(name="buffer_overflow_avoidance", parameters={"alpha": 2.0, "exponent": 2.0}),
         description="Pluggable scoring strategy configuration and hyperparameters",

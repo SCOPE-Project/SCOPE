@@ -8,6 +8,10 @@ const readErrorMessage = async (response) => {
 
   try {
     const body = await response.json()
+    // FastAPI validation errors (422) carry a list of { loc, msg } entries.
+    if (Array.isArray(body?.detail)) {
+      return body.detail.map((entry) => entry?.msg ?? String(entry)).join(' ') || fallback
+    }
     return body?.detail ?? body?.message ?? fallback
   } catch {
     return fallback
@@ -115,7 +119,11 @@ export const updateSessionStrategy = (sessionId, payload, signal) => (
   postJson(`/schedule/session/${encodeURIComponent(sessionId)}/strategy`, payload, signal)
 )
 
-export const commitSession = (sessionId, user, signal) => {
+export const updateSessionBufferConfigs = (sessionId, payload, signal) => (
+  postJson(`/schedule/session/${encodeURIComponent(sessionId)}/buffer-configs`, payload, signal)
+)
+
+export const commitSession =(sessionId, user, signal) => {
   const payload = typeof user === 'string' ? { user } : user && typeof user === 'object' && !('aborted' in user) ? user : {}
   const abortSignal = user && typeof user === 'object' && 'aborted' in user ? user : signal
   return postJson(`/schedule/session/${encodeURIComponent(sessionId)}/commit`, payload, abortSignal)

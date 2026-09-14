@@ -52,7 +52,7 @@ Call `POST /tasks/filter-links` after propagation using a request such as:
   "min_aos_los_elevation_deg": 5.0,
   "min_peak_elevation_deg": 15.0,
   "default_downlink_rate_mbps": 25.0,
-  "satellite_downlink_rates_mbps": {}
+  "satellite_downlink_rates_mbps": { "Sat-2": 50.0 }
 }
 ```
 
@@ -110,19 +110,17 @@ For the current frontend controls, the recommended request is:
 ```json
 {
   "filter_run_id": "filter-task-uuid",
-  "satellite_buffer_configs": {
-    "Sat-1": {
-      "capacity_mb": 100000.0,
-      "initial_level_mb": 40000.0,
-      "payload_generation_rate_mbps": 100.0,
-      "downlink_rate_mbps": 25.0
-    }
-  },
   "default_buffer_config": {
     "capacity_mb": 100000.0,
-    "initial_level_mb": 40000.0,
-    "payload_generation_rate_mbps": 100.0,
+    "initial_level_mb": 5000.0,
+    "payload_generation_rate_mbps": 4.0,
     "downlink_rate_mbps": 25.0
+  },
+  "satellite_buffer_configs": {
+    "Sat-2": {
+      "capacity_mb": 20000.0,
+      "downlink_rate_mbps": 50.0
+    }
   },
   "scoring_config": {
     "name": "buffer_overflow_avoidance",
@@ -136,29 +134,24 @@ For the current frontend controls, the recommended request is:
 
 Only use these three configs. The others are irrelevant for the frontend for now.
 
-`satellite_name` may be included inside a buffer configuration DTO, but it should be omitted here because the key in `satellite_buffer_configs` already identifies the satellite.
+`satellite_buffer_configs` entries are sparse overrides keyed by satellite name: only the fields that differ from `default_buffer_config` are sent, and omitted fields inherit from it.
 
 The complete accepted request contract is:
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `filter_run_id` | `string` | Yes | ID returned in the completed `/tasks/filter-links` result. |
-| `satellite_buffer_configs` | `object<string, SatelliteBufferConfig>` | No | Complete per-satellite buffer configuration. |
-| `default_buffer_config` | `SatelliteBufferConfig` | No | Fallback for satellites without a per-satellite configuration. |
-| `initial_buffer_levels_mb` | `object<string, number>` | No | Shorthand override for initial buffer levels. |
-| `buffer_capacities_mb` | `object<string, number>` | No | Shorthand override for buffer capacities. |
-| `payload_generation_rates_mbps` | `object<string, number>` | No | Shorthand override for payload generation rates. |
-| `downlink_rates_mbps` | `object<string, number>` | No | Shorthand override for downlink rates. |
+| `default_buffer_config` | `SatelliteBufferConfig` | No | Complete fleet-default buffer configuration. |
+| `satellite_buffer_configs` | `object<string, SatelliteBufferOverride>` | No | Sparse per-satellite overrides of the default. |
 | `scoring_config` | `ScoringConfig` | No | Scheduling strategy and its parameters. |
 
-`SatelliteBufferConfig` fields are:
+`SatelliteBufferConfig` fields (`SatelliteBufferOverride` has the same fields, all optional and defaulting to `null` = inherit):
 
 | Field | Type | Validation | Backend default |
 | --- | --- | --- | --- |
-| `satellite_name` | `string` | Optional | Name supplied by the parent object key. |
-| `capacity_mb` | `number` | Must be greater than `0`. | `2000.0` |
-| `initial_level_mb` | `number` | Must be at least `0`. | `0.0` |
-| `payload_generation_rate_mbps` | `number` | Must be at least `0`. | `15.0` |
+| `capacity_mb` | `number` | Must be greater than `0`. | `100000.0` |
+| `initial_level_mb` | `number` | Must be at least `0` and at most `capacity_mb`. | `5000.0` |
+| `payload_generation_rate_mbps` | `number` | Must be at least `0`. | `4.0` |
 | `downlink_rate_mbps` | `number` | Must be greater than `0`. | `25.0` |
 
 Supported `scoring_config.name` values are:
@@ -169,14 +162,13 @@ Supported `scoring_config.name` values are:
 | `max_downlink_throughput` | No frontend parameters required. |
 | `max_pass_duration` | No frontend parameters required. |
 
-Configuration precedence is:
+Configuration precedence, per field and per satellite:
 
-1. A shorthand map such as `initial_buffer_levels_mb` overrides the corresponding field in `satellite_buffer_configs`.
-2. `satellite_buffer_configs` supplies values for explicitly configured satellites.
-3. `default_buffer_config` supplies values for all other satellites.
-4. Backend defaults apply when none of the above supplies a value.
+1. The satellite's entry in `satellite_buffer_configs`, if it sets the field.
+2. `default_buffer_config`.
+3. Backend defaults when no default configuration is sent.
 
-The frontend should normally use `satellite_buffer_configs` plus `default_buffer_config` and avoid mixing in the shorthand maps. This keeps the request unambiguous.
+Validation runs on the merged result, so an override that lowers `capacity_mb` below the inherited `initial_level_mb` is rejected (`422`). Overrides for satellites without candidate links in the filter run are rejected as well. See `Scheduling_Architecture_and_Data_Contracts.md` for details and for `POST /schedule/session/{session_id}/buffer-configs`, which applies an edited configuration to an existing session without discarding operator overrides.
 
 The values currently entered as GB in the UI must be converted to MB before submission:
 
@@ -312,9 +304,9 @@ Render `satellite_buffer_profiles` directly. Each profile supplies:
 
 The frontend may convert MB to GB for display and map timestamps and levels to SVG coordinates. Those are presentation transformations, not domain calculations.
 
-The existing buffer inputs can become inputs to `default_buffer_config`. A downlink-rate input should be added, and optional per-satellite configuration may be exposed later through `satellite_buffer_configs`.
+The Buffer Configuration panel edits `default_buffer_config` (Fleet Default) and, for each selected satellite, an inherit-by-default override that becomes `satellite_buffer_configs` (see `frontend/src/bufferConfigModel.js`).
 
-The same downlink-rate configuration should be sent to both link filtering and trade-off session creation so `estimated_data_capacity_mb` and the scheduling simulation use consistent assumptions.
+Per-satellite downlink rates are sent to link filtering as `satellite_downlink_rates_mbps` so the overview shows consistent pass capacities. The scheduling session additionally re-derives `estimated_data_capacity_mb` from its own resolved downlink rates, so changing a rate after filtering only requires recalculating or applying the buffer configuration, not re-filtering.
 
 The red alternative-schedule curve should be removed. The backend currently has no non-mutating session-preview endpoint, so the frontend cannot calculate or preview an alternative without changing the live session.
 

@@ -21,6 +21,7 @@ from app.models.scheduling import (
     SessionPlanDTO,
     ScoringStrategyConfigDTO,
     SatelliteBufferConfigDTO,
+    SatelliteBufferOverrideDTO,
 )
 
 
@@ -140,7 +141,7 @@ def run_filter_links_task(
 def run_process_trade_offs_task(
     task_id: str, 
     filter_run_id: str,
-    satellite_buffer_configs: Optional[Dict[str, SatelliteBufferConfigDTO]] = None,
+    satellite_buffer_configs: Optional[Dict[str, SatelliteBufferOverrideDTO]] = None,
     default_buffer_config: Optional[SatelliteBufferConfigDTO] = None,
     scoring_config: Optional[ScoringStrategyConfigDTO] = None,
 ):

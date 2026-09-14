@@ -425,7 +425,11 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
      │       Payload: { "name": "...", "parameters": {...} }         │ (Fast solve < 5ms)
      │<─── SessionPlanDTO { current_plan, satellite_profiles, ... } ─│
      │                                                               │
-     │── 4c. GET /schedule/session/{id} ────────────────────────────>│ (Fetches active session state)
+     │── 4c. POST /schedule/session/{id}/buffer-configs ────────────>│ (Operator edits buffer configs)
+     │       Payload: { default_buffer_config, satellite_buffer_configs }
+     │<─── SessionPlanDTO { current_plan, satellite_profiles, ... } ─│
+     │                                                               │
+     │── 4d. GET /schedule/session/{id} ────────────────────────────>│ (Fetches active session state)
      │<─── SessionPlanDTO { current_plan, satellite_profiles, ... } ─│
      │                                                               │
      │── 5. POST /schedule/session/{id}/commit ─────────────────────>│ (Pushes schedule to SatOS)
@@ -519,14 +523,9 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
     "satellite_buffer_configs": {
       "Sat1": {
         "capacity_mb": 3000.0,
-        "initial_level_mb": 200.0,
-        "payload_generation_rate_mbps": 12.0,
-        "downlink_rate_mbps": 50.0
+        "initial_level_mb": 200.0
       },
       "Sat2": {
-        "capacity_mb": 5000.0,
-        "initial_level_mb": 500.0,
-        "payload_generation_rate_mbps": 20.0,
         "downlink_rate_mbps": 75.0
       }
     },
@@ -548,12 +547,23 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
 * **Internal Action:**
   1. Fetches candidate links from `LinkRepository` by `filter_run_id`.
   2. Resolves scenario time window (`start_time`, `end_time`) via `LinkRepository.get_time_window(filter_run_id)`.
-  3. Resolves per-satellite buffer configurations from user inputs and default fallbacks.
-  4. Builds `ConflictStructure` over schedulable candidate links (`is_eligible == True and is_available == True`).
-  5. Spawns `SchedulingSession` with unique `session_id` and saves it in `SchedulingSessionRepository`.
-  6. Executes initial Multi-Pass Forward Simulation.
+  3. Resolves per-satellite buffer configurations (see *Buffer configuration resolution* below).
+  4. Re-derives each link's `estimated_data_capacity_mb` as `duration_seconds × downlink_rate_mbps` of its satellite's resolved configuration, so the session's downlink rate is authoritative even if the filter run used a different one. The filter run's stored links are not modified.
+  5. Builds `ConflictStructure` over schedulable candidate links (`is_eligible == True and is_available == True`).
+  6. Spawns `SchedulingSession` with unique `session_id` and saves it in `SchedulingSessionRepository`.
+  7. Executes initial Multi-Pass Forward Simulation.
 * **Immediate Response:** `TaskReceiptResponse` (`{ "task_id": "session-uuid-001", "status": "Queued" }`).
 * **Polled Task Result Payload:** `SessionPlanDTO`.
+
+##### Buffer configuration resolution
+* `default_buffer_config` (`SatelliteBufferConfigDTO`) is a complete configuration. Fields it omits fall back to the backend constants in `core/models/scheduling.py` (100 GB capacity, 5 GB initial level, 4 MB/s generation, 25 MB/s downlink).
+* `satellite_buffer_configs` maps satellite names to sparse `SatelliteBufferOverrideDTO`s. Every field is optional; an omitted (or `null`) field inherits from `default_buffer_config`, **not** from the backend constants. In the example above, `Sat1` keeps the default generation and downlink rates, and `Sat2` keeps the default capacity, initial level and generation rate.
+* Every satellite with candidate links gets a resolved configuration; satellites without an override receive the default.
+* Validation:
+  * Per-field bounds (`capacity_mb > 0`, `initial_level_mb >= 0`, `payload_generation_rate_mbps >= 0`, `downlink_rate_mbps > 0`) and `initial_level_mb <= capacity_mb` are checked **after merging** each override with the default. Violations are rejected at request time with `422`.
+  * An override keyed by a satellite that has no candidate links in the filter run fails the task (`POST /schedule/session/{id}/buffer-configs` returns `400`).
+  * `SatelliteBufferConfig` enforces the same physical invariants in the domain layer, so CLI callers get the same guarantees.
+* The resolved configurations are returned in `SessionPlanDTO.satellite_configs`.
 
 ---
 
@@ -599,6 +609,29 @@ D_max├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ 
   ```
 * **Internal Action:** Updates active scoring strategy and hyperparameters in session, then triggers immediate forward simulation re-solve.
 * **Response Body (`SessionPlanDTO`):** Recomputed schedule and buffer profiles under the new scoring rule.
+
+---
+
+#### 5b. Buffer Configuration Update
+* **Endpoint:** `POST /schedule/session/{session_id}/buffer-configs`
+* **Execution:** Synchronous fast path.
+* **Request Body (`BufferConfigUpdateRequest`):** Same shape and resolution rules as the buffer fields of `TradeOffRequest`. The body is the complete desired state (full replacement): a satellite omitted from `satellite_buffer_configs` reverts to the default.
+  ```json
+  {
+    "default_buffer_config": {
+      "capacity_mb": 100000.0,
+      "initial_level_mb": 5000.0,
+      "payload_generation_rate_mbps": 4.0,
+      "downlink_rate_mbps": 25.0
+    },
+    "satellite_buffer_configs": {
+      "Sat2": { "capacity_mb": 20000.0, "downlink_rate_mbps": 50.0 }
+    }
+  }
+  ```
+* **Internal Action:** Resolves the configurations, re-derives link pass capacities from the new downlink rates, and re-runs the forward simulation. User overrides (pinned / excluded links) and the scoring strategy are preserved. The stored session is only modified if the update succeeds.
+* **Errors:** `404` unknown session, `400` override for a satellite without candidate links, `422` invalid values (including an initial level above capacity after merging).
+* **Response Body (`SessionPlanDTO`):** Recomputed schedule, `satellite_configs` and buffer profiles.
 
 ---
 

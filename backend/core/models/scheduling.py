@@ -93,6 +93,20 @@ class SatelliteBufferConfig:
     payload_generation_rate_mbps: float
     downlink_rate_mbps: float
 
+    def __post_init__(self) -> None:
+        label = self.satellite_name or "satellite"
+        if self.capacity_mb <= 0:
+            raise ValueError(f"{label}: buffer capacity must be positive (got {self.capacity_mb} MB).")
+        if self.initial_level_mb < 0 or self.initial_level_mb > self.capacity_mb:
+            raise ValueError(
+                f"{label}: initial buffer level {self.initial_level_mb} MB must be between 0 and "
+                f"the capacity of {self.capacity_mb} MB."
+            )
+        if self.payload_generation_rate_mbps < 0:
+            raise ValueError(f"{label}: payload generation rate must not be negative.")
+        if self.downlink_rate_mbps <= 0:
+            raise ValueError(f"{label}: downlink rate must be positive.")
+
 
 class BufferEventType(str, Enum):
     SCENARIO_START = "start"

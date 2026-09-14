@@ -1,7 +1,7 @@
 # app/models/scheduling.py
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from core.models.scheduling import (
     DEFAULT_BUFFER_CAPACITY_MB,
@@ -111,6 +111,61 @@ class SatelliteBufferConfigDTO(BaseModel):
             payload_generation_rate_mbps=domain.payload_generation_rate_mbps,
             downlink_rate_mbps=domain.downlink_rate_mbps,
         )
+
+    @model_validator(mode="after")
+    def _check_initial_level_within_capacity(self) -> "SatelliteBufferConfigDTO":
+        if self.initial_level_mb > self.capacity_mb:
+            raise ValueError(
+                f"initial_level_mb ({self.initial_level_mb}) must not exceed capacity_mb ({self.capacity_mb})."
+            )
+        return self
+
+
+class SatelliteBufferOverrideDTO(BaseModel):
+    """
+    Sparse per-satellite override. Fields left unset (null) inherit from the
+    request's default_buffer_config, so only the values that differ need to be sent.
+    """
+    capacity_mb: Optional[float] = Field(default=None, gt=0, description="Buffer capacity in MB")
+    initial_level_mb: Optional[float] = Field(default=None, ge=0, description="Initial buffer level in MB")
+    payload_generation_rate_mbps: Optional[float] = Field(default=None, ge=0, description="Payload generation data rate in MB/s")
+    downlink_rate_mbps: Optional[float] = Field(default=None, gt=0, description="Downlink transmission data rate in MB/s")
+
+
+def merge_buffer_config(
+    satellite_name: str,
+    default_config: Optional[SatelliteBufferConfigDTO],
+    override: Optional[SatelliteBufferOverrideDTO],
+) -> SatelliteBufferConfig:
+    """
+    Resolves the effective buffer configuration of one satellite: every field the
+    override leaves unset falls back to the default configuration (or the backend
+    constants when no default is given). Raises ValueError if the merged result is
+    physically inconsistent, e.g. an initial level above the capacity.
+    """
+    base = default_config or SatelliteBufferConfigDTO()
+    values = base.model_dump(exclude={"satellite_name"})
+    if override is not None:
+        values.update(override.model_dump(exclude_none=True))
+    return SatelliteBufferConfig(satellite_name=satellite_name, **values)
+
+
+class BufferConfigSelection(BaseModel):
+    """Default buffer configuration plus sparse per-satellite overrides."""
+    default_buffer_config: Optional[SatelliteBufferConfigDTO] = Field(
+        default=None,
+        description="Default buffer configuration applied to every satellite field not overridden in satellite_buffer_configs",
+    )
+    satellite_buffer_configs: Optional[Dict[str, SatelliteBufferOverrideDTO]] = Field(
+        default=None,
+        description="Per-satellite buffer overrides keyed by satellite name; unset fields inherit from default_buffer_config",
+    )
+
+    @model_validator(mode="after")
+    def _check_merged_configs(self) -> "BufferConfigSelection":
+        for sat_name, override in (self.satellite_buffer_configs or {}).items():
+            merge_buffer_config(sat_name, self.default_buffer_config, override)
+        return self
 
 
 # ========================================
@@ -317,6 +372,13 @@ class StrategyUpdateRequest(BaseModel):
     def to_domain(self):
         from core.scheduling.strategy import get_scoring_rule
         return get_scoring_rule(self.name, **self.parameters)
+
+
+class BufferConfigUpdateRequest(BufferConfigSelection):
+    """
+    Replaces the buffer configuration of an existing session. The payload is the
+    complete desired state: satellites without an override fall back to the default.
+    """
 
 
 class CommitRequestDTO(BaseModel):

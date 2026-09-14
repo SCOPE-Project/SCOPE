@@ -25,6 +25,9 @@ from app.models.scheduling import (
     SessionPlanDTO,
     OverrideRequest,
     StrategyUpdateRequest,
+    SatelliteBufferConfigDTO,
+    SatelliteBufferOverrideDTO,
+    BufferConfigUpdateRequest,
     CommitResponseDTO,
 )
 from app.models.satos import (
@@ -75,6 +78,9 @@ __all__ = [
     "SessionPlanDTO",
     "OverrideRequest",
     "StrategyUpdateRequest",
+    "SatelliteBufferConfigDTO",
+    "SatelliteBufferOverrideDTO",
+    "BufferConfigUpdateRequest",
     "CommitResponseDTO",
     # SatOS
     "AssetInformation",

@@ -223,7 +223,7 @@ def test_session_manager_custom_buffer_configs():
 
 def test_trade_off_request_with_buffer_configs_dto():
     from app.models.tasks import TradeOffRequest
-    from app.models.scheduling import SatelliteBufferConfigDTO, SessionPlanDTO
+    from app.models.scheduling import SatelliteBufferConfigDTO, SatelliteBufferOverrideDTO, SessionPlanDTO
     from app.services.task_orchestrator import run_process_trade_offs_task
     from app.repositories import TaskRepository
 
@@ -237,7 +237,7 @@ def test_trade_off_request_with_buffer_configs_dto():
     req = TradeOffRequest(
         filter_run_id=filter_id,
         satellite_buffer_configs={
-            "Sat-X": SatelliteBufferConfigDTO(
+            "Sat-X": SatelliteBufferOverrideDTO(
                 capacity_mb=4000.0,
                 initial_level_mb=800.0,
                 payload_generation_rate_mbps=20.0,

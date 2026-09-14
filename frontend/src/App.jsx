@@ -16,8 +16,19 @@ import {
   startLinkFiltering,
   startOrbitExtraction,
   startTradeOffProcessing,
+  updateSessionBufferConfigs,
   updateSessionStrategy,
 } from './api/scopeApi.js'
+import {
+  BUFFER_FIELDS,
+  buildBufferConfigPayload,
+  buildSatelliteDownlinkRates,
+  clearBufferOverride,
+  getOverriddenFieldKeys,
+  resolveBufferConfig,
+  setBufferOverrideField,
+  validateBufferSetup,
+} from './bufferConfigModel.js'
 import {
   applySessionPlanToRows,
   buildCommitSummary,
@@ -285,6 +296,10 @@ export default function App() {
   const [extractionMessages, setExtractionMessages] = useState([])
   const [calculatingTradeOffs, setCalculatingTradeOffs] = useState(false)
   const [updatingStrategy, setUpdatingStrategy] = useState(false)
+  const [updatingBufferConfig, setUpdatingBufferConfig] = useState(false)
+  // Strategy and buffer updates both re-solve the live session; while either
+  // is in flight, other session mutations (overrides included) are locked out.
+  const sessionReconfiguring = updatingStrategy || updatingBufferConfig
   const [tradeOffsCalculated, setTradeOffsCalculated] = useState(false)
   const [tradeOffCards, setTradeOffCards] = useState([])
   const [activeTradeOffCardIndex, setActiveTradeOffCardIndex] = useState(0)
@@ -325,11 +340,19 @@ export default function App() {
   // taller again on top of the previous 360px default (itself 50% taller
   // than 240px, which was 50% taller than the original 160px default).
   const [bottomTopHeightPx, setBottomTopHeightPx] = useState(540)
-  // Default buffer configuration sent to the backend session engine.
+  // Fleet-default buffer configuration sent to the backend session engine.
   const [dataStartFillGb, setDataStartFillGb] = useState(DEFAULT_DATA_START_FILL_GB)
   const [dataGenerationMbps, setDataGenerationMbps] = useState(DEFAULT_DATA_GENERATION_MBPS)
   const [dataCapacityGb, setDataCapacityGb] = useState(DEFAULT_DATA_CAPACITY_GB)
   const [dataDownlinkRateMbps, setDataDownlinkRateMbps] = useState(DEFAULT_DOWNLINK_RATE_MBPS)
+  // Sparse per-satellite overrides of the default, keyed by satellite name
+  // (see bufferConfigModel.js). Kept when a satellite is deselected so its
+  // values return if it is selected again; only selected satellites are sent.
+  const [bufferOverrides, setBufferOverrides] = useState({})
+  const [expandedBufferSatellite, setExpandedBufferSatellite] = useState(null)
+  // Request-body key of the buffer configuration the active session was solved
+  // with, so edits made afterwards can be flagged as not yet applied.
+  const [appliedBufferConfigKey, setAppliedBufferConfigKey] = useState(null)
   const [tradeOffStrategy, setTradeOffStrategy] = useState(DEFAULT_TRADE_OFF_STRATEGY)
   const [scoringAlpha, setScoringAlpha] = useState(DEFAULT_SCORING_ALPHA)
   const [scoringExponent, setScoringExponent] = useState(DEFAULT_SCORING_EXPONENT)
@@ -1487,6 +1510,10 @@ export default function App() {
     setDataGenerationMbps(DEFAULT_DATA_GENERATION_MBPS)
     setDataCapacityGb(DEFAULT_DATA_CAPACITY_GB)
     setDataDownlinkRateMbps(DEFAULT_DOWNLINK_RATE_MBPS)
+    setBufferOverrides({})
+    setExpandedBufferSatellite(null)
+    setAppliedBufferConfigKey(null)
+    setUpdatingBufferConfig(false)
     setTradeOffStrategy(DEFAULT_TRADE_OFF_STRATEGY)
     setScoringAlpha(DEFAULT_SCORING_ALPHA)
     setScoringExponent(DEFAULT_SCORING_EXPONENT)
@@ -1763,6 +1790,7 @@ export default function App() {
     setFilteredLinks([])
     setSessionId(null)
     setSessionPlan(null)
+    setAppliedBufferConfigKey(null)
     setSchedulerLaunched(true)
     setTradeOffsCalculated(false)
     setTradeOffCards([])
@@ -1868,6 +1896,7 @@ export default function App() {
         min_aos_los_elevation_deg: minimumLinkElevationFilterValue,
         min_peak_elevation_deg: minimumPeakElevationFilterValue,
         default_downlink_rate_mbps: Number(dataDownlinkRateMbps),
+        satellite_downlink_rates_mbps: buildSatelliteDownlinkRates(bufferOverrides, selectedSatellites),
       }, abortController.signal)
       const filterResult = await pollBackendTaskResult(filterReceipt.task_id, {
         signal: abortController.signal,
@@ -2006,14 +2035,10 @@ export default function App() {
     setError(null)
 
     try {
+      const bufferPayload = buildBufferConfigPayload(bufferDefaults, bufferOverrides, sessionBufferSatellites)
       const receipt = await startTradeOffProcessing({
         filter_run_id: filterRunId,
-        default_buffer_config: {
-          capacity_mb: dataCapacityValueGb * 1000,
-          initial_level_mb: dataStartFillValueGb * 1000,
-          payload_generation_rate_mbps: dataGenerationRateValue,
-          downlink_rate_mbps: dataDownlinkRateValue,
-        },
+        ...bufferPayload,
         scoring_config: {
           name: tradeOffStrategy,
           parameters: tradeOffStrategy === 'buffer_overflow_avoidance'
@@ -2029,6 +2054,7 @@ export default function App() {
         throw new Error('The backend returned an invalid scheduling-session result.')
       }
       applyAuthoritativeSessionPlan(plan)
+      setAppliedBufferConfigKey(JSON.stringify(bufferPayload))
     } catch (err) {
       console.error(err)
       setError(err.message || 'Failed to create the backend scheduling session.')
@@ -2214,26 +2240,32 @@ export default function App() {
   const linkFiltersValid = [minimumLinkElevationFilterValue, minimumPeakElevationFilterValue].every((value) => (
     value === null || (!Number.isNaN(value) && value >= 0 && value <= 90)
   ))
-  const dataCapacityValueGb = Number(dataCapacityGb)
-  const dataStartFillValueGb = Number(dataStartFillGb)
-  const dataGenerationRateValue = Number(dataGenerationMbps)
-  const dataDownlinkRateValue = Number(dataDownlinkRateMbps)
   const scoringAlphaValue = Number(scoringAlpha)
   const scoringExponentValue = Number(scoringExponent)
-  const bufferConfigValid = (
-    String(dataCapacityGb).trim() !== ''
-    && Number.isFinite(dataCapacityValueGb)
-    && dataCapacityValueGb > 0
-    && String(dataStartFillGb).trim() !== ''
-    && Number.isFinite(dataStartFillValueGb)
-    && dataStartFillValueGb >= 0
-    && dataStartFillValueGb <= dataCapacityValueGb
-    && String(dataGenerationMbps).trim() !== ''
-    && Number.isFinite(dataGenerationRateValue)
-    && dataGenerationRateValue >= 0
-    && String(dataDownlinkRateMbps).trim() !== ''
-    && Number.isFinite(dataDownlinkRateValue)
-    && dataDownlinkRateValue > 0
+  const bufferDefaults = {
+    capacityGb: dataCapacityGb,
+    startFillGb: dataStartFillGb,
+    generationMbps: dataGenerationMbps,
+    downlinkRateMbps: dataDownlinkRateMbps,
+  }
+  // Satellites the backend session knows about (those with candidate links in
+  // the filter run); overrides for anything else would be rejected.
+  const sessionBufferSatellites = [...new Set(filteredLinks.map((link) => link.satellite_name))]
+  const bufferValidation = validateBufferSetup(
+    bufferDefaults,
+    bufferOverrides,
+    [...new Set([...selectedSatellites, ...sessionBufferSatellites])],
+  )
+  const bufferConfigValid = bufferValidation.valid
+  const [firstInvalidBufferSatellite, firstBufferSatelliteError] = Object.entries(bufferValidation.satelliteErrors)[0] ?? []
+  const bufferConfigInvalidReason = bufferValidation.defaultError
+    ? `Fix the fleet-default buffer configuration: ${bufferValidation.defaultError}.`
+    : firstInvalidBufferSatellite
+      ? `Fix the buffer override for ${firstInvalidBufferSatellite}: ${firstBufferSatelliteError}.`
+      : ''
+  const isBufferSessionActive = Boolean(sessionId && tradeOffsCalculated)
+  const bufferConfigDirty = isBufferSessionActive && appliedBufferConfigKey !== JSON.stringify(
+    buildBufferConfigPayload(bufferDefaults, bufferOverrides, sessionBufferSatellites),
   )
   const tradeOffConfigValid = (
     TRADE_OFF_STRATEGIES.some((strategy) => strategy.value === tradeOffStrategy)
@@ -2350,7 +2382,7 @@ export default function App() {
                       : !linkFiltersValid
                         ? 'Optional filter values must stay between 0° and 90°.'
                         : !bufferConfigValid
-                          ? 'Enter a valid buffer configuration and keep initial fill at or below capacity.'
+                          ? bufferConfigInvalidReason
                           : !tradeOffConfigValid
                             ? 'Enter a valid trade-off scoring configuration.'
                             : ''
@@ -3988,7 +4020,7 @@ export default function App() {
                     optionId: item.optionId ?? item.linkId,
                     tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
                   }, control.state)}
-                  disabled={Boolean(overridingLinkId) || updatingStrategy}
+                  disabled={Boolean(overridingLinkId) || sessionReconfiguring}
                   aria-pressed={item.overrideState === control.state}
                   title={getOverviewControlTooltip(control.state)}
                 >
@@ -4003,7 +4035,7 @@ export default function App() {
                   optionId: item.optionId ?? item.linkId,
                   tradeOffGroupId: item.tradeOffGroupId ?? item.tradeOffId,
                 }, getScheduleToggleState(item.isScheduled))}
-                disabled={Boolean(overridingLinkId) || updatingStrategy}
+                disabled={Boolean(overridingLinkId) || sessionReconfiguring}
                 aria-pressed={item.isScheduled}
                 aria-label={item.isScheduled
                   ? `Scheduled. Click to unschedule ${item.linkId}`
@@ -4372,7 +4404,7 @@ export default function App() {
   )
 
   const handleLinkOverride = async (option, overrideState) => {
-    if (!sessionId || !option?.linkId || overridingLinkId || updatingStrategy) {
+    if (!sessionId || !option?.linkId || overridingLinkId || sessionReconfiguring) {
       return
     }
 
@@ -4420,7 +4452,7 @@ export default function App() {
   }
 
   const handleApplySessionStrategy = async (targetStrategy, alphaVal, exponentVal) => {
-    if (!sessionId || updatingStrategy) {
+    if (!sessionId || sessionReconfiguring) {
       return
     }
 
@@ -4457,6 +4489,29 @@ export default function App() {
       setError(err.message || 'Failed to update the scoring strategy.')
     } finally {
       setUpdatingStrategy(false)
+    }
+  }
+
+  // Re-solves the active session with the edited buffer configuration while
+  // keeping pinned/excluded links and the scoring strategy.
+  const handleApplySessionBufferConfig = async () => {
+    if (!sessionId || overridingLinkId || sessionReconfiguring || !bufferConfigValid) {
+      return
+    }
+
+    setUpdatingBufferConfig(true)
+    setError(null)
+
+    try {
+      const bufferPayload = buildBufferConfigPayload(bufferDefaults, bufferOverrides, sessionBufferSatellites)
+      const updatedPlan = await updateSessionBufferConfigs(sessionId, bufferPayload)
+      applyAuthoritativeSessionPlan(updatedPlan, overviewRows, { focusTimeline: false })
+      setAppliedBufferConfigKey(JSON.stringify(bufferPayload))
+    } catch (err) {
+      console.error(err)
+      setError(err.message || 'Failed to update the buffer configuration.')
+    } finally {
+      setUpdatingBufferConfig(false)
     }
   }
 
@@ -4947,92 +5002,201 @@ export default function App() {
     </div>
   )
 
-  const renderBufferConfigContent = (disabled = false) => (
-    <div className={`scheduling-config ${disabled ? 'scheduling-config--disabled' : ''}`}>
-      <div className="scheduling-config-grid">
-        <label className="filter-field">
-          <span>Capacity</span>
-          <div className="filter-input-shell">
-            <input
-              type="number"
-              min="0.001"
-              step="10"
-              inputMode="decimal"
-              value={dataCapacityGb}
-              disabled={disabled}
-              aria-invalid={!bufferConfigValid}
-              onChange={(event) => setDataCapacityGb(event.target.value)}
-              className="filter-input"
-            />
-            <span className="filter-input-unit">GB</span>
-          </div>
-        </label>
-        <label className="filter-field">
-          <span>Initial Fill</span>
-          <div className="filter-input-shell">
-            <input
-              type="number"
-              min="0"
-              step="10"
-              inputMode="decimal"
-              value={dataStartFillGb}
-              disabled={disabled}
-              aria-invalid={!bufferConfigValid}
-              onChange={(event) => setDataStartFillGb(event.target.value)}
-              className="filter-input"
-            />
-            <span className="filter-input-unit">GB</span>
-          </div>
-        </label>
-        <label className="filter-field">
-          <span>Payload Generation</span>
-          <div className="filter-input-shell">
-            <input
-              type="number"
-              min="0"
-              step="1"
-              inputMode="decimal"
-              value={dataGenerationMbps}
-              disabled={disabled}
-              aria-invalid={!bufferConfigValid}
-              onChange={(event) => setDataGenerationMbps(event.target.value)}
-              className="filter-input"
-            />
-            <span className="filter-input-unit">MB/s</span>
-          </div>
-        </label>
-        <label className="filter-field">
-          <span>Downlink Rate</span>
-          <div className="filter-input-shell">
-            <input
-              type="number"
-              min="0.001"
-              step="0.1"
-              inputMode="decimal"
-              value={dataDownlinkRateMbps}
-              disabled={disabled}
-              aria-invalid={!bufferConfigValid}
-              onChange={(event) => setDataDownlinkRateMbps(event.target.value)}
-              className="filter-input"
-            />
-            <span className="filter-input-unit">MB/s</span>
-          </div>
-        </label>
-      </div>
-      <p className="scheduling-config-note">
-        Backend defaults for selected satellites. The downlink rate is also used when filtering links.
-      </p>
-      {!bufferConfigValid && (
-        <p className="filter-error">
-          Capacity and downlink rate must be positive; initial fill must be between zero and capacity.
-        </p>
-      )}
-    </div>
+  const defaultBufferSetters = {
+    capacityGb: setDataCapacityGb,
+    startFillGb: setDataStartFillGb,
+    generationMbps: setDataGenerationMbps,
+    downlinkRateMbps: setDataDownlinkRateMbps,
+  }
+
+  const formatBufferFieldValue = (field, value) => (
+    Number.isFinite(value) ? `${value} ${field.unit}` : '—'
   )
+
+  // Fleet default plus inherit-by-default overrides for each selected
+  // satellite: an empty override field shows the default as its placeholder,
+  // edited values are highlighted, and Reset drops the whole override.
+  const renderBufferConfigContent = (disabled = false) => {
+    const isFieldDisabled = disabled || sessionReconfiguring
+    const { defaultError, satelliteErrors } = bufferValidation
+    const bufferSatellites = satelliteAssets
+      .map((asset) => asset.name)
+      .filter((satelliteName) => selectedSatellites.includes(satelliteName))
+    const customisedCount = bufferSatellites
+      .filter((satelliteName) => getOverriddenFieldKeys(bufferOverrides, satelliteName).length > 0)
+      .length
+
+    return (
+      <div className={`scheduling-config ${isFieldDisabled ? 'scheduling-config--disabled' : ''}`}>
+        <span className="buffer-config-heading">Fleet Default</span>
+        <div className="scheduling-config-grid">
+          {BUFFER_FIELDS.map((field) => (
+            <label key={field.key} className="filter-field">
+              <span>{field.label}</span>
+              <div className="filter-input-shell">
+                <input
+                  type="number"
+                  min={field.min}
+                  step={field.step}
+                  inputMode="decimal"
+                  value={bufferDefaults[field.key]}
+                  disabled={isFieldDisabled}
+                  aria-invalid={Boolean(defaultError)}
+                  onChange={(event) => defaultBufferSetters[field.key](event.target.value)}
+                  className="filter-input"
+                />
+                <span className="filter-input-unit">{field.unit}</span>
+              </div>
+            </label>
+          ))}
+        </div>
+        {defaultError && (
+          <p className="filter-error">Fleet default: {defaultError}.</p>
+        )}
+
+        <div className="buffer-config-heading-row">
+          <span className="buffer-config-heading">Per Satellite</span>
+          {bufferSatellites.length > 0 && (
+            <span className="buffer-config-count">
+              {customisedCount} of {bufferSatellites.length} customised
+            </span>
+          )}
+        </div>
+        {bufferSatellites.length === 0 ? (
+          <p className="scheduling-config-note">
+            Select satellites to override the fleet default for individual spacecraft.
+          </p>
+        ) : (
+          <ul className="buffer-override-list">
+            {bufferSatellites.map((satelliteName) => {
+              const override = bufferOverrides[satelliteName] ?? {}
+              const overriddenKeys = getOverriddenFieldKeys(bufferOverrides, satelliteName)
+              const effectiveConfig = resolveBufferConfig(bufferDefaults, override)
+              const isCustomised = overriddenKeys.length > 0
+              const isExpanded = expandedBufferSatellite === satelliteName
+              const satelliteError = satelliteErrors[satelliteName]
+              const hasNoCandidateLinks = filteredLinks.length > 0
+                && !sessionBufferSatellites.includes(satelliteName)
+              const panelId = `buffer-override-${satelliteName.replace(/[^A-Za-z0-9_-]/g, '_')}`
+
+              return (
+                <li
+                  key={satelliteName}
+                  className={[
+                    'buffer-override',
+                    isCustomised ? 'buffer-override--custom' : '',
+                    satelliteError ? 'buffer-override--invalid' : '',
+                  ].filter(Boolean).join(' ')}
+                >
+                  <div className="buffer-override-header">
+                    <button
+                      type="button"
+                      className="buffer-override-toggle"
+                      aria-expanded={isExpanded}
+                      aria-controls={panelId}
+                      disabled={disabled}
+                      onClick={() => setExpandedBufferSatellite(isExpanded ? null : satelliteName)}
+                    >
+                      <span className="buffer-override-name">
+                        {satelliteName}
+                        {isCustomised && <span className="buffer-override-badge">Custom</span>}
+                      </span>
+                      <span className="buffer-override-summary">
+                        {BUFFER_FIELDS.map((field) => (
+                          <span
+                            key={field.key}
+                            className={`buffer-override-value ${overriddenKeys.includes(field.key) ? 'buffer-override-value--custom' : ''}`}
+                          >
+                            {formatBufferFieldValue(field, effectiveConfig[field.key])}
+                          </span>
+                        ))}
+                      </span>
+                    </button>
+                    {isCustomised && (
+                      <button
+                        type="button"
+                        className="buffer-override-reset"
+                        disabled={isFieldDisabled}
+                        aria-label={`Reset ${satelliteName} to the fleet default`}
+                        onClick={() => setBufferOverrides((current) => clearBufferOverride(current, satelliteName))}
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                  {isExpanded && (
+                    <div id={panelId} className="buffer-override-fields">
+                      <div className="scheduling-config-grid">
+                        {BUFFER_FIELDS.map((field) => (
+                          <label key={field.key} className="filter-field">
+                            <span>{field.label}</span>
+                            <div className="filter-input-shell">
+                              <input
+                                type="number"
+                                min={field.min}
+                                step={field.step}
+                                inputMode="decimal"
+                                value={override[field.key] ?? ''}
+                                placeholder={String(bufferDefaults[field.key])}
+                                disabled={isFieldDisabled}
+                                aria-invalid={Boolean(satelliteError)}
+                                onChange={(event) => setBufferOverrides((current) => (
+                                  setBufferOverrideField(current, satelliteName, field.key, event.target.value)
+                                ))}
+                                className={`filter-input ${overriddenKeys.includes(field.key) ? 'filter-input--overridden' : ''}`}
+                              />
+                              <span className="filter-input-unit">{field.unit}</span>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                      <p className="scheduling-config-note">
+                        Leave a field empty to inherit the fleet default.
+                      </p>
+                    </div>
+                  )}
+                  {hasNoCandidateLinks && isCustomised && (
+                    <p className="scheduling-config-note">
+                      No candidate links for this satellite in the current run; its override is not used.
+                    </p>
+                  )}
+                  {satelliteError && (
+                    <p className="filter-error">{satelliteName}: {satelliteError}.</p>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        )}
+
+        {isBufferSessionActive ? (
+          <div className="scheduling-config-session-action">
+            <button
+              type="button"
+              className="btn-fetch btn-apply-strategy"
+              disabled={isFieldDisabled || Boolean(overridingLinkId) || !bufferConfigValid || !bufferConfigDirty}
+              onClick={handleApplySessionBufferConfig}
+            >
+              {updatingBufferConfig ? 'Updating Buffers...' : 'Apply Buffer Config to Session'}
+            </button>
+            <p className="scheduling-config-note">
+              {bufferConfigDirty
+                ? 'Unapplied changes. Applying re-solves the session and keeps pinned and excluded links.'
+                : 'The active session uses this buffer configuration.'}
+            </p>
+          </div>
+        ) : (
+          <p className="scheduling-config-note">
+            Applied by the backend the next time Calculate Trade-Offs runs. Downlink rates also set pass capacities during link filtering.
+          </p>
+        )}
+      </div>
+    )
+  }
 
   const renderTradeOffConfigContent = (disabled = false) => {
     const isSessionActive = Boolean(sessionId && tradeOffsCalculated)
-    const isFieldDisabled = disabled || updatingStrategy
+    const isFieldDisabled = disabled || sessionReconfiguring
 
     return (
       <div className={`scheduling-config ${isFieldDisabled ? 'scheduling-config--disabled' : ''}`}>
@@ -5637,7 +5801,7 @@ export default function App() {
                                         type="button"
                                         className={`overview-override-button ${row.overrideState === state ? 'overview-override-button--active' : ''}`}
                                         onClick={() => handleLinkOverride(overrideOption, state)}
-                                        disabled={Boolean(overridingLinkId) || updatingStrategy}
+                                        disabled={Boolean(overridingLinkId) || sessionReconfiguring}
                                         aria-pressed={row.overrideState === state}
                                         title={getOverviewControlTooltip(state)}
                                         onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
@@ -5665,7 +5829,7 @@ export default function App() {
                                       overrideOption,
                                       getScheduleToggleState(row.isScheduled),
                                     )}
-                                    disabled={Boolean(overridingLinkId) || updatingStrategy}
+                                    disabled={Boolean(overridingLinkId) || sessionReconfiguring}
                                     aria-pressed={row.isScheduled}
                                     aria-label={row.isScheduled
                                       ? `Scheduled. Click to unschedule ${getOverviewDisplayLinkId(row)}`
@@ -5702,7 +5866,7 @@ export default function App() {
                       ? 'Finish loading SCOPE and wait for extraction to complete.'
                       : !tradeOffAvailable
                         ? !bufferConfigValid
-                          ? 'Enter a valid buffer configuration; initial fill cannot exceed capacity.'
+                          ? bufferConfigInvalidReason
                           : !tradeOffConfigValid
                             ? 'Enter a valid trade-off scoring configuration.'
                           : overviewRows.length > 0
@@ -5889,7 +6053,7 @@ export default function App() {
                                       event.stopPropagation()
                                       handleLinkOverride(option, state)
                                     }}
-                                    disabled={Boolean(overridingLinkId) || updatingStrategy}
+                                    disabled={Boolean(overridingLinkId) || sessionReconfiguring}
                                     aria-pressed={effectiveOverrideState === state}
                                     title={getOverviewControlTooltip(state)}
                                     onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
@@ -5909,7 +6073,7 @@ export default function App() {
                                   event.stopPropagation()
                                   handleLinkOverride(option, getScheduleToggleState(optionScheduled))
                                 }}
-                                disabled={Boolean(overridingLinkId) || updatingStrategy}
+                                disabled={Boolean(overridingLinkId) || sessionReconfiguring}
                                 aria-pressed={optionScheduled}
                                 title={getScheduleToggleTitle(optionScheduled)}
                               >
@@ -6270,7 +6434,7 @@ export default function App() {
                             <select
                               className="timeline-strategy-select"
                               value={tradeOffStrategy}
-                              disabled={updatingStrategy}
+                              disabled={sessionReconfiguring}
                               onChange={(event) => handleApplySessionStrategy(event.target.value)}
                               aria-label="Active scoring strategy"
                             >
@@ -6803,7 +6967,7 @@ export default function App() {
                                           event.stopPropagation()
                                           handleLinkOverride(option, state)
                                         }}
-                                        disabled={Boolean(overridingLinkId) || updatingStrategy}
+                                        disabled={Boolean(overridingLinkId) || sessionReconfiguring}
                                         aria-pressed={effectiveOverrideState === state}
                                         title={getOverviewControlTooltip(state)}
                                         onMouseEnter={(event) => showWarningTooltip(getOverviewControlTooltip(state), event)}
@@ -6823,7 +6987,7 @@ export default function App() {
                                       event.stopPropagation()
                                       handleLinkOverride(option, getScheduleToggleState(optionScheduled))
                                     }}
-                                    disabled={Boolean(overridingLinkId) || updatingStrategy}
+                                    disabled={Boolean(overridingLinkId) || sessionReconfiguring}
                                     aria-pressed={optionScheduled}
                                     title={getScheduleToggleTitle(optionScheduled)}
                                   >

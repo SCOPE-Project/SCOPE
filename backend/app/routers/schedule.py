@@ -7,6 +7,7 @@ from app.models.scheduling import (
     SessionPlanDTO,
     OverrideRequest,
     StrategyUpdateRequest,
+    BufferConfigUpdateRequest,
     CommitRequestDTO,
     CommitResponseDTO,
 )
@@ -70,6 +71,27 @@ def update_scoring_strategy(session_id: str, payload: StrategyUpdateRequest):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update strategy: {e}")
+
+
+@router.post("/session/{session_id}/buffer-configs", response_model=SessionPlanDTO)
+def update_buffer_configs(session_id: str, payload: BufferConfigUpdateRequest):
+    """
+    Replaces the session's buffer configuration (default plus sparse per-satellite
+    overrides) and re-runs the forward simulation, keeping operator overrides.
+    """
+    try:
+        session = scheduling_service.update_buffer_configs(
+            session_id=session_id,
+            default_buffer_config=payload.default_buffer_config,
+            satellite_buffer_configs=payload.satellite_buffer_configs,
+        )
+        return SessionPlanDTO.from_domain(session)
+    except scheduling_service.SessionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update buffer configuration: {e}")
 
 
 @router.post("/session/{session_id}/commit", response_model=CommitResponseDTO)
